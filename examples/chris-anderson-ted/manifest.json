@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "chris-anderson-ted",
+  "title": "Same-name candidate separation",
+  "description": "A scripted reconstruction from source-verified public captures that selects the TED leader and explicitly quarantines the former WIRED editor and 3DR executive as a different Chris Anderson.",
+  "capturedAt": "2026-08-18T22:08:17.000Z",
+  "captureMode": "source_verified_scripted_reconstruction",
+  "replayMode": "deterministic_zero_network",
+  "decisionProvenance": "scripted_local_policy",
+  "provider": null,
+  "networkOnReplay": "forbidden",
+  "files": [
+    "input.json",
+    "output.json",
+    "trace.json",
+    "cassette.json",
+    "manifest.json"
+  ]
+}

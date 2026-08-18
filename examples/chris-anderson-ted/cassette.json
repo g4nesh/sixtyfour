@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "cassetteVersion": 2,
+  "capturedAt": "2026-08-18T22:08:17.000Z",
+  "networkOnReplay": "forbidden",
+  "decisionProvenance": "scripted_local_policy",
+  "requests": [
+    {
+      "id": "req-ted-selected",
+      "fingerprint": "GET https://www.ted.com/speakers/chris_anderson_ted accept:text/html",
+      "response": {
+        "status": 200,
+        "contentType": "text/html",
+        "bodySha256": "7649b3991c54edd2cae6a9f073d5fd6e25112b9100d9612de1ede665d0df124b",
+        "evidenceBindings": [
+          {
+            "evidenceId": "chris_replay_evidence_0001",
+            "candidateId": "chris_replay_candidate_0001",
+            "sourceUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+            "normalizedClaim": "chris anderson chairman ted",
+            "excerpt": "Chris Anderson Chairman, TED",
+            "canonicalSubset": null
+          },
+          {
+            "evidenceId": "chris_replay_evidence_0002",
+            "candidateId": "chris_replay_candidate_0001",
+            "sourceUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+            "normalizedClaim": "chris anderson became the curator of the ted conference in 2002",
+            "excerpt": "Chris Anderson became the curator of the TED Conference in 2002",
+            "canonicalSubset": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "req-ted-decoy",
+      "fingerprint": "GET https://www.ted.com/speakers/chris_anderson_wired accept:text/html",
+      "response": {
+        "status": 200,
+        "contentType": "text/html",
+        "bodySha256": "75ee0b44d5acb892a647f0093d5d8ba7605f6b139cb4bf3b0d78868dd30668a1",
+        "evidenceBindings": [
+          {
+            "evidenceId": "chris_replay_evidence_0003",
+            "candidateId": "chris_replay_candidate_0002",
+            "sourceUrl": "https://www.ted.com/speakers/chris_anderson_wired",
+            "normalizedClaim": "he is not however to be confused with the curator of ted who has the same name.",
+            "excerpt": "(He is not, however, to be confused with the curator of TED, who has the same name.)",
+            "canonicalSubset": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "req-wired-decoy",
+      "fingerprint": "GET https://www.wired.com/story/airware-drones/ accept:text/html",
+      "response": {
+        "status": 200,
+        "contentType": "text/html",
+        "bodySha256": "bfae98bbe1b74d6963875a80ed9f394d12a5a8506f8ccfadf4c3235dd503c063",
+        "evidenceBindings": [
+          {
+            "evidenceId": "chris_replay_evidence_0004",
+            "candidateId": "chris_replay_candidate_0002",
+            "sourceUrl": "https://www.wired.com/story/airware-drones",
+            "normalizedClaim": "chris anderson ceo of the world s third-largest producer of drones and a former editor-in-chief of wired us",
+            "excerpt": "Chris Anderson, CEO of the world's third-largest producer of drones (and a former editor-in-chief of WIRED US)",
+            "canonicalSubset": null
+          }
+        ]
+      }
+    }
+  ],
+  "scriptedDecisions": [
+    {
+      "phase": "classify",
+      "summary": "Parsed a named-person query with TED as an organization constraint."
+    },
+    {
+      "phase": "discover",
+      "summary": "Fetched the TED profile and a same-name TED profile rather than merging on name alone."
+    },
+    {
+      "phase": "separate_candidates",
+      "summary": "Quarantined the former WIRED editor because the organization and role signals conflict with the target."
+    },
+    {
+      "phase": "calibrate",
+      "summary": "Selected the TED candidate with a clear runner-up margin and retained the conflict as counter-evidence."
+    }
+  ]
+}

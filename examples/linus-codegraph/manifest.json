@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "linus-codegraph",
+  "title": "Exact email to public codegraph",
+  "description": "A scripted reconstruction from source-verified public captures that connects an exact user-supplied email to Linux documentation and bounded GitHub commit metadata while preserving the spoofable-metadata confidence cap.",
+  "capturedAt": "2026-08-18T22:08:17.000Z",
+  "captureMode": "source_verified_scripted_reconstruction",
+  "replayMode": "deterministic_zero_network",
+  "decisionProvenance": "scripted_local_policy",
+  "provider": null,
+  "networkOnReplay": "forbidden",
+  "files": [
+    "input.json",
+    "output.json",
+    "trace.json",
+    "cassette.json",
+    "manifest.json"
+  ]
+}

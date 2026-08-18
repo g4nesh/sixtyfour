@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "cassetteVersion": 2,
+  "capturedAt": "2026-08-18T22:08:17.000Z",
+  "networkOnReplay": "forbidden",
+  "decisionProvenance": "scripted_local_policy",
+  "requests": [
+    {
+      "id": "req-python-foreword",
+      "fingerprint": "GET https://www.python.org/doc/essays/foreword/ accept:text/html",
+      "response": {
+        "status": 200,
+        "contentType": "text/html",
+        "contentEncoding": "gzip",
+        "bodySha256": "82f7fb2a0f4c38ba0e957394baa99435c21982fc367663307c0002c0587123c8",
+        "evidenceBindings": [
+          {
+            "evidenceId": "python_replay_evidence_0001",
+            "candidateId": "python_replay_candidate_0001",
+            "sourceUrl": "https://www.python.org/doc/essays/foreword",
+            "normalizedClaim": "as python s creator i d like to say a few words about its origins",
+            "excerpt": "As Python's creator, I'd like to say a few words about its origins",
+            "canonicalSubset": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "req-guido-bio",
+      "fingerprint": "GET https://gvanrossum.github.io/bio accept:text/html",
+      "response": {
+        "status": 200,
+        "contentType": "text/html",
+        "bodySha256": "0af6e624fcf05dfc7a8a2c6b8437a1b1705289283a9c8e617d6d2577180b938c",
+        "evidenceBindings": [
+          {
+            "evidenceId": "python_replay_evidence_0002",
+            "candidateId": "python_replay_candidate_0001",
+            "sourceUrl": "https://gvanrossum.github.io/bio",
+            "normalizedClaim": "guido van rossum is the creator of the python programming language.",
+            "excerpt": "Guido van Rossum is the creator of the Python programming language.",
+            "canonicalSubset": null
+          }
+        ]
+      }
+    }
+  ],
+  "scriptedDecisions": [
+    {
+      "phase": "classify",
+      "summary": "Classified the request as a role-only public figure resolution."
+    },
+    {
+      "phase": "discover",
+      "summary": "Fetched an official ecosystem source and the candidate's public biography."
+    },
+    {
+      "phase": "separate_candidates",
+      "summary": "Kept the role phrase as a discovery clue until two direct sources named the same candidate."
+    },
+    {
+      "phase": "calibrate",
+      "summary": "Promoted the identity only after two independent source families supported the same unique role."
+    }
+  ]
+}

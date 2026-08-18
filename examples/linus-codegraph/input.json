@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "query": "torvalds@linux-foundation.org",
+  "objective": "Resolve the public professional identity tied to this exact user-supplied email and show the auditable codegraph without treating Git metadata as conclusive.",
+  "requestedDepth": "standard",
+  "requestedCategories": ["identity", "online_presence"]
+}

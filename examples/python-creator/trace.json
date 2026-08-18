@@ -1,0 +1,1321 @@
+[
+  {
+    "schemaVersion": 1,
+    "seq": 1,
+    "eventId": "python_replay_event_0001",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.007Z",
+    "elapsedMs": 7,
+    "kind": "event",
+    "name": "investigation.created",
+    "phase": "intake",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "schemaVersion": 1,
+      "targetKind": "role_query",
+      "requestedDepth": "quick"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 2,
+    "eventId": "python_replay_event_0002",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.021Z",
+    "elapsedMs": 21,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "classify",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "intake",
+      "to": "classify"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 3,
+    "eventId": "python_replay_event_0003",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.028Z",
+    "elapsedMs": 28,
+    "kind": "event",
+    "name": "decision",
+    "phase": "classify",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "The query is a role-only public figure request: resolve the creator of Python without assuming a name.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 4,
+    "eventId": "python_replay_event_0004",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.042Z",
+    "elapsedMs": 42,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "plan",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "classify",
+      "to": "plan"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 5,
+    "eventId": "python_replay_event_0005",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.049Z",
+    "elapsedMs": 49,
+    "kind": "event",
+    "name": "decision",
+    "phase": "plan",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "Use the official Python site and the candidate's public biography as independent direct sources.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 6,
+    "eventId": "python_replay_event_0006",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.063Z",
+    "elapsedMs": 63,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "discover",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "plan",
+      "to": "discover"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 7,
+    "eventId": "python_replay_event_0007",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.070Z",
+    "elapsedMs": 70,
+    "kind": "event",
+    "name": "decision",
+    "phase": "discover",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "Both direct sources name the same person and describe the same unique creator role.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 8,
+    "eventId": "python_replay_event_0008",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.084Z",
+    "elapsedMs": 84,
+    "kind": "event",
+    "name": "candidate.created",
+    "phase": "discover",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "candidateId": "python_replay_candidate_0001",
+      "displayName": "Guido van Rossum",
+      "status": "separate",
+      "score": 0
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 9,
+    "eventId": "python_replay_event_0009",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.091Z",
+    "elapsedMs": 91,
+    "kind": "span_start",
+    "name": "tool.fetch_public_source",
+    "phase": "discover",
+    "spanId": "python_replay_span_0001",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "started",
+    "payload": {
+      "requestFingerprint": "GET https://www.python.org/doc/essays/foreword/ accept:text/html",
+      "replayNetwork": "forbidden",
+      "captureProvenance": "source_verified_scripted_reconstruction"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "captured_request_start"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 10,
+    "eventId": "python_replay_event_0010",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.105Z",
+    "elapsedMs": 105,
+    "kind": "span_end",
+    "name": "tool.fetch_public_source",
+    "phase": "discover",
+    "spanId": "python_replay_span_0001",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "succeeded",
+    "payload": {
+      "responseBodyRetained": false
+    },
+    "usage": {
+      "durationMs": 14,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": 1,
+      "bytesRead": null,
+      "unavailableReason": "provider_tokens_not_applicable"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 11,
+    "eventId": "python_replay_event_0011",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.112Z",
+    "elapsedMs": 112,
+    "kind": "span_start",
+    "name": "tool.fetch_public_source",
+    "phase": "discover",
+    "spanId": "python_replay_span_0002",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "started",
+    "payload": {
+      "requestFingerprint": "GET https://gvanrossum.github.io/bio accept:text/html",
+      "replayNetwork": "forbidden",
+      "captureProvenance": "source_verified_scripted_reconstruction"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "captured_request_start"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 12,
+    "eventId": "python_replay_event_0012",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.126Z",
+    "elapsedMs": 126,
+    "kind": "span_end",
+    "name": "tool.fetch_public_source",
+    "phase": "discover",
+    "spanId": "python_replay_span_0002",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "succeeded",
+    "payload": {
+      "responseBodyRetained": false
+    },
+    "usage": {
+      "durationMs": 14,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": 1,
+      "bytesRead": null,
+      "unavailableReason": "provider_tokens_not_applicable"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 13,
+    "eventId": "python_replay_event_0013",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.140Z",
+    "elapsedMs": 140,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "separate_candidates",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "discover",
+      "to": "separate_candidates"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 14,
+    "eventId": "python_replay_event_0014",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.147Z",
+    "elapsedMs": 147,
+    "kind": "event",
+    "name": "decision",
+    "phase": "separate_candidates",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "The role phrase remains a clue until two direct sources converge on the same named candidate and unique personal domain.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 15,
+    "eventId": "python_replay_event_0015",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.161Z",
+    "elapsedMs": 161,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "separate_candidates",
+      "to": "corroborate"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 16,
+    "eventId": "python_replay_event_0016",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.168Z",
+    "elapsedMs": 168,
+    "kind": "event",
+    "name": "decision",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "Admit the official ecosystem foreword and the candidate's public biography as two independent source families.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 17,
+    "eventId": "python_replay_event_0017",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.182Z",
+    "elapsedMs": 182,
+    "kind": "event",
+    "name": "evidence.admission",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "admitted": true,
+      "reason": "admitted",
+      "evidenceId": "python_replay_evidence_0001",
+      "duplicateOf": null,
+      "candidateId": "python_replay_candidate_0001",
+      "sourceType": "public_document"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 18,
+    "eventId": "python_replay_event_0018",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.196Z",
+    "elapsedMs": 196,
+    "kind": "event",
+    "name": "evidence.admission",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "admitted": true,
+      "reason": "admitted",
+      "evidenceId": "python_replay_evidence_0002",
+      "duplicateOf": null,
+      "candidateId": "python_replay_candidate_0001",
+      "sourceType": "official_profile"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 19,
+    "eventId": "python_replay_event_0019",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.210Z",
+    "elapsedMs": 210,
+    "kind": "event",
+    "name": "candidate.scored",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "candidateId": "python_replay_candidate_0001",
+      "status": "resolved",
+      "score": 0.84,
+      "signalCount": 5,
+      "spoofableCapApplied": false
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 20,
+    "eventId": "python_replay_event_0020",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.224Z",
+    "elapsedMs": 224,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "calibrate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "corroborate",
+      "to": "calibrate"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 21,
+    "eventId": "python_replay_event_0021",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.231Z",
+    "elapsedMs": 231,
+    "kind": "event",
+    "name": "decision",
+    "phase": "calibrate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "Two independent direct source families support the same unique creator role with no hard conflict.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 22,
+    "eventId": "python_replay_event_0022",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.245Z",
+    "elapsedMs": 245,
+    "kind": "event",
+    "name": "finding.created",
+    "phase": "calibrate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "findingId": "python_replay_finding_0001",
+      "candidateId": "python_replay_candidate_0001",
+      "category": "identity",
+      "confidence": 0.64,
+      "sourceFamilies": [
+        "github.io"
+      ]
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 23,
+    "eventId": "python_replay_event_0023",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.259Z",
+    "elapsedMs": 259,
+    "kind": "event",
+    "name": "finding.created",
+    "phase": "calibrate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "findingId": "python_replay_finding_0002",
+      "candidateId": "python_replay_candidate_0001",
+      "category": "project",
+      "confidence": 0.56,
+      "sourceFamilies": [
+        "python.org"
+      ]
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 24,
+    "eventId": "python_replay_event_0024",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.273Z",
+    "elapsedMs": 273,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "report",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "calibrate",
+      "to": "report"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 25,
+    "eventId": "python_replay_event_0025",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.280Z",
+    "elapsedMs": 280,
+    "kind": "event",
+    "name": "decision",
+    "phase": "report",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "Compiled only referentially valid findings and explicit limitations into the versioned report.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 26,
+    "eventId": "python_replay_event_0026",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.294Z",
+    "elapsedMs": 294,
+    "kind": "event",
+    "name": "investigation.terminal",
+    "phase": "terminal",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "status": "completed",
+      "reason": "goal_satisfied",
+      "detail": "Resolved the role-only query with two independent direct source families and no competing candidate above the ambiguity threshold."
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 27,
+    "eventId": "python_replay_event_0027",
+    "runId": "replay-python-creator-v1",
+    "timestamp": "2026-08-18T22:08:17.308Z",
+    "elapsedMs": 308,
+    "kind": "event",
+    "name": "result.terminal",
+    "phase": "terminal",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "status": "completed",
+      "stopReason": "goal_satisfied",
+      "report": {
+        "schemaVersion": 1,
+        "runId": "replay-python-creator-v1",
+        "input": {
+          "schemaVersion": 1,
+          "query": "the creator of Python",
+          "objective": "Resolve a role-only public figure query using independent direct public sources.",
+          "requestedDepth": "quick",
+          "requestedCategories": [
+            "identity",
+            "project"
+          ]
+        },
+        "target": {
+          "schemaVersion": 1,
+          "rawInput": "the creator of Python",
+          "normalizedQuery": "the creator of Python",
+          "kind": "role_query",
+          "roleHints": [
+            "Creator"
+          ],
+          "organizationHints": [
+            {
+              "name": "Python",
+              "normalizedName": "python",
+              "relationship": "current"
+            }
+          ],
+          "locationHints": [],
+          "identifiers": []
+        },
+        "status": "completed",
+        "identity": {
+          "status": "resolved",
+          "selectedCandidate": {
+            "schemaVersion": 1,
+            "id": "python_replay_candidate_0001",
+            "displayName": "Guido van Rossum",
+            "normalizedName": "guido van rossum",
+            "status": "resolved",
+            "signals": [
+              {
+                "kind": "cross_profile_link",
+                "value": "Python creator",
+                "normalizedValue": "python creator",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "python_replay_evidence_0001",
+                "sourceFamily": "python.org"
+              },
+              {
+                "kind": "name",
+                "value": "Guido van Rossum",
+                "normalizedValue": "guido van rossum",
+                "strength": "strong",
+                "assurance": "verified",
+                "sourceEvidenceId": "python_replay_evidence_0002",
+                "sourceFamily": "github.io"
+              },
+              {
+                "kind": "personal_domain",
+                "value": "gvanrossum.github.io",
+                "normalizedValue": "gvanrossum.github.io",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "python_replay_evidence_0002"
+              },
+              {
+                "kind": "profile_url",
+                "value": "https://gvanrossum.github.io/bio",
+                "normalizedValue": "https gvanrossum.github.io bio",
+                "strength": "strong",
+                "assurance": "verified",
+                "sourceEvidenceId": "python_replay_evidence_0002",
+                "sourceFamily": "github.io"
+              },
+              {
+                "kind": "role",
+                "value": "Creator of Python",
+                "normalizedValue": "creator of python",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "python_replay_evidence_0001",
+                "sourceFamily": "python.org"
+              }
+            ],
+            "evidenceIds": [
+              "python_replay_evidence_0001",
+              "python_replay_evidence_0002"
+            ],
+            "score": {
+              "total": 0.84,
+              "positive": 0.84,
+              "penalty": 0,
+              "independentFamilies": [
+                "github.io",
+                "personal_domain",
+                "python.org"
+              ],
+              "matchedSignals": [
+                "cross_profile_link",
+                "personal_domain",
+                "profile_url"
+              ],
+              "conflictingSignals": [],
+              "cappedBecauseSpoofable": false
+            },
+            "createdAt": "2026-08-18T22:08:17.077Z",
+            "updatedAt": "2026-08-18T22:08:17.203Z"
+          },
+          "runnerUpCandidate": null,
+          "selectedCandidateId": "python_replay_candidate_0001",
+          "selectedScore": 0.84,
+          "runnerUpScore": 0,
+          "runnerUpMargin": 0.84,
+          "resolutionThreshold": 0.78,
+          "marginThreshold": 0.15
+        },
+        "candidates": [
+          {
+            "schemaVersion": 1,
+            "id": "python_replay_candidate_0001",
+            "displayName": "Guido van Rossum",
+            "normalizedName": "guido van rossum",
+            "status": "resolved",
+            "signals": [
+              {
+                "kind": "cross_profile_link",
+                "value": "Python creator",
+                "normalizedValue": "python creator",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "python_replay_evidence_0001",
+                "sourceFamily": "python.org"
+              },
+              {
+                "kind": "name",
+                "value": "Guido van Rossum",
+                "normalizedValue": "guido van rossum",
+                "strength": "strong",
+                "assurance": "verified",
+                "sourceEvidenceId": "python_replay_evidence_0002",
+                "sourceFamily": "github.io"
+              },
+              {
+                "kind": "personal_domain",
+                "value": "gvanrossum.github.io",
+                "normalizedValue": "gvanrossum.github.io",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "python_replay_evidence_0002"
+              },
+              {
+                "kind": "profile_url",
+                "value": "https://gvanrossum.github.io/bio",
+                "normalizedValue": "https gvanrossum.github.io bio",
+                "strength": "strong",
+                "assurance": "verified",
+                "sourceEvidenceId": "python_replay_evidence_0002",
+                "sourceFamily": "github.io"
+              },
+              {
+                "kind": "role",
+                "value": "Creator of Python",
+                "normalizedValue": "creator of python",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "python_replay_evidence_0001",
+                "sourceFamily": "python.org"
+              }
+            ],
+            "evidenceIds": [
+              "python_replay_evidence_0001",
+              "python_replay_evidence_0002"
+            ],
+            "score": {
+              "total": 0.84,
+              "positive": 0.84,
+              "penalty": 0,
+              "independentFamilies": [
+                "github.io",
+                "personal_domain",
+                "python.org"
+              ],
+              "matchedSignals": [
+                "cross_profile_link",
+                "personal_domain",
+                "profile_url"
+              ],
+              "conflictingSignals": [],
+              "cappedBecauseSpoofable": false
+            },
+            "createdAt": "2026-08-18T22:08:17.077Z",
+            "updatedAt": "2026-08-18T22:08:17.203Z"
+          }
+        ],
+        "findings": [
+          {
+            "schemaVersion": 1,
+            "id": "python_replay_finding_0001",
+            "candidateId": "python_replay_candidate_0001",
+            "title": "Identity — Guido van Rossum",
+            "description": "Guido van Rossum is the creator of the Python programming language.",
+            "category": "identity",
+            "evidenceIds": [
+              "python_replay_evidence_0002"
+            ],
+            "counterEvidenceIds": [],
+            "confidence": {
+              "score": 0.64,
+              "label": "moderate",
+              "independentSourceFamilies": [
+                "github.io"
+              ],
+              "supportingEvidenceIds": [
+                "python_replay_evidence_0002"
+              ],
+              "contradictingEvidenceIds": [],
+              "appliedCaps": []
+            },
+            "caveats": [],
+            "createdAt": "2026-08-18T22:08:17.238Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "python_replay_finding_0002",
+            "candidateId": "python_replay_candidate_0001",
+            "title": "Project — Guido van Rossum",
+            "description": "As Python's creator, I'd like to say a few words about its origins",
+            "category": "project",
+            "evidenceIds": [
+              "python_replay_evidence_0001"
+            ],
+            "counterEvidenceIds": [],
+            "confidence": {
+              "score": 0.56,
+              "label": "moderate",
+              "independentSourceFamilies": [
+                "python.org"
+              ],
+              "supportingEvidenceIds": [
+                "python_replay_evidence_0001"
+              ],
+              "contradictingEvidenceIds": [],
+              "appliedCaps": []
+            },
+            "caveats": [],
+            "createdAt": "2026-08-18T22:08:17.252Z"
+          }
+        ],
+        "evidence": [
+          {
+            "schemaVersion": 1,
+            "id": "python_replay_evidence_0001",
+            "candidateId": "python_replay_candidate_0001",
+            "claim": "As Python's creator, I'd like to say a few words about its origins",
+            "normalizedClaim": "as python s creator i d like to say a few words about its origins",
+            "disposition": "supports",
+            "sourceUrl": "https://www.python.org/doc/essays/foreword",
+            "canonicalUrl": "https://www.python.org/doc/essays/foreword",
+            "queryUrl": null,
+            "title": "Foreword for Programming Python",
+            "publisher": "Python Software Foundation",
+            "sourceFamily": "python.org",
+            "sourceType": "public_document",
+            "publishedAt": null,
+            "retrievedAt": "2026-08-18T22:08:17.175Z",
+            "observedAt": "2026-08-18T22:08:17.000Z",
+            "httpStatus": 200,
+            "contentHash": "sha256:82f7fb2a0f4c38ba0e957394baa99435c21982fc367663307c0002c0587123c8",
+            "excerpt": "As Python's creator, I'd like to say a few words about its origins",
+            "canonicalSubset": null,
+            "toolCallId": "req-python-foreword",
+            "verificationMethod": "direct_fetch",
+            "temporalStatus": "historical",
+            "reliability": 1,
+            "spoofable": false,
+            "attributes": {},
+            "fingerprint": "ad0731e7",
+            "createdAt": "2026-08-18T22:08:17.175Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "python_replay_evidence_0002",
+            "candidateId": "python_replay_candidate_0001",
+            "claim": "Guido van Rossum is the creator of the Python programming language.",
+            "normalizedClaim": "guido van rossum is the creator of the python programming language.",
+            "disposition": "supports",
+            "sourceUrl": "https://gvanrossum.github.io/bio",
+            "canonicalUrl": "https://gvanrossum.github.io/bio",
+            "queryUrl": null,
+            "title": "Guido van Rossum — brief bio",
+            "publisher": "Guido van Rossum",
+            "sourceFamily": "github.io",
+            "sourceType": "official_profile",
+            "publishedAt": null,
+            "retrievedAt": "2026-08-18T22:08:17.189Z",
+            "observedAt": "2026-08-18T22:08:17.000Z",
+            "httpStatus": 200,
+            "contentHash": "sha256:0af6e624fcf05dfc7a8a2c6b8437a1b1705289283a9c8e617d6d2577180b938c",
+            "excerpt": "Guido van Rossum is the creator of the Python programming language.",
+            "canonicalSubset": null,
+            "toolCallId": "req-guido-bio",
+            "verificationMethod": "direct_fetch",
+            "temporalStatus": "current",
+            "reliability": 1,
+            "spoofable": false,
+            "attributes": {},
+            "fingerprint": "cbeffaf3",
+            "createdAt": "2026-08-18T22:08:17.189Z"
+          }
+        ],
+        "coverage": {
+          "score": 0.917,
+          "requestedCategories": [
+            "identity",
+            "project"
+          ],
+          "coveredCategories": [
+            "identity",
+            "project"
+          ],
+          "missingCategories": [],
+          "supportedFindingCount": 2,
+          "highConfidenceFindingCount": 0,
+          "independentSourceFamilyCount": 2,
+          "gaps": []
+        },
+        "sources": [
+          {
+            "sourceFamily": "github.io",
+            "sourceTypes": [
+              "official_profile"
+            ],
+            "evidenceCount": 1,
+            "supportingCount": 1,
+            "contradictingCount": 0,
+            "discoveryOnlyCount": 0,
+            "urls": [
+              "https://gvanrossum.github.io/bio"
+            ]
+          },
+          {
+            "sourceFamily": "python.org",
+            "sourceTypes": [
+              "public_document"
+            ],
+            "evidenceCount": 1,
+            "supportingCount": 1,
+            "contradictingCount": 0,
+            "discoveryOnlyCount": 0,
+            "urls": [
+              "https://www.python.org/doc/essays/foreword"
+            ]
+          }
+        ],
+        "telemetry": {
+          "candidateCount": 1,
+          "resolvedCandidateCount": 1,
+          "evidence": {
+            "admitted": 2,
+            "rejected": 0,
+            "duplicate": 0,
+            "discoveryOnly": 0,
+            "supporting": 2,
+            "contradicting": 0
+          },
+          "findingCount": 2,
+          "highConfidenceFindingCount": 0
+        },
+        "usage": {
+          "turns": 0,
+          "llmCalls": 0,
+          "toolCalls": 2,
+          "searchCalls": 0,
+          "evidenceAttempts": 2,
+          "networkRequests": 2,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "thinkingTokens": 0,
+          "costUsd": 0,
+          "elapsedMs": 294,
+          "consecutiveNoProgress": 0,
+          "phaseTurns": {}
+        },
+        "limitations": [
+          "Only auditable public professional sources were considered."
+        ],
+        "stop": {
+          "reason": "goal_satisfied",
+          "detail": "Resolved the role-only query with two independent direct source families and no competing candidate above the ambiguity threshold.",
+          "at": "2026-08-18T22:08:17.287Z"
+        },
+        "generatedAt": "2026-08-18T22:08:17.301Z"
+      }
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  }
+]

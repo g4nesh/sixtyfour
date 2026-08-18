@@ -1,0 +1,1569 @@
+[
+  {
+    "schemaVersion": 1,
+    "seq": 1,
+    "eventId": "linus_replay_event_0001",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.007Z",
+    "elapsedMs": 7,
+    "kind": "event",
+    "name": "investigation.created",
+    "phase": "intake",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "schemaVersion": 1,
+      "targetKind": "email",
+      "requestedDepth": "standard"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 2,
+    "eventId": "linus_replay_event_0002",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.021Z",
+    "elapsedMs": 21,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "classify",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "intake",
+      "to": "classify"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 3,
+    "eventId": "linus_replay_event_0003",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.028Z",
+    "elapsedMs": 28,
+    "kind": "event",
+    "name": "decision",
+    "phase": "classify",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "The query contains one exact user-supplied email and is limited to public professional correlation.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 4,
+    "eventId": "linus_replay_event_0004",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.042Z",
+    "elapsedMs": 42,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "plan",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "classify",
+      "to": "plan"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 5,
+    "eventId": "linus_replay_event_0005",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.049Z",
+    "elapsedMs": 49,
+    "kind": "event",
+    "name": "decision",
+    "phase": "plan",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "Use direct Linux documentation as the non-Git anchor, then run the bounded exact-email codegraph and inspect its strongest commit.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 6,
+    "eventId": "linus_replay_event_0006",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.063Z",
+    "elapsedMs": 63,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "discover",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "plan",
+      "to": "discover"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 7,
+    "eventId": "linus_replay_event_0007",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.070Z",
+    "elapsedMs": 70,
+    "kind": "event",
+    "name": "decision",
+    "phase": "discover",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "Fetch direct sources before admitting any claim; treat provider/search summaries as discovery-only.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 8,
+    "eventId": "linus_replay_event_0008",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.084Z",
+    "elapsedMs": 84,
+    "kind": "event",
+    "name": "candidate.created",
+    "phase": "discover",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "candidateId": "linus_replay_candidate_0001",
+      "displayName": "Linus Torvalds",
+      "status": "plausible",
+      "score": 0.603
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 9,
+    "eventId": "linus_replay_event_0009",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.091Z",
+    "elapsedMs": 91,
+    "kind": "span_start",
+    "name": "tool.fetch_public_source",
+    "phase": "discover",
+    "spanId": "linus_replay_span_0001",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "started",
+    "payload": {
+      "requestFingerprint": "GET https://github.com/torvalds/linux/blob/master/Documentation/process/submitting-patches.rst accept:text/html",
+      "replayNetwork": "forbidden",
+      "captureProvenance": "source_verified_scripted_reconstruction"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "captured_request_start"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 10,
+    "eventId": "linus_replay_event_0010",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.105Z",
+    "elapsedMs": 105,
+    "kind": "span_end",
+    "name": "tool.fetch_public_source",
+    "phase": "discover",
+    "spanId": "linus_replay_span_0001",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "succeeded",
+    "payload": {
+      "responseBodyRetained": false
+    },
+    "usage": {
+      "durationMs": 14,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": 1,
+      "bytesRead": null,
+      "unavailableReason": "provider_tokens_not_applicable"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 11,
+    "eventId": "linus_replay_event_0011",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.112Z",
+    "elapsedMs": 112,
+    "kind": "span_start",
+    "name": "tool.fetch_public_source",
+    "phase": "discover",
+    "spanId": "linus_replay_span_0002",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "started",
+    "payload": {
+      "requestFingerprint": "GET https://www.linuxfoundation.org/about/leadership accept:text/html",
+      "replayNetwork": "forbidden",
+      "captureProvenance": "source_verified_scripted_reconstruction"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "captured_request_start"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 12,
+    "eventId": "linus_replay_event_0012",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.126Z",
+    "elapsedMs": 126,
+    "kind": "span_end",
+    "name": "tool.fetch_public_source",
+    "phase": "discover",
+    "spanId": "linus_replay_span_0002",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "succeeded",
+    "payload": {
+      "responseBodyRetained": false
+    },
+    "usage": {
+      "durationMs": 14,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": 1,
+      "bytesRead": null,
+      "unavailableReason": "provider_tokens_not_applicable"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 13,
+    "eventId": "linus_replay_event_0013",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.133Z",
+    "elapsedMs": 133,
+    "kind": "span_start",
+    "name": "tool.github_email_codegraph",
+    "phase": "discover",
+    "spanId": "linus_replay_span_0003",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "started",
+    "payload": {
+      "requestFingerprint": "GET https://api.github.com/search/commits?q=repo%3Atorvalds%2Flinux+author-email%3Atorvalds%40linux-foundation.org+is%3Apublic&sort=committer-date&order=desc&per_page=3 accept:application/vnd.github+json",
+      "replayNetwork": "forbidden",
+      "captureProvenance": "source_verified_scripted_reconstruction"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "captured_request_start"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 14,
+    "eventId": "linus_replay_event_0014",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.147Z",
+    "elapsedMs": 147,
+    "kind": "span_end",
+    "name": "tool.github_email_codegraph",
+    "phase": "discover",
+    "spanId": "linus_replay_span_0003",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "succeeded",
+    "payload": {
+      "returnedCommits": 3,
+      "totalCountReported": 29714,
+      "incompleteResults": false,
+      "strongestCommitSha": "3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+      "strongestCommitSignature": "unsigned",
+      "responseBodyRetained": false
+    },
+    "usage": {
+      "durationMs": 14,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": 2,
+      "bytesRead": null,
+      "unavailableReason": "provider_tokens_not_applicable"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 15,
+    "eventId": "linus_replay_event_0015",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.154Z",
+    "elapsedMs": 154,
+    "kind": "span_start",
+    "name": "tool.keybase_identity_proofs",
+    "phase": "discover",
+    "spanId": "linus_replay_span_0004",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "started",
+    "payload": {
+      "requestFingerprint": "GET https://keybase.io/_/api/1.0/user/lookup.json?github=torvalds&fields=basics%2Cproofs_summary%2Cremote_key_proofs accept:application/json",
+      "replayNetwork": "forbidden",
+      "captureProvenance": "source_verified_scripted_reconstruction"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "captured_request_start"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 16,
+    "eventId": "linus_replay_event_0016",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.168Z",
+    "elapsedMs": 168,
+    "kind": "span_end",
+    "name": "tool.keybase_identity_proofs",
+    "phase": "discover",
+    "spanId": "linus_replay_span_0004",
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "partial",
+    "payload": {
+      "providerStatus": "OK",
+      "linkedUsernameObserved": false,
+      "verifiedGithubProofs": 0,
+      "admittedIdentityEvidence": 0,
+      "responseBodyRetained": false
+    },
+    "usage": {
+      "durationMs": 14,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": 1,
+      "bytesRead": null,
+      "unavailableReason": "provider_tokens_not_applicable"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 17,
+    "eventId": "linus_replay_event_0017",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.182Z",
+    "elapsedMs": 182,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "separate_candidates",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "discover",
+      "to": "separate_candidates"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 18,
+    "eventId": "linus_replay_event_0018",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.189Z",
+    "elapsedMs": 189,
+    "kind": "event",
+    "name": "decision",
+    "phase": "separate_candidates",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "The exact email, public Linux documentation, and linked GitHub login form one candidate; Git metadata remains a spoofable signal, not a merge authority.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 19,
+    "eventId": "linus_replay_event_0019",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.203Z",
+    "elapsedMs": 203,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "separate_candidates",
+      "to": "corroborate"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 20,
+    "eventId": "linus_replay_event_0020",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.210Z",
+    "elapsedMs": 210,
+    "kind": "event",
+    "name": "decision",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "Admit minimal direct-source records and require the Linux Foundation source before allowing high-confidence identity findings.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 21,
+    "eventId": "linus_replay_event_0021",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.224Z",
+    "elapsedMs": 224,
+    "kind": "event",
+    "name": "evidence.admission",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "admitted": true,
+      "reason": "admitted",
+      "evidenceId": "linus_replay_evidence_0001",
+      "duplicateOf": null,
+      "candidateId": "linus_replay_candidate_0001",
+      "sourceType": "public_document"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 22,
+    "eventId": "linus_replay_event_0022",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.238Z",
+    "elapsedMs": 238,
+    "kind": "event",
+    "name": "evidence.admission",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "admitted": true,
+      "reason": "admitted",
+      "evidenceId": "linus_replay_evidence_0002",
+      "duplicateOf": null,
+      "candidateId": "linus_replay_candidate_0001",
+      "sourceType": "official_profile"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 23,
+    "eventId": "linus_replay_event_0023",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.252Z",
+    "elapsedMs": 252,
+    "kind": "event",
+    "name": "evidence.admission",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "admitted": true,
+      "reason": "admitted",
+      "evidenceId": "linus_replay_evidence_0003",
+      "duplicateOf": null,
+      "candidateId": "linus_replay_candidate_0001",
+      "sourceType": "code_commit"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 24,
+    "eventId": "linus_replay_event_0024",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.266Z",
+    "elapsedMs": 266,
+    "kind": "event",
+    "name": "candidate.scored",
+    "phase": "corroborate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "candidateId": "linus_replay_candidate_0001",
+      "status": "resolved",
+      "score": 0.888,
+      "signalCount": 6,
+      "spoofableCapApplied": false
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 25,
+    "eventId": "linus_replay_event_0025",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.280Z",
+    "elapsedMs": 280,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "calibrate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "corroborate",
+      "to": "calibrate"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 26,
+    "eventId": "linus_replay_event_0026",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.287Z",
+    "elapsedMs": 287,
+    "kind": "event",
+    "name": "decision",
+    "phase": "calibrate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "The non-Git Linux Foundation anchor lifts the resolved candidate beyond the spoofable-only cap; the Git-specific finding retains its caveat.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 27,
+    "eventId": "linus_replay_event_0027",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.301Z",
+    "elapsedMs": 301,
+    "kind": "event",
+    "name": "finding.created",
+    "phase": "calibrate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "findingId": "linus_replay_finding_0001",
+      "candidateId": "linus_replay_candidate_0001",
+      "category": "identity",
+      "confidence": 0.842,
+      "sourceFamilies": [
+        "github.com",
+        "linuxfoundation.org"
+      ]
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 28,
+    "eventId": "linus_replay_event_0028",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.315Z",
+    "elapsedMs": 315,
+    "kind": "event",
+    "name": "finding.created",
+    "phase": "calibrate",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "findingId": "linus_replay_finding_0002",
+      "candidateId": "linus_replay_candidate_0001",
+      "category": "online_presence",
+      "confidence": 0.48,
+      "sourceFamilies": [
+        "github.com"
+      ]
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 29,
+    "eventId": "linus_replay_event_0029",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.329Z",
+    "elapsedMs": 329,
+    "kind": "event",
+    "name": "phase.transition",
+    "phase": "report",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "from": "calibrate",
+      "to": "report"
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 30,
+    "eventId": "linus_replay_event_0030",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.336Z",
+    "elapsedMs": 336,
+    "kind": "event",
+    "name": "decision",
+    "phase": "report",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "decisionSummary": "Compiled only referentially valid findings and explicit limitations into the versioned report.",
+      "decisionProvenance": "scripted_local_policy",
+      "provider": null
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 31,
+    "eventId": "linus_replay_event_0031",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.350Z",
+    "elapsedMs": 350,
+    "kind": "event",
+    "name": "investigation.terminal",
+    "phase": "terminal",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "status": "completed",
+      "reason": "goal_satisfied",
+      "detail": "Resolved the professional identity with auditable findings, an independent non-Git anchor, and explicit Git metadata limitations."
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "not_reported"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "seq": 32,
+    "eventId": "linus_replay_event_0032",
+    "runId": "replay-linus-codegraph-v1",
+    "timestamp": "2026-08-18T22:08:17.364Z",
+    "elapsedMs": 364,
+    "kind": "event",
+    "name": "result.terminal",
+    "phase": "terminal",
+    "spanId": null,
+    "parentSpanId": null,
+    "attempt": 1,
+    "status": "recorded",
+    "payload": {
+      "status": "completed",
+      "stopReason": "goal_satisfied",
+      "report": {
+        "schemaVersion": 1,
+        "runId": "replay-linus-codegraph-v1",
+        "input": {
+          "schemaVersion": 1,
+          "query": "torvalds@linux-foundation.org",
+          "objective": "Resolve the public professional identity tied to this exact user-supplied email and show the auditable codegraph without treating Git metadata as conclusive.",
+          "requestedDepth": "standard",
+          "requestedCategories": [
+            "identity",
+            "online_presence"
+          ]
+        },
+        "target": {
+          "schemaVersion": 1,
+          "rawInput": "torvalds@linux-foundation.org",
+          "normalizedQuery": "torvalds@linux-foundation.org",
+          "kind": "email",
+          "roleHints": [],
+          "organizationHints": [],
+          "locationHints": [],
+          "identifiers": [
+            {
+              "kind": "email",
+              "value": "torvalds@linux-foundation.org",
+              "normalizedValue": "torvalds@linux-foundation.org",
+              "assurance": "self_asserted",
+              "provenance": "user_input"
+            }
+          ]
+        },
+        "status": "completed",
+        "identity": {
+          "status": "resolved",
+          "selectedCandidate": {
+            "schemaVersion": 1,
+            "id": "linus_replay_candidate_0001",
+            "displayName": "Linus Torvalds",
+            "normalizedName": "linus torvalds",
+            "status": "resolved",
+            "signals": [
+              {
+                "kind": "cross_profile_link",
+                "value": "Linux guide exact-email association",
+                "normalizedValue": "linux guide exact email association",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "linus_replay_evidence_0001",
+                "sourceFamily": "github.com"
+              },
+              {
+                "kind": "email",
+                "value": "torvalds@linux-foundation.org",
+                "normalizedValue": "torvalds@linux-foundation.org",
+                "strength": "strong",
+                "assurance": "self_asserted"
+              },
+              {
+                "kind": "github_commit_email",
+                "value": "torvalds@linux-foundation.org",
+                "normalizedValue": "torvalds@linux-foundation.org",
+                "strength": "strong",
+                "assurance": "spoofable",
+                "sourceEvidenceId": "linus_replay_evidence_0003",
+                "sourceFamily": "github.com"
+              },
+              {
+                "kind": "name",
+                "value": "Linus Torvalds",
+                "normalizedValue": "linus torvalds",
+                "strength": "strong",
+                "assurance": "verified",
+                "sourceEvidenceId": "linus_replay_evidence_0002",
+                "sourceFamily": "linuxfoundation.org"
+              },
+              {
+                "kind": "profile_url",
+                "value": "https://www.linuxfoundation.org/about/leadership",
+                "normalizedValue": "https www.linuxfoundation.org about leadership",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "linus_replay_evidence_0002",
+                "sourceFamily": "linuxfoundation.org"
+              },
+              {
+                "kind": "social_handle",
+                "value": "torvalds",
+                "normalizedValue": "torvalds",
+                "strength": "medium",
+                "assurance": "spoofable",
+                "sourceEvidenceId": "linus_replay_evidence_0003",
+                "sourceFamily": "github.com"
+              }
+            ],
+            "evidenceIds": [
+              "linus_replay_evidence_0001",
+              "linus_replay_evidence_0002",
+              "linus_replay_evidence_0003"
+            ],
+            "score": {
+              "total": 0.888,
+              "positive": 0.888,
+              "penalty": 0,
+              "independentFamilies": [
+                "email:torvalds@linux-foundation.org",
+                "github.com",
+                "linuxfoundation.org"
+              ],
+              "matchedSignals": [
+                "cross_profile_link",
+                "email",
+                "profile_url"
+              ],
+              "conflictingSignals": [],
+              "cappedBecauseSpoofable": false
+            },
+            "createdAt": "2026-08-18T22:08:17.077Z",
+            "updatedAt": "2026-08-18T22:08:17.259Z"
+          },
+          "runnerUpCandidate": null,
+          "selectedCandidateId": "linus_replay_candidate_0001",
+          "selectedScore": 0.888,
+          "runnerUpScore": 0,
+          "runnerUpMargin": 0.888,
+          "resolutionThreshold": 0.78,
+          "marginThreshold": 0.15
+        },
+        "candidates": [
+          {
+            "schemaVersion": 1,
+            "id": "linus_replay_candidate_0001",
+            "displayName": "Linus Torvalds",
+            "normalizedName": "linus torvalds",
+            "status": "resolved",
+            "signals": [
+              {
+                "kind": "cross_profile_link",
+                "value": "Linux guide exact-email association",
+                "normalizedValue": "linux guide exact email association",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "linus_replay_evidence_0001",
+                "sourceFamily": "github.com"
+              },
+              {
+                "kind": "email",
+                "value": "torvalds@linux-foundation.org",
+                "normalizedValue": "torvalds@linux-foundation.org",
+                "strength": "strong",
+                "assurance": "self_asserted"
+              },
+              {
+                "kind": "github_commit_email",
+                "value": "torvalds@linux-foundation.org",
+                "normalizedValue": "torvalds@linux-foundation.org",
+                "strength": "strong",
+                "assurance": "spoofable",
+                "sourceEvidenceId": "linus_replay_evidence_0003",
+                "sourceFamily": "github.com"
+              },
+              {
+                "kind": "name",
+                "value": "Linus Torvalds",
+                "normalizedValue": "linus torvalds",
+                "strength": "strong",
+                "assurance": "verified",
+                "sourceEvidenceId": "linus_replay_evidence_0002",
+                "sourceFamily": "linuxfoundation.org"
+              },
+              {
+                "kind": "profile_url",
+                "value": "https://www.linuxfoundation.org/about/leadership",
+                "normalizedValue": "https www.linuxfoundation.org about leadership",
+                "strength": "strong",
+                "assurance": "corroborated",
+                "sourceEvidenceId": "linus_replay_evidence_0002",
+                "sourceFamily": "linuxfoundation.org"
+              },
+              {
+                "kind": "social_handle",
+                "value": "torvalds",
+                "normalizedValue": "torvalds",
+                "strength": "medium",
+                "assurance": "spoofable",
+                "sourceEvidenceId": "linus_replay_evidence_0003",
+                "sourceFamily": "github.com"
+              }
+            ],
+            "evidenceIds": [
+              "linus_replay_evidence_0001",
+              "linus_replay_evidence_0002",
+              "linus_replay_evidence_0003"
+            ],
+            "score": {
+              "total": 0.888,
+              "positive": 0.888,
+              "penalty": 0,
+              "independentFamilies": [
+                "email:torvalds@linux-foundation.org",
+                "github.com",
+                "linuxfoundation.org"
+              ],
+              "matchedSignals": [
+                "cross_profile_link",
+                "email",
+                "profile_url"
+              ],
+              "conflictingSignals": [],
+              "cappedBecauseSpoofable": false
+            },
+            "createdAt": "2026-08-18T22:08:17.077Z",
+            "updatedAt": "2026-08-18T22:08:17.259Z"
+          }
+        ],
+        "findings": [
+          {
+            "schemaVersion": 1,
+            "id": "linus_replay_finding_0001",
+            "candidateId": "linus_replay_candidate_0001",
+            "title": "Identity — Linus Torvalds",
+            "description": "Linus Torvalds is the final arbiter of all changes accepted into the Linux kernel. His e-mail address is < torvalds@linux-foundation.org >. Linus Torvalds Fellow",
+            "category": "identity",
+            "evidenceIds": [
+              "linus_replay_evidence_0001",
+              "linus_replay_evidence_0002"
+            ],
+            "counterEvidenceIds": [],
+            "confidence": {
+              "score": 0.842,
+              "label": "high",
+              "independentSourceFamilies": [
+                "github.com",
+                "linuxfoundation.org"
+              ],
+              "supportingEvidenceIds": [
+                "linus_replay_evidence_0001",
+                "linus_replay_evidence_0002"
+              ],
+              "contradictingEvidenceIds": [],
+              "appliedCaps": []
+            },
+            "caveats": [],
+            "createdAt": "2026-08-18T22:08:17.294Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "linus_replay_finding_0002",
+            "candidateId": "linus_replay_candidate_0001",
+            "title": "Online presence — Linus Torvalds",
+            "description": "GitHub's commit API returned 3a0dd7ba4f44cdc116d83712f61e7c1a95be3588 in torvalds/linux, linked it to @torvalds with an exact author-email match, and reported the signature as unsigned.",
+            "category": "online_presence",
+            "evidenceIds": [
+              "linus_replay_evidence_0003"
+            ],
+            "counterEvidenceIds": [],
+            "confidence": {
+              "score": 0.48,
+              "label": "moderate",
+              "independentSourceFamilies": [
+                "github.com"
+              ],
+              "supportingEvidenceIds": [
+                "linus_replay_evidence_0003"
+              ],
+              "contradictingEvidenceIds": [],
+              "appliedCaps": []
+            },
+            "caveats": [
+              "Supporting material includes spoofable or self-asserted source content."
+            ],
+            "createdAt": "2026-08-18T22:08:17.308Z"
+          }
+        ],
+        "evidence": [
+          {
+            "schemaVersion": 1,
+            "id": "linus_replay_evidence_0001",
+            "candidateId": "linus_replay_candidate_0001",
+            "claim": "Linus Torvalds is the final arbiter of all changes accepted into the Linux kernel. His e-mail address is < torvalds@linux-foundation.org >.",
+            "normalizedClaim": "linus torvalds is the final arbiter of all changes accepted into the linux kernel. his e-mail address is torvalds@linux-foundation.org .",
+            "disposition": "supports",
+            "sourceUrl": "https://github.com/torvalds/linux/blob/master/Documentation/process/submitting-patches.rst",
+            "canonicalUrl": "https://github.com/torvalds/linux/blob/master/Documentation/process/submitting-patches.rst",
+            "queryUrl": null,
+            "title": "Submitting patches: the essential guide",
+            "publisher": "Linux kernel project",
+            "sourceFamily": "github.com",
+            "sourceType": "public_document",
+            "publishedAt": null,
+            "retrievedAt": "2026-08-18T22:08:17.217Z",
+            "observedAt": "2026-08-18T22:08:17.000Z",
+            "httpStatus": 200,
+            "contentHash": "sha256:9fe3ae362aecea69b6572e5f82f0993ef339f682f71ebd1d90c85127fe8e4d4f",
+            "excerpt": "Linus Torvalds is the final arbiter of all changes accepted into the Linux kernel. His e-mail address is < torvalds@linux-foundation.org >.",
+            "canonicalSubset": null,
+            "toolCallId": "req-linux-doc",
+            "verificationMethod": "direct_fetch",
+            "temporalStatus": "current",
+            "reliability": 1,
+            "spoofable": false,
+            "attributes": {},
+            "fingerprint": "9579d72d",
+            "createdAt": "2026-08-18T22:08:17.217Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "linus_replay_evidence_0002",
+            "candidateId": "linus_replay_candidate_0001",
+            "claim": "Linus Torvalds Fellow",
+            "normalizedClaim": "linus torvalds fellow",
+            "disposition": "supports",
+            "sourceUrl": "https://www.linuxfoundation.org/about/leadership",
+            "canonicalUrl": "https://www.linuxfoundation.org/about/leadership",
+            "queryUrl": null,
+            "title": "Linux Foundation leadership",
+            "publisher": "Linux Foundation",
+            "sourceFamily": "linuxfoundation.org",
+            "sourceType": "official_profile",
+            "publishedAt": null,
+            "retrievedAt": "2026-08-18T22:08:17.231Z",
+            "observedAt": "2026-08-18T22:08:17.000Z",
+            "httpStatus": 200,
+            "contentHash": "sha256:47755209930ef267697a78716d40833eee2c929d00024014cca643c92d551d6b",
+            "excerpt": "Linus Torvalds Fellow",
+            "canonicalSubset": null,
+            "toolCallId": "req-linux-foundation",
+            "verificationMethod": "direct_fetch",
+            "temporalStatus": "current",
+            "reliability": 1,
+            "spoofable": false,
+            "attributes": {},
+            "fingerprint": "2a00c3ae",
+            "createdAt": "2026-08-18T22:08:17.231Z"
+          },
+          {
+            "schemaVersion": 1,
+            "id": "linus_replay_evidence_0003",
+            "candidateId": "linus_replay_candidate_0001",
+            "claim": "GitHub's commit API returned 3a0dd7ba4f44cdc116d83712f61e7c1a95be3588 in torvalds/linux, linked it to @torvalds with an exact author-email match, and reported the signature as unsigned.",
+            "normalizedClaim": "github s commit api returned 3a0dd7ba4f44cdc116d83712f61e7c1a95be3588 in torvalds linux linked it to @torvalds with an exact author-email match and reported the signature as unsigned.",
+            "disposition": "supports",
+            "sourceUrl": "https://github.com/torvalds/linux/commit/3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+            "canonicalUrl": "https://github.com/torvalds/linux/commit/3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+            "queryUrl": "https://api.github.com/repos/torvalds/linux/commits/3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+            "title": "Public commit metadata in torvalds/linux",
+            "publisher": "GitHub",
+            "sourceFamily": "github.com",
+            "sourceType": "code_commit",
+            "publishedAt": "2026-08-18T21:13:43.000Z",
+            "retrievedAt": "2026-08-18T22:08:17.245Z",
+            "observedAt": "2026-08-18T22:08:17.000Z",
+            "httpStatus": 200,
+            "contentHash": "sha256:1a026a26e3a858e8926bef60e5c0115e61a0995d19653d1f4a260bb707f73b89",
+            "excerpt": null,
+            "canonicalSubset": {
+              "sha": "3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+              "repository": "torvalds/linux",
+              "githubAccount": "torvalds",
+              "exactAuthorEmailMatch": true,
+              "authoredAt": "2026-08-18T21:13:43.000Z",
+              "signatureVerified": false,
+              "signatureReason": "unsigned"
+            },
+            "toolCallId": "req-github-commit",
+            "verificationMethod": "api_response",
+            "temporalStatus": "current",
+            "reliability": 1,
+            "spoofable": true,
+            "attributes": {
+              "sha": "3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+              "repository": "torvalds/linux",
+              "login": "torvalds",
+              "signature": "unsigned"
+            },
+            "fingerprint": "297e02ce",
+            "createdAt": "2026-08-18T22:08:17.245Z"
+          }
+        ],
+        "coverage": {
+          "score": 0.917,
+          "requestedCategories": [
+            "identity",
+            "online_presence"
+          ],
+          "coveredCategories": [
+            "identity",
+            "online_presence"
+          ],
+          "missingCategories": [],
+          "supportedFindingCount": 2,
+          "highConfidenceFindingCount": 1,
+          "independentSourceFamilyCount": 2,
+          "gaps": []
+        },
+        "sources": [
+          {
+            "sourceFamily": "github.com",
+            "sourceTypes": [
+              "code_commit",
+              "public_document"
+            ],
+            "evidenceCount": 2,
+            "supportingCount": 2,
+            "contradictingCount": 0,
+            "discoveryOnlyCount": 0,
+            "urls": [
+              "https://github.com/torvalds/linux/blob/master/Documentation/process/submitting-patches.rst",
+              "https://github.com/torvalds/linux/commit/3a0dd7ba4f44cdc116d83712f61e7c1a95be3588"
+            ]
+          },
+          {
+            "sourceFamily": "linuxfoundation.org",
+            "sourceTypes": [
+              "official_profile"
+            ],
+            "evidenceCount": 1,
+            "supportingCount": 1,
+            "contradictingCount": 0,
+            "discoveryOnlyCount": 0,
+            "urls": [
+              "https://www.linuxfoundation.org/about/leadership"
+            ]
+          }
+        ],
+        "telemetry": {
+          "candidateCount": 1,
+          "resolvedCandidateCount": 1,
+          "evidence": {
+            "admitted": 3,
+            "rejected": 0,
+            "duplicate": 0,
+            "discoveryOnly": 0,
+            "supporting": 3,
+            "contradicting": 0
+          },
+          "findingCount": 2,
+          "highConfidenceFindingCount": 1
+        },
+        "usage": {
+          "turns": 0,
+          "llmCalls": 0,
+          "toolCalls": 4,
+          "searchCalls": 1,
+          "evidenceAttempts": 3,
+          "networkRequests": 5,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "thinkingTokens": 0,
+          "costUsd": 0,
+          "elapsedMs": 350,
+          "consecutiveNoProgress": 0,
+          "phaseTurns": {}
+        },
+        "limitations": [
+          "Only auditable public professional sources were considered.",
+          "Self-asserted or spoofable sources were confidence-capped unless independently corroborated."
+        ],
+        "stop": {
+          "reason": "goal_satisfied",
+          "detail": "Resolved the professional identity with auditable findings, an independent non-Git anchor, and explicit Git metadata limitations.",
+          "at": "2026-08-18T22:08:17.343Z"
+        },
+        "generatedAt": "2026-08-18T22:08:17.357Z"
+      }
+    },
+    "usage": {
+      "durationMs": null,
+      "llmCalls": null,
+      "toolCalls": null,
+      "searchCalls": null,
+      "inputTokens": null,
+      "cachedInputTokens": null,
+      "outputTokens": null,
+      "thinkingTokens": null,
+      "costUsd": null,
+      "networkRequests": null,
+      "bytesRead": null,
+      "unavailableReason": "scripted_replay_no_provider"
+    }
+  }
+]

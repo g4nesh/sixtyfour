@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "cassetteVersion": 2,
+  "capturedAt": "2026-08-18T22:08:17.000Z",
+  "networkOnReplay": "forbidden",
+  "decisionProvenance": "scripted_local_policy",
+  "requests": [
+    {
+      "id": "req-linux-doc",
+      "fingerprint": "GET https://github.com/torvalds/linux/blob/master/Documentation/process/submitting-patches.rst accept:text/html",
+      "response": {
+        "status": 200,
+        "contentType": "text/html",
+        "bodySha256": "9fe3ae362aecea69b6572e5f82f0993ef339f682f71ebd1d90c85127fe8e4d4f",
+        "evidenceBindings": [
+          {
+            "evidenceId": "linus_replay_evidence_0001",
+            "candidateId": "linus_replay_candidate_0001",
+            "sourceUrl": "https://github.com/torvalds/linux/blob/master/Documentation/process/submitting-patches.rst",
+            "normalizedClaim": "linus torvalds is the final arbiter of all changes accepted into the linux kernel. his e-mail address is torvalds@linux-foundation.org .",
+            "excerpt": "Linus Torvalds is the final arbiter of all changes accepted into the Linux kernel. His e-mail address is < torvalds@linux-foundation.org >.",
+            "canonicalSubset": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "req-linux-foundation",
+      "fingerprint": "GET https://www.linuxfoundation.org/about/leadership accept:text/html",
+      "response": {
+        "status": 200,
+        "contentType": "text/html",
+        "bodySha256": "47755209930ef267697a78716d40833eee2c929d00024014cca643c92d551d6b",
+        "evidenceBindings": [
+          {
+            "evidenceId": "linus_replay_evidence_0002",
+            "candidateId": "linus_replay_candidate_0001",
+            "sourceUrl": "https://www.linuxfoundation.org/about/leadership",
+            "normalizedClaim": "linus torvalds fellow",
+            "excerpt": "Linus Torvalds Fellow",
+            "canonicalSubset": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "req-github-search",
+      "fingerprint": "GET https://api.github.com/search/commits?q=repo%3Atorvalds%2Flinux+author-email%3Atorvalds%40linux-foundation.org+is%3Apublic&sort=committer-date&order=desc&per_page=3 accept:application/vnd.github+json",
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "bodySha256": "4b10a4dc0458eb4142cdb6ab845e1e5057dbc3e2f6c96881048f977ac460a8ea",
+        "canonicalSubset": {
+          "total_count": 29714,
+          "incomplete_results": false,
+          "strongest_sha": "3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+          "linked_login": "torvalds",
+          "exact_author_email_match": true
+        },
+        "evidenceBindings": []
+      }
+    },
+    {
+      "id": "req-github-commit",
+      "fingerprint": "GET https://api.github.com/repos/torvalds/linux/commits/3a0dd7ba4f44cdc116d83712f61e7c1a95be3588 accept:application/vnd.github+json",
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "bodySha256": "1a026a26e3a858e8926bef60e5c0115e61a0995d19653d1f4a260bb707f73b89",
+        "canonicalSubset": {
+          "sha": "3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+          "repository": "torvalds/linux",
+          "githubAccount": "torvalds",
+          "exactAuthorEmailMatch": true,
+          "authoredAt": "2026-08-18T21:13:43.000Z",
+          "signatureVerified": false,
+          "signatureReason": "unsigned"
+        },
+        "evidenceBindings": [
+          {
+            "evidenceId": "linus_replay_evidence_0003",
+            "candidateId": "linus_replay_candidate_0001",
+            "sourceUrl": "https://github.com/torvalds/linux/commit/3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+            "normalizedClaim": "github s commit api returned 3a0dd7ba4f44cdc116d83712f61e7c1a95be3588 in torvalds linux linked it to @torvalds with an exact author-email match and reported the signature as unsigned.",
+            "excerpt": null,
+            "canonicalSubset": {
+              "sha": "3a0dd7ba4f44cdc116d83712f61e7c1a95be3588",
+              "repository": "torvalds/linux",
+              "githubAccount": "torvalds",
+              "exactAuthorEmailMatch": true,
+              "authoredAt": "2026-08-18T21:13:43.000Z",
+              "signatureVerified": false,
+              "signatureReason": "unsigned"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "req-keybase",
+      "fingerprint": "GET https://keybase.io/_/api/1.0/user/lookup.json?github=torvalds&fields=basics%2Cproofs_summary%2Cremote_key_proofs accept:application/json",
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "bodySha256": "eeba1ce1f1043422a2f1f5bf4b043a50b0ecef324fde0ca4b64d127c25a9984a",
+        "canonicalSubset": {
+          "status": "OK",
+          "matching_user": false
+        },
+        "evidenceBindings": []
+      }
+    }
+  ],
+  "scriptedDecisions": [
+    {
+      "phase": "classify",
+      "summary": "Classified the exact supplied work email as eligible for bounded public codegraph research."
+    },
+    {
+      "phase": "discover",
+      "summary": "Fetched direct Linux documentation before admitting claims; search metadata remained discovery-only."
+    },
+    {
+      "phase": "separate_candidates",
+      "summary": "Kept the GitHub login as a signal on one candidate, not a standalone identity."
+    },
+    {
+      "phase": "calibrate",
+      "summary": "Applied the spoofable Git metadata cap and relied on a non-git Linux Foundation source for high confidence."
+    }
+  ]
+}

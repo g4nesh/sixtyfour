@@ -1,0 +1,614 @@
+{
+  "schemaVersion": 1,
+  "runId": "replay-chris-anderson-ted-v1",
+  "input": {
+    "schemaVersion": 1,
+    "query": "Chris Anderson, TED",
+    "objective": "Resolve the intended public professional and quarantine same-name candidates without crossing evidence between them.",
+    "requestedDepth": "standard",
+    "requestedCategories": [
+      "employment",
+      "identity"
+    ]
+  },
+  "target": {
+    "schemaVersion": 1,
+    "rawInput": "Chris Anderson, TED",
+    "normalizedQuery": "Chris Anderson, TED",
+    "kind": "named_person",
+    "name": "Chris Anderson",
+    "normalizedName": "chris anderson",
+    "roleHints": [],
+    "organizationHints": [
+      {
+        "name": "TED",
+        "normalizedName": "ted",
+        "relationship": "unspecified"
+      }
+    ],
+    "locationHints": [],
+    "identifiers": []
+  },
+  "status": "completed",
+  "identity": {
+    "status": "resolved",
+    "selectedCandidate": {
+      "schemaVersion": 1,
+      "id": "chris_replay_candidate_0001",
+      "displayName": "Chris Anderson",
+      "normalizedName": "chris anderson",
+      "status": "resolved",
+      "signals": [
+        {
+          "kind": "bio_phrase",
+          "value": "became the curator of the TED Conference in 2002",
+          "normalizedValue": "became the curator of the ted conference in 2002",
+          "strength": "weak",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0002"
+        },
+        {
+          "kind": "cross_profile_link",
+          "value": "Chris Anderson at TED",
+          "normalizedValue": "chris anderson at ted",
+          "strength": "strong",
+          "assurance": "corroborated",
+          "sourceEvidenceId": "chris_replay_evidence_0001"
+        },
+        {
+          "kind": "name",
+          "value": "Chris Anderson",
+          "normalizedValue": "chris anderson",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0001"
+        },
+        {
+          "kind": "organization",
+          "value": "TED",
+          "normalizedValue": "ted",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
+        },
+        {
+          "kind": "profile_url",
+          "value": "https://www.ted.com/speakers/chris_anderson_ted",
+          "normalizedValue": "https www.ted.com speakers chris anderson ted",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
+        },
+        {
+          "kind": "role",
+          "value": "Chairman, TED",
+          "normalizedValue": "chairman ted",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
+        }
+      ],
+      "evidenceIds": [
+        "chris_replay_evidence_0001",
+        "chris_replay_evidence_0002"
+      ],
+      "score": {
+        "total": 0.788,
+        "positive": 0.788,
+        "penalty": 0,
+        "independentFamilies": [
+          "bio_phrase",
+          "cross_profile_link",
+          "name:chris anderson",
+          "ted.com"
+        ],
+        "matchedSignals": [
+          "bio_phrase",
+          "cross_profile_link",
+          "name",
+          "profile_url"
+        ],
+        "conflictingSignals": [],
+        "cappedBecauseSpoofable": false
+      },
+      "createdAt": "2026-08-18T22:08:17.077Z",
+      "updatedAt": "2026-08-18T22:08:17.266Z"
+    },
+    "runnerUpCandidate": {
+      "schemaVersion": 1,
+      "id": "chris_replay_candidate_0002",
+      "displayName": "Chris Anderson",
+      "normalizedName": "chris anderson",
+      "status": "rejected",
+      "signals": [
+        {
+          "kind": "conflict",
+          "value": "TED profile explicitly says this is not the conference curator",
+          "normalizedValue": "not ted curator",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0003",
+          "sourceFamily": "ted.com"
+        },
+        {
+          "kind": "name",
+          "value": "Chris Anderson",
+          "normalizedValue": "chris anderson",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0003",
+          "sourceFamily": "ted.com"
+        },
+        {
+          "kind": "organization",
+          "value": "3D Robotics",
+          "normalizedValue": "3d robotics",
+          "strength": "strong",
+          "assurance": "corroborated",
+          "sourceEvidenceId": "chris_replay_evidence_0004",
+          "sourceFamily": "wired.com"
+        },
+        {
+          "kind": "profile_url",
+          "value": "https://www.ted.com/speakers/chris_anderson_wired",
+          "normalizedValue": "https www.ted.com speakers chris anderson wired",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0003",
+          "sourceFamily": "ted.com"
+        }
+      ],
+      "evidenceIds": [
+        "chris_replay_evidence_0003",
+        "chris_replay_evidence_0004"
+      ],
+      "score": {
+        "total": 0.211,
+        "positive": 0.511,
+        "penalty": 0.3,
+        "independentFamilies": [
+          "name:chris anderson",
+          "ted.com"
+        ],
+        "matchedSignals": [
+          "name",
+          "profile_url"
+        ],
+        "conflictingSignals": [
+          "conflict"
+        ],
+        "cappedBecauseSpoofable": false
+      },
+      "createdAt": "2026-08-18T22:08:17.091Z",
+      "updatedAt": "2026-08-18T22:08:17.280Z"
+    },
+    "selectedCandidateId": "chris_replay_candidate_0001",
+    "runnerUpCandidateId": "chris_replay_candidate_0002",
+    "selectedScore": 0.788,
+    "runnerUpScore": 0.211,
+    "runnerUpMargin": 0.577,
+    "resolutionThreshold": 0.78,
+    "marginThreshold": 0.15
+  },
+  "candidates": [
+    {
+      "schemaVersion": 1,
+      "id": "chris_replay_candidate_0001",
+      "displayName": "Chris Anderson",
+      "normalizedName": "chris anderson",
+      "status": "resolved",
+      "signals": [
+        {
+          "kind": "bio_phrase",
+          "value": "became the curator of the TED Conference in 2002",
+          "normalizedValue": "became the curator of the ted conference in 2002",
+          "strength": "weak",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0002"
+        },
+        {
+          "kind": "cross_profile_link",
+          "value": "Chris Anderson at TED",
+          "normalizedValue": "chris anderson at ted",
+          "strength": "strong",
+          "assurance": "corroborated",
+          "sourceEvidenceId": "chris_replay_evidence_0001"
+        },
+        {
+          "kind": "name",
+          "value": "Chris Anderson",
+          "normalizedValue": "chris anderson",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0001"
+        },
+        {
+          "kind": "organization",
+          "value": "TED",
+          "normalizedValue": "ted",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
+        },
+        {
+          "kind": "profile_url",
+          "value": "https://www.ted.com/speakers/chris_anderson_ted",
+          "normalizedValue": "https www.ted.com speakers chris anderson ted",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
+        },
+        {
+          "kind": "role",
+          "value": "Chairman, TED",
+          "normalizedValue": "chairman ted",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
+        }
+      ],
+      "evidenceIds": [
+        "chris_replay_evidence_0001",
+        "chris_replay_evidence_0002"
+      ],
+      "score": {
+        "total": 0.788,
+        "positive": 0.788,
+        "penalty": 0,
+        "independentFamilies": [
+          "bio_phrase",
+          "cross_profile_link",
+          "name:chris anderson",
+          "ted.com"
+        ],
+        "matchedSignals": [
+          "bio_phrase",
+          "cross_profile_link",
+          "name",
+          "profile_url"
+        ],
+        "conflictingSignals": [],
+        "cappedBecauseSpoofable": false
+      },
+      "createdAt": "2026-08-18T22:08:17.077Z",
+      "updatedAt": "2026-08-18T22:08:17.266Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "chris_replay_candidate_0002",
+      "displayName": "Chris Anderson",
+      "normalizedName": "chris anderson",
+      "status": "rejected",
+      "signals": [
+        {
+          "kind": "conflict",
+          "value": "TED profile explicitly says this is not the conference curator",
+          "normalizedValue": "not ted curator",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0003",
+          "sourceFamily": "ted.com"
+        },
+        {
+          "kind": "name",
+          "value": "Chris Anderson",
+          "normalizedValue": "chris anderson",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0003",
+          "sourceFamily": "ted.com"
+        },
+        {
+          "kind": "organization",
+          "value": "3D Robotics",
+          "normalizedValue": "3d robotics",
+          "strength": "strong",
+          "assurance": "corroborated",
+          "sourceEvidenceId": "chris_replay_evidence_0004",
+          "sourceFamily": "wired.com"
+        },
+        {
+          "kind": "profile_url",
+          "value": "https://www.ted.com/speakers/chris_anderson_wired",
+          "normalizedValue": "https www.ted.com speakers chris anderson wired",
+          "strength": "strong",
+          "assurance": "verified",
+          "sourceEvidenceId": "chris_replay_evidence_0003",
+          "sourceFamily": "ted.com"
+        }
+      ],
+      "evidenceIds": [
+        "chris_replay_evidence_0003",
+        "chris_replay_evidence_0004"
+      ],
+      "score": {
+        "total": 0.211,
+        "positive": 0.511,
+        "penalty": 0.3,
+        "independentFamilies": [
+          "name:chris anderson",
+          "ted.com"
+        ],
+        "matchedSignals": [
+          "name",
+          "profile_url"
+        ],
+        "conflictingSignals": [
+          "conflict"
+        ],
+        "cappedBecauseSpoofable": false
+      },
+      "createdAt": "2026-08-18T22:08:17.091Z",
+      "updatedAt": "2026-08-18T22:08:17.280Z"
+    }
+  ],
+  "findings": [
+    {
+      "schemaVersion": 1,
+      "id": "chris_replay_finding_0001",
+      "candidateId": "chris_replay_candidate_0001",
+      "title": "Identity — Chris Anderson",
+      "description": "Chris Anderson Chairman, TED",
+      "category": "identity",
+      "evidenceIds": [
+        "chris_replay_evidence_0001"
+      ],
+      "counterEvidenceIds": [],
+      "confidence": {
+        "score": 0.64,
+        "label": "moderate",
+        "independentSourceFamilies": [
+          "ted.com"
+        ],
+        "supportingEvidenceIds": [
+          "chris_replay_evidence_0001"
+        ],
+        "contradictingEvidenceIds": [],
+        "appliedCaps": []
+      },
+      "caveats": [],
+      "createdAt": "2026-08-18T22:08:17.315Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "chris_replay_finding_0002",
+      "candidateId": "chris_replay_candidate_0001",
+      "title": "Employment — Chris Anderson",
+      "description": "Chris Anderson became the curator of the TED Conference in 2002",
+      "category": "employment",
+      "evidenceIds": [
+        "chris_replay_evidence_0002"
+      ],
+      "counterEvidenceIds": [],
+      "confidence": {
+        "score": 0.64,
+        "label": "moderate",
+        "independentSourceFamilies": [
+          "ted.com"
+        ],
+        "supportingEvidenceIds": [
+          "chris_replay_evidence_0002"
+        ],
+        "contradictingEvidenceIds": [],
+        "appliedCaps": []
+      },
+      "caveats": [],
+      "createdAt": "2026-08-18T22:08:17.329Z"
+    }
+  ],
+  "evidence": [
+    {
+      "schemaVersion": 1,
+      "id": "chris_replay_evidence_0001",
+      "candidateId": "chris_replay_candidate_0001",
+      "claim": "Chris Anderson Chairman, TED",
+      "normalizedClaim": "chris anderson chairman ted",
+      "disposition": "supports",
+      "sourceUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+      "canonicalUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+      "queryUrl": null,
+      "title": "Chris Anderson — TED speaker profile",
+      "publisher": "TED",
+      "sourceFamily": "ted.com",
+      "sourceType": "official_profile",
+      "publishedAt": null,
+      "retrievedAt": "2026-08-18T22:08:17.210Z",
+      "observedAt": "2026-08-18T22:08:17.000Z",
+      "httpStatus": 200,
+      "contentHash": "sha256:7649b3991c54edd2cae6a9f073d5fd6e25112b9100d9612de1ede665d0df124b",
+      "excerpt": "Chris Anderson Chairman, TED",
+      "canonicalSubset": null,
+      "toolCallId": "req-ted-selected",
+      "verificationMethod": "direct_fetch",
+      "temporalStatus": "current",
+      "reliability": 1,
+      "spoofable": false,
+      "attributes": {
+        "organization": "TED",
+        "role": "Chairman, TED"
+      },
+      "fingerprint": "5f434689",
+      "createdAt": "2026-08-18T22:08:17.210Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "chris_replay_evidence_0002",
+      "candidateId": "chris_replay_candidate_0001",
+      "claim": "Chris Anderson became the curator of the TED Conference in 2002",
+      "normalizedClaim": "chris anderson became the curator of the ted conference in 2002",
+      "disposition": "supports",
+      "sourceUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+      "canonicalUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+      "queryUrl": null,
+      "title": "Chris Anderson — TED leadership",
+      "publisher": "TED",
+      "sourceFamily": "ted.com",
+      "sourceType": "official_profile",
+      "publishedAt": null,
+      "retrievedAt": "2026-08-18T22:08:17.224Z",
+      "observedAt": "2026-08-18T22:08:17.000Z",
+      "httpStatus": 200,
+      "contentHash": "sha256:7649b3991c54edd2cae6a9f073d5fd6e25112b9100d9612de1ede665d0df124b",
+      "excerpt": "Chris Anderson became the curator of the TED Conference in 2002",
+      "canonicalSubset": null,
+      "toolCallId": "req-ted-selected",
+      "verificationMethod": "direct_fetch",
+      "temporalStatus": "current",
+      "reliability": 1,
+      "spoofable": false,
+      "attributes": {},
+      "fingerprint": "3ae5c7fb",
+      "createdAt": "2026-08-18T22:08:17.224Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "chris_replay_evidence_0003",
+      "candidateId": "chris_replay_candidate_0002",
+      "claim": "(He is not, however, to be confused with the curator of TED, who has the same name.)",
+      "normalizedClaim": "he is not however to be confused with the curator of ted who has the same name.",
+      "disposition": "supports",
+      "sourceUrl": "https://www.ted.com/speakers/chris_anderson_wired",
+      "canonicalUrl": "https://www.ted.com/speakers/chris_anderson_wired",
+      "queryUrl": null,
+      "title": "Chris Anderson — separate TED speaker profile",
+      "publisher": "TED",
+      "sourceFamily": "ted.com",
+      "sourceType": "official_profile",
+      "publishedAt": null,
+      "retrievedAt": "2026-08-18T22:08:17.238Z",
+      "observedAt": "2026-08-18T22:08:17.000Z",
+      "httpStatus": 200,
+      "contentHash": "sha256:75ee0b44d5acb892a647f0093d5d8ba7605f6b139cb4bf3b0d78868dd30668a1",
+      "excerpt": "(He is not, however, to be confused with the curator of TED, who has the same name.)",
+      "canonicalSubset": null,
+      "toolCallId": "req-ted-decoy",
+      "verificationMethod": "direct_fetch",
+      "temporalStatus": "current",
+      "reliability": 1,
+      "spoofable": false,
+      "attributes": {},
+      "fingerprint": "2129632d",
+      "createdAt": "2026-08-18T22:08:17.238Z"
+    },
+    {
+      "schemaVersion": 1,
+      "id": "chris_replay_evidence_0004",
+      "candidateId": "chris_replay_candidate_0002",
+      "claim": "Chris Anderson, CEO of the world's third-largest producer of drones (and a former editor-in-chief of WIRED US)",
+      "normalizedClaim": "chris anderson ceo of the world s third-largest producer of drones and a former editor-in-chief of wired us",
+      "disposition": "supports",
+      "sourceUrl": "https://www.wired.com/story/airware-drones",
+      "canonicalUrl": "https://www.wired.com/story/airware-drones",
+      "queryUrl": null,
+      "title": "Airware drones",
+      "publisher": "WIRED",
+      "sourceFamily": "wired.com",
+      "sourceType": "news",
+      "publishedAt": null,
+      "retrievedAt": "2026-08-18T22:08:17.252Z",
+      "observedAt": "2026-08-18T22:08:17.000Z",
+      "httpStatus": 200,
+      "contentHash": "sha256:bfae98bbe1b74d6963875a80ed9f394d12a5a8506f8ccfadf4c3235dd503c063",
+      "excerpt": "Chris Anderson, CEO of the world's third-largest producer of drones (and a former editor-in-chief of WIRED US)",
+      "canonicalSubset": null,
+      "toolCallId": "req-wired-decoy",
+      "verificationMethod": "direct_fetch",
+      "temporalStatus": "historical",
+      "reliability": 0.9,
+      "spoofable": false,
+      "attributes": {},
+      "fingerprint": "cee422a6",
+      "createdAt": "2026-08-18T22:08:17.252Z"
+    }
+  ],
+  "coverage": {
+    "score": 0.833,
+    "requestedCategories": [
+      "employment",
+      "identity"
+    ],
+    "coveredCategories": [
+      "employment",
+      "identity"
+    ],
+    "missingCategories": [],
+    "supportedFindingCount": 2,
+    "highConfidenceFindingCount": 0,
+    "independentSourceFamilyCount": 1,
+    "gaps": []
+  },
+  "sources": [
+    {
+      "sourceFamily": "ted.com",
+      "sourceTypes": [
+        "official_profile"
+      ],
+      "evidenceCount": 3,
+      "supportingCount": 3,
+      "contradictingCount": 0,
+      "discoveryOnlyCount": 0,
+      "urls": [
+        "https://www.ted.com/speakers/chris_anderson_ted",
+        "https://www.ted.com/speakers/chris_anderson_wired"
+      ]
+    },
+    {
+      "sourceFamily": "wired.com",
+      "sourceTypes": [
+        "news"
+      ],
+      "evidenceCount": 1,
+      "supportingCount": 1,
+      "contradictingCount": 0,
+      "discoveryOnlyCount": 0,
+      "urls": [
+        "https://www.wired.com/story/airware-drones"
+      ]
+    }
+  ],
+  "telemetry": {
+    "candidateCount": 2,
+    "resolvedCandidateCount": 1,
+    "evidence": {
+      "admitted": 4,
+      "rejected": 0,
+      "duplicate": 0,
+      "discoveryOnly": 0,
+      "supporting": 4,
+      "contradicting": 0
+    },
+    "findingCount": 2,
+    "highConfidenceFindingCount": 0
+  },
+  "usage": {
+    "turns": 0,
+    "llmCalls": 0,
+    "toolCalls": 3,
+    "searchCalls": 0,
+    "evidenceAttempts": 4,
+    "networkRequests": 3,
+    "inputTokens": 0,
+    "cachedInputTokens": 0,
+    "outputTokens": 0,
+    "thinkingTokens": 0,
+    "costUsd": 0,
+    "elapsedMs": 371,
+    "consecutiveNoProgress": 0,
+    "phaseTurns": {}
+  },
+  "limitations": [
+    "Only auditable public professional sources were considered."
+  ],
+  "stop": {
+    "reason": "goal_satisfied",
+    "detail": "Resolved the TED-constrained candidate with a unique official anchor and preserved the same-name decoy as a separate rejected candidate.",
+    "at": "2026-08-18T22:08:17.364Z"
+  },
+  "generatedAt": "2026-08-18T22:08:17.378Z"
+}
