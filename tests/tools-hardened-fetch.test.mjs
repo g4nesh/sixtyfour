@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createHardenedFetch, isBlockedIpAddress, parseRetryAfter } from "../lib/tools/hardened-fetch.ts";
+import {
+  asHardenedFetchError,
+  createHardenedFetch,
+  isBlockedIpAddress,
+  parseRetryAfter,
+} from "../lib/tools/hardened-fetch.ts";
 
 const jsonResponse = (body, init = {}) =>
   new Response(JSON.stringify(body), {
@@ -43,6 +48,40 @@ test("every redirect is revalidated and sensitive destinations are blocked", asy
   assert.equal(calls, 1);
 });
 
+test("redirect cleanup failures retain a specific hardened transport diagnostic", async () => {
+  const response = {
+    status: 302,
+    headers: new Headers({ location: "https://public.example.com/next" }),
+    body: {
+      cancel: async () => {
+        throw new Error("cross-runtime stream cleanup failed");
+      },
+    },
+  };
+  const hardenedFetch = createHardenedFetch({
+    allowedHostnames: ["public.example.com"],
+    fetch: async () => response,
+  });
+  await assert.rejects(() => hardenedFetch("https://public.example.com/start"), {
+    name: "HardenedFetchError",
+    code: "network_error",
+    status: 302,
+    requests: 1,
+  });
+
+  const rehydrated = asHardenedFetchError({
+    name: "HardenedFetchError",
+    code: "timeout",
+    retryable: true,
+    status: null,
+    attempt: 2,
+    requests: 2,
+  });
+  assert.equal(rehydrated.code, "timeout");
+  assert.equal(rehydrated.requests, 2);
+  assert.equal(asHardenedFetchError({ name: "Error", code: "timeout" }), null);
+});
+
 test("DNS answers are fail-closed when a resolver is supplied", async () => {
   let fetchCalls = 0;
   const hardenedFetch = createHardenedFetch({
@@ -71,6 +110,23 @@ test("response MIME and byte limits are enforced", async () => {
     fetch: async () => new Response("12345", { headers: { "content-type": "application/json" } }),
   });
   await assert.rejects(() => oversized("https://public.example.com/"), { code: "response_too_large" });
+});
+
+test("nonstandard HTTP statuses remain specific hardened failures", async () => {
+  const response = new Response("blocked", { headers: { "content-type": "text/html" } });
+  Object.defineProperty(response, "status", { value: 999 });
+  const hardenedFetch = createHardenedFetch({
+    allowedHostnames: ["public.example.com"],
+    fetch: async () => response,
+  });
+
+  await assert.rejects(() => hardenedFetch("https://public.example.com/profile"), {
+    name: "HardenedFetchError",
+    code: "nonstandard_http_status",
+    retryable: false,
+    status: 999,
+    requests: 1,
+  });
 });
 
 test("idempotent requests honor bounded Retry-After and report attempts", async () => {

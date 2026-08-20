@@ -1,6 +1,19 @@
 import { useEffect, useRef } from "react";
+import {
+  isPassivePageMetadataObservation,
+  projectPageFootprint,
+  projectTemporalComparison,
+} from "../../lib/report-export/evidence-context";
 import type { Report, TraceEvent } from "../atlas-types";
-import { candidateName, humanize, limitationText, reportCandidates, reportEvidence, reportQuery } from "../atlas-types";
+import {
+  candidateName,
+  humanize,
+  limitationText,
+  reportCandidates,
+  reportEvidence,
+  reportQuery,
+  traceDiagnostics,
+} from "../atlas-types";
 import { CloseIcon, DownloadIcon, ExternalIcon } from "./atlas-icons";
 
 function candidateScore(candidate: ReturnType<typeof reportCandidates>[number]): number | undefined {
@@ -25,6 +38,162 @@ function downloadTrace(filename: string, trace: TraceEvent[]) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function FootprintContext({ footprint }: { footprint: NonNullable<ReturnType<typeof projectPageFootprint>> }) {
+  return (
+    <aside className="evidence-context evidence-footprint">
+      <header>
+        <b>Page-declared footprint</b>
+        <span>{footprint.bounded ? "bounded projection" : "projection not truncated"}</span>
+      </header>
+      <p>
+        <b>Projection hash</b> <code>{footprint.footprintHash}</code>
+      </p>
+      <dl>
+        {footprint.title ? (
+          <div>
+            <dt>Page title</dt>
+            <dd>{footprint.title}</dd>
+          </div>
+        ) : null}
+        {footprint.description ? (
+          <div>
+            <dt>Description</dt>
+            <dd>{footprint.description}</dd>
+          </div>
+        ) : null}
+        {footprint.canonicalStatus ? (
+          <div>
+            <dt>Canonical status</dt>
+            <dd>{humanize(footprint.canonicalStatus)}</dd>
+          </div>
+        ) : null}
+        {footprint.canonicalUrl ? (
+          <div>
+            <dt>Canonical URL</dt>
+            <dd>
+              <a href={footprint.canonicalUrl} target="_blank" rel="noreferrer">
+                {footprint.canonicalUrl}
+              </a>
+            </dd>
+          </div>
+        ) : null}
+        {footprint.language ? (
+          <div>
+            <dt>Language</dt>
+            <dd>{footprint.language}</dd>
+          </div>
+        ) : null}
+        {footprint.openGraphType ? (
+          <div>
+            <dt>Open Graph type</dt>
+            <dd>{footprint.openGraphType}</dd>
+          </div>
+        ) : null}
+        {footprint.openGraphSiteName ? (
+          <div>
+            <dt>Open Graph site</dt>
+            <dd>{footprint.openGraphSiteName}</dd>
+          </div>
+        ) : null}
+        {footprint.generators.length > 0 ? (
+          <div>
+            <dt>Generators</dt>
+            <dd>{footprint.generators.join(", ")}</dd>
+          </div>
+        ) : null}
+        {footprint.applicationNames.length > 0 ? (
+          <div>
+            <dt>Applications</dt>
+            <dd>{footprint.applicationNames.join(", ")}</dd>
+          </div>
+        ) : null}
+      </dl>
+      {footprint.observedProviderFamilies.length > 0 ? (
+        <p>
+          <b>Observed providers</b> {footprint.observedProviderFamilies.map(humanize).join(", ")}
+        </p>
+      ) : null}
+      {footprint.observedResourceHosts.length > 0 ? (
+        <p>
+          <b>Referenced hosts</b> {footprint.observedResourceHosts.join(", ")}
+        </p>
+      ) : null}
+      {footprint.jsonLdTypes.length > 0 ? (
+        <p>
+          <b>JSON-LD types</b> {footprint.jsonLdTypes.join(", ")}
+        </p>
+      ) : null}
+      <p>{footprint.caveat}</p>
+    </aside>
+  );
+}
+
+function TemporalContext({ temporal }: { temporal: NonNullable<ReturnType<typeof projectTemporalComparison>> }) {
+  const changeState = (changed: boolean) => (changed ? "Changed" : "Unchanged");
+  return (
+    <aside className="evidence-context evidence-temporal">
+      <header>
+        <b>Temporal diff</b>
+        <span>{temporal.comparisonBounded ? "bounded comparison" : "observed captures"}</span>
+      </header>
+      <dl>
+        <div>
+          <dt>Observation window</dt>
+          <dd>
+            after {temporal.observedAfter} · on or before {temporal.observedOnOrBefore}
+          </dd>
+        </div>
+        <div>
+          <dt>Archived response body bytes</dt>
+          <dd>{changeState(temporal.bodyChanged)}</dd>
+        </div>
+        <div>
+          <dt>Normalized static-HTML text</dt>
+          <dd>{changeState(temporal.visibleTextChanged)}</dd>
+        </div>
+        <div>
+          <dt>Page-declared metadata</dt>
+          <dd>{changeState(temporal.metadataChanged)}</dd>
+        </div>
+        <div>
+          <dt>Static-HTML structure</dt>
+          <dd>{changeState(temporal.structureChanged)}</dd>
+        </div>
+        <div>
+          <dt>Static-HTML fragment counts</dt>
+          <dd>
+            {temporal.addedFragmentCount} added · {temporal.removedFragmentCount} removed ·{" "}
+            {temporal.unchangedFragmentCount} unchanged
+          </dd>
+        </div>
+        {temporal.changedMetadataFields.length > 0 ? (
+          <div>
+            <dt>Changed metadata fields</dt>
+            <dd>{temporal.changedMetadataFields.map(humanize).join(", ")}</dd>
+          </div>
+        ) : null}
+      </dl>
+      {temporal.addedTextFragments.length > 0 ? (
+        <div className="temporal-fragments is-added">
+          <b>Added in later capture</b>
+          {temporal.addedTextFragments.map((fragment, fragmentIndex) => (
+            <q key={`added-${fragmentIndex}`}>{fragment}</q>
+          ))}
+        </div>
+      ) : null}
+      {temporal.removedTextFragments.length > 0 ? (
+        <div className="temporal-fragments is-removed">
+          <b>Removed by later capture</b>
+          {temporal.removedTextFragments.map((fragment, fragmentIndex) => (
+            <q key={`removed-${fragmentIndex}`}>{fragment}</q>
+          ))}
+        </div>
+      ) : null}
+      <p>{temporal.caveat}</p>
+    </aside>
+  );
 }
 
 export function ReportSheet({
@@ -63,6 +232,16 @@ export function ReportSheet({
   const evidence = reportEvidence(report);
   const findings = report?.findings ?? [];
   const reportId = report?.runId ?? report?.run?.id ?? "atlas-report";
+  const coverageDiagnostics = [
+    ...new Map(
+      trace
+        .flatMap(traceDiagnostics)
+        .filter(
+          (diagnostic) => diagnostic.code.startsWith("search_provider_") || diagnostic.code.endsWith("fallback_used"),
+        )
+        .map((diagnostic) => [diagnostic.code, diagnostic]),
+    ).values(),
+  ];
 
   const evidenceUrl = (item: (typeof evidence)[number]): string | undefined =>
     item.canonicalUrl ?? item.sourceUrl ?? item.url ?? item.source?.canonicalUrl ?? item.source?.url;
@@ -80,9 +259,15 @@ export function ReportSheet({
       .filter((item): item is (typeof evidence)[number] => Boolean(item))
       .map((item) => {
         const url = evidenceUrl(item);
-        return url ? { url, domain: domainOf(url, item.sourceFamily ?? item.publisher ?? "source") } : null;
+        return url
+          ? {
+              url,
+              domain: domainOf(url, item.sourceFamily ?? item.publisher ?? "source"),
+              title: item.title ?? item.source?.title ?? item.claim ?? "Source",
+            }
+          : null;
       })
-      .filter((source): source is { url: string; domain: string } => Boolean(source));
+      .filter((source): source is { url: string; domain: string; title: string } => Boolean(source));
   return (
     <div className="report-sheet-backdrop">
       <button
@@ -109,7 +294,7 @@ export function ReportSheet({
             <CloseIcon />
           </button>
         </header>
-        <div className="report-export-bar" aria-label="Report downloads">
+        <div className="report-export-bar" role="toolbar" aria-label="Report downloads">
           <button type="button" disabled={!report} onClick={() => report && downloadJson(`${reportId}.json`, report)}>
             <DownloadIcon /> JSON
           </button>
@@ -147,108 +332,153 @@ export function ReportSheet({
                   "Auditable public-professional intelligence assembled from admitted evidence."}
               </p>
             </section>
+            {coverageDiagnostics.length > 0 ? (
+              <section className="report-coverage-note" aria-labelledby="report-coverage-heading">
+                <h3 id="report-coverage-heading">Search coverage</h3>
+                <ul>
+                  {coverageDiagnostics.map((diagnostic) => (
+                    <li key={diagnostic.code}>
+                      <strong>{humanize(diagnostic.code)}</strong>
+                      <span>{diagnostic.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
             <section className="report-section" aria-labelledby="report-candidates-heading">
               <div className="report-section-heading">
                 <h3 id="report-candidates-heading">Identity branches</h3>
                 <span>{candidates.length}</span>
               </div>
-              <div className="candidate-report-grid">
-                {candidates.map((candidate) => {
-                  const id = candidate.id ?? candidate.candidateId ?? candidateName(candidate);
-                  const score = candidateScore(candidate);
-                  return (
-                    <article key={id} className={`candidate-report-card status-${candidate.status ?? "unknown"}`}>
-                      <header>
-                        <span>{humanize(candidate.status)}</span>
-                        {typeof score === "number" ? <strong>{Math.round(score * 100)}%</strong> : null}
-                      </header>
-                      <h4>{candidateName(candidate)}</h4>
-                      <p>
-                        {candidate.headline ??
-                          candidate.affiliation ??
-                          candidate.separationReason ??
-                          "Candidate kept as a distinct graph branch."}
-                      </p>
-                      <code>{id}</code>
-                    </article>
-                  );
-                })}
-              </div>
+              {candidates.length > 0 ? (
+                <div className="candidate-report-grid">
+                  {candidates.map((candidate) => {
+                    const id = candidate.id ?? candidate.candidateId ?? candidateName(candidate);
+                    const score = candidateScore(candidate);
+                    return (
+                      <article key={id} className={`candidate-report-card status-${candidate.status ?? "unknown"}`}>
+                        <header>
+                          <span>{humanize(candidate.status)}</span>
+                          {typeof score === "number" ? <strong>{Math.round(score * 100)}%</strong> : null}
+                        </header>
+                        <h4>{candidateName(candidate)}</h4>
+                        <p>
+                          {candidate.headline ??
+                            candidate.affiliation ??
+                            candidate.separationReason ??
+                            "Candidate kept as a distinct graph branch."}
+                        </p>
+                        <code>{id}</code>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="report-section-empty">No identity branch was retained.</p>
+              )}
             </section>
             <section className="report-section" aria-labelledby="report-findings-heading">
               <div className="report-section-heading">
                 <h3 id="report-findings-heading">Findings</h3>
                 <span>{findings.length}</span>
               </div>
-              <div className="report-findings">
-                {findings.map((finding, index) => {
-                  const sources = findingSources(finding);
-                  return (
-                    <article key={finding.id ?? finding.findingId ?? index}>
-                      <header>
-                        <span>{humanize(finding.category)}</span>
-                        <strong>{humanize(finding.confidence?.label ?? finding.confidenceBand)}</strong>
-                      </header>
-                      <h4>{finding.title}</h4>
-                      <p>{finding.description ?? finding.summary ?? finding.rationale}</p>
-                      <footer className="finding-sources">
-                        {sources.length > 0 ? (
-                          <>
-                            <span className="sources-label">Sources:</span>
-                            {sources.map((source, sourceIndex) => (
-                              <a
-                                key={`${source.url}-${sourceIndex}`}
-                                href={source.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="source-cite"
-                              >
-                                <ExternalIcon />
-                                {source.domain}
-                              </a>
-                            ))}
-                          </>
-                        ) : (
-                          <span className="sources-label">No cited source</span>
-                        )}
-                        {finding.counterEvidenceIds?.length ? (
-                          <span className="counter-count">{finding.counterEvidenceIds.length} counter</span>
-                        ) : null}
-                      </footer>
-                    </article>
-                  );
-                })}
-              </div>
+              {findings.length > 0 ? (
+                <div className="report-findings">
+                  {findings.map((finding, index) => {
+                    const sources = findingSources(finding);
+                    return (
+                      <article key={finding.id ?? finding.findingId ?? index}>
+                        <header>
+                          <span>{humanize(finding.category)}</span>
+                          <strong>{humanize(finding.confidence?.label ?? finding.confidenceBand)}</strong>
+                        </header>
+                        <h4>{finding.title}</h4>
+                        <p>{finding.description ?? finding.summary ?? finding.rationale}</p>
+                        <footer className="finding-sources">
+                          {sources.length > 0 ? (
+                            <>
+                              <span className="sources-label">Sources:</span>
+                              {sources.map((source, sourceIndex) => (
+                                <a
+                                  key={`${source.url}-${sourceIndex}`}
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="source-cite"
+                                >
+                                  <ExternalIcon />
+                                  {source.title} — {source.domain}
+                                </a>
+                              ))}
+                            </>
+                          ) : (
+                            <span className="sources-label">No cited source</span>
+                          )}
+                          {finding.counterEvidenceIds?.length ? (
+                            <span className="counter-count">{finding.counterEvidenceIds.length} counter</span>
+                          ) : null}
+                        </footer>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="report-section-empty">No finding met the evidence and confidence rules.</p>
+              )}
             </section>
             <section className="report-section" aria-labelledby="report-evidence-heading">
               <div className="report-section-heading">
                 <h3 id="report-evidence-heading">Evidence ledger</h3>
                 <span>{evidence.length}</span>
               </div>
-              <ol className="report-evidence-list">
-                {evidence.map((item, index) => {
-                  const href = evidenceUrl(item);
-                  return (
-                    <li key={item.id ?? item.evidenceId ?? index}>
-                      <span>E{String(index + 1).padStart(2, "0")}</span>
-                      <div>
-                        <small>
-                          {item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} ·{" "}
-                          {humanize(item.verificationMethod)}
-                        </small>
-                        <strong>{item.title ?? item.source?.title ?? item.claim ?? "Evidence record"}</strong>
-                        <p>{item.excerpt ?? item.minimalExcerpt ?? item.claim}</p>
-                        {href ? (
-                          <a className="evidence-source-link" href={href} target="_blank" rel="noreferrer">
-                            <ExternalIcon />
-                            {domainOf(href, "source")}
-                          </a>
-                        ) : null}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ol>
+              {evidence.length > 0 ? (
+                <ol className="report-evidence-list">
+                  {evidence.map((item, index) => {
+                    const href = evidenceUrl(item);
+                    const title = item.title ?? item.source?.title ?? item.claim ?? "Evidence record";
+                    const discoveryOnly =
+                      item.disposition === "discovery_only" || item.verificationMethod === "search_discovery";
+                    const passiveMetadataObservation = isPassivePageMetadataObservation(item);
+                    const footprint =
+                      discoveryOnly && !passiveMetadataObservation ? null : projectPageFootprint(item.canonicalSubset);
+                    const temporal = discoveryOnly ? null : projectTemporalComparison(item.canonicalSubset);
+                    const discoveryLabel = passiveMetadataObservation
+                      ? "Passive page metadata observation"
+                      : "Unverified discovery lead";
+                    const discoverySummary = passiveMetadataObservation
+                      ? "Bounded page-declared metadata from an exact authorized fetch; it does not establish identity, ownership, or a finding."
+                      : "Provider-attested URL metadata only; this lead does not support a finding until a hardened direct fetch succeeds.";
+                    return (
+                      <li
+                        key={item.id ?? item.evidenceId ?? index}
+                        className={discoveryOnly ? "is-discovery-lead" : undefined}
+                      >
+                        <span>E{String(index + 1).padStart(2, "0")}</span>
+                        <div>
+                          <small>
+                            {item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} ·{" "}
+                            {discoveryOnly ? discoveryLabel : humanize(item.verificationMethod)}
+                          </small>
+                          <strong>{title}</strong>
+                          <p>
+                            {discoveryOnly ? discoverySummary : (item.excerpt ?? item.minimalExcerpt ?? item.claim)}
+                          </p>
+                          {temporal ? <TemporalContext temporal={temporal} /> : null}
+                          {footprint ? <FootprintContext footprint={footprint} /> : null}
+                          {href ? (
+                            <a className="evidence-source-link" href={href} target="_blank" rel="noreferrer">
+                              <ExternalIcon />
+                              {title} — {domainOf(href, "source")}
+                            </a>
+                          ) : null}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : (
+                <p className="report-section-empty">No evidence record was admitted.</p>
+              )}
             </section>
             {(report.limitations?.length ?? 0) > 0 ? (
               <section className="report-section report-limitations" aria-labelledby="report-limitations-heading">

@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { createServer } from "vite";
 
 const projectRoot = new URL("../", import.meta.url);
 
 function runAtlas(arguments_) {
   const environment = { ...process.env };
-  delete environment.GEMINI_API_KEY;
-  delete environment.OPENAI_API_KEY;
-  delete environment.OPENROUTER_API_KEY;
+  for (const key of ["LIVE_PROVIDER", "GEMINI_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"]) {
+    delete environment[key];
+  }
   return spawnSync(process.execPath, ["bin/run.mjs", ...arguments_], {
     cwd: projectRoot,
     env: environment,
@@ -16,6 +17,38 @@ function runAtlas(arguments_) {
     timeout: 15_000,
   });
 }
+
+test("CLI help documents every supported live provider", () => {
+  const result = runAtlas(["help"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Gemini, OpenAI, or OpenRouter/);
+  assert.match(result.stdout, /LIVE_PROVIDER=gemini\|openai\|openrouter/);
+});
+
+test("configured live CLI uses the loopback-only ingress bypass", async () => {
+  const vite = await createServer({
+    configFile: false,
+    appType: "custom",
+    logLevel: "silent",
+    server: { middlewareMode: true },
+  });
+  try {
+    const { CLI_RESEARCH_URL, cliApiEnvironment } = await vite.ssrLoadModule("/bin/atlas.ts");
+    const environment = cliApiEnvironment("live", {
+      LIVE_PROVIDER: "openrouter",
+      OPENROUTER_API_KEY: "server-secret",
+    });
+    const researchUrl = new URL(CLI_RESEARCH_URL);
+
+    assert.equal(researchUrl.protocol, "http:");
+    assert.equal(researchUrl.hostname, "localhost");
+    assert.equal(researchUrl.pathname, "/api/research");
+    assert.equal(environment.ATLAS_ALLOW_UNAUTHENTICATED_LOCAL, "true");
+    assert.equal(environment.ATLAS_API_TOKEN, undefined);
+  } finally {
+    await vite.close();
+  }
+});
 
 function ndjson(value) {
   return value

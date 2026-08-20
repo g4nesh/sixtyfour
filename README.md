@@ -2,31 +2,33 @@
 
 Atlas is an auditable public-source research agent for resolving professional identities. Its live scheduler performs a visible best-first search over a canonical execution graph: it expands the lowest-cost legal source frontier first, keeps rejected and ambiguous branches, and reserves a small deterministic Metropolis-Hastings mutation lane for useful adjacent exploration. It separates same-name candidates, attaches every finding to direct evidence, exposes the full execution trace, and stops honestly when identity or coverage is insufficient.
 
-The repository ships three deterministic, zero-network replay bundles for evaluation and a live graph-first workbench for credentialed local research. Live planning can use OpenAI, Gemini, or OpenRouter, but provider credentials remain server-side and non-local live HTTP ingress is bearer-protected. No provider key is required to inspect or verify the included runs.
+The browser workbench runs live research when a server-side OpenAI, Gemini, or OpenRouter provider is configured. Three deterministic zero-network replays remain available through the CLI and API, so the evidence model and visualization can be evaluated without a provider key.
 
 ![Atlas People Intelligence workbench](public/og.png)
 
-## Quick start
+## Five-minute local preview
 
 Requirements: Node.js `>=22.13.0` and npm.
 
-### Zero-network evaluation
-
 ```bash
 npm ci --ignore-scripts
+npm run dev
+```
+
+Open `http://localhost:3000`. With live bindings configured, enter a public-professional target, choose Quick, Standard, or Deep, and run it. Deep is the browser default so the complete bounded operator program remains reachable; lower depths intentionally trade breadth for smaller request, token, and time budgets. The black graph workspace streams queued, selected, verified, exhausted, mutated, and rejected paths; the source ladder groups frontier state and admitted evidence by website tier; the trace remains append-only; and the final report can be downloaded as deterministic Markdown or a polished client-rendered PDF.
+
+For a credential-free, zero-network evaluation, use one of the checked-in replays below. Replay execution never performs an outbound request.
+
+The same artifacts are available from the CLI:
+
+```bash
 npm run atlas -- examples
 npm run atlas -- replay linus-codegraph
 npm run atlas -- trace chris-anderson-ted
 npm run atlas -- research --mode replay --example python-creator "the creator of Python"
 ```
 
-Replay validates the checked-in provenance contract and never performs an outbound request. To exercise the Worker API, start the app in a second terminal:
-
-```bash
-npm run dev
-```
-
-Then call the replay endpoints:
+Or through the Worker API:
 
 ```bash
 curl --fail http://localhost:3000/api/health
@@ -38,20 +40,6 @@ curl --fail \
 ```
 
 `POST /api/research` returns `application/x-ndjson`. Every stream ends in one terminal event, including refusals, cancellation, configuration errors, partial results, and failures.
-
-### Local graph workbench
-
-The browser workbench is live-first: it visualizes the canonical graph as the run proceeds and does not fabricate a graph from replay prose. Copy one ignored environment template, enable live mode, and set one provider key:
-
-```bash
-cp .env.example .env
-# Edit .env: set ATLAS_LIVE_ENABLED=true and one provider key.
-npm run dev
-```
-
-Open `http://localhost:3000`. The black graph workspace shows queued, selected, verified, exhausted, mutated, conflicting, and rejected paths; the source ladder groups retained frontier state and admitted evidence by website tier; the trace is append-only; and the final report can be downloaded as Markdown, structured JSON/NDJSON, or a polished client-rendered PDF.
-
-`npm run dev` enables unauthenticated live calls only for loopback URLs so local testing stays frictionless. It does not weaken a production start or deployment.
 
 ## Included evidence runs
 
@@ -65,35 +53,41 @@ The example evidence projections and raw-response SHA-256 hashes were manually c
 
 Each directory in `examples/` contains `input.json`, `output.json`, `trace.json`, `cassette.json`, and `manifest.json`. Direct-fetch evidence is an exact captured source excerpt; structured API evidence has no quote and is rendered as a labeled canonical API claim. Repeated replays are canonical byte-stable and fail tests if they attempt a network request.
 
-## Live provider configuration
+## Live research
 
-Provider selection is explicit through `LIVE_PROVIDER` or automatically chooses Gemini, then OpenAI, then OpenRouter based on available keys.
+Copy `.dev.vars.example` to `.dev.vars` for local Worker development, then set the server-side key:
 
-| Provider   | Required binding     | Optional bindings                                                | Discovery behavior                                                           |
-| ---------- | -------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| OpenAI     | `OPENAI_API_KEY`     | `OPENAI_MODEL`, `OPENAI_SEARCH_MODEL`, `OPENAI_BASE_URL`         | OpenAI Responses `web_search`                                                |
-| Gemini     | `GEMINI_API_KEY`     | `GEMINI_MODEL`; optional `OPENAI_API_KEY`                        | Gemini planning; delegates discovery to OpenAI when an OpenAI key is present |
-| OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL`, `OPENROUTER_SITE_URL`, `OPENROUTER_APP_NAME` | OpenRouter server-side web search                                            |
+```dotenv
+ATLAS_LIVE_ENABLED=true
+OPENROUTER_API_KEY=your_server_side_key
+OPENROUTER_MODEL=openai/gpt-5.4
+OPENROUTER_SITE_URL=http://localhost:3000
+OPENROUTER_APP_NAME=Atlas People Intelligence
+```
 
-Never use a `NEXT_PUBLIC_*` name for a key. `.env` and `.dev.vars` are ignored, excluded from the Docker build context, and represented only by empty-value templates. The CLI's explicit `--mode live` choice supplies local enablement and does not require the HTTP bearer token:
+Never use a `NEXT_PUBLIC_*` variable for a key. `.env` and `.dev.vars` are ignored, excluded from the Docker build context, and represented only by empty-value templates. `npm run dev` enables unauthenticated live calls only for loopback URLs; it does not weaken a production start or deployment. The CLI's explicit `--mode live` choice supplies the same loopback-only local enablement and does not require an HTTP bearer token.
+
+For non-local HTTP live research, configure `ATLAS_API_TOKEN` with at least 32 random bytes and send it only as a bearer token. The API refuses non-local live execution unless explicit enablement, a provider key, and protected ingress are all configured:
 
 ```bash
 npm run atlas -- research --mode live --depth standard "Grace Hopper public professional background"
-```
 
-For non-local HTTP live research, configure an `ATLAS_API_TOKEN` containing at least 32 random bytes and send it as a bearer token:
-
-```bash
 curl --fail \
-  -H "authorization: Bearer $ATLAS_API_TOKEN" \
   -H 'content-type: application/json' \
+  -H "authorization: Bearer $ATLAS_API_TOKEN" \
   -d '{"query":"Grace Hopper public professional background","mode":"live","requestedDepth":"standard"}' \
   https://atlas.example/api/research
 ```
 
-Live mode uses custom function schemas, `tool_choice: "auto"`, and one expected structured function submission per provider turn. The kernel may execute an approved action batch concurrently (maximum four); provider-side parallel function submission is disabled so every returned tool call is closed deterministically. Search annotations are provider-attested discovery leads only. A claim receives zero final weight until a direct source or specialist tool admits a bounded evidence record. General-purpose `fetch_public_source` requires the injected DNS resolver and remains subject to HTTPS, redirect, address, MIME, byte, timeout, and candidate-linkage gates.
+Live mode supports OpenAI, Gemini, or OpenRouter. Structured reasoning uses each provider's chat/tool-calling endpoint; discovery first uses OpenAI Responses `web_search`, Gemini Interactions with native Google Search, or OpenRouter's `openrouter:web_search`. Provider-side parallel function submission is deliberately disabled so every returned tool call is closed deterministically. Search annotations are discovery leads only and remain visibly unverified until Atlas directly fetches and locally quotes the exact HTTPS source. A claim receives zero final weight until a direct source or specialist tool admits a bounded evidence record. General-purpose `fetch_public_source` requires the server-injected DNS resolver used by the shipped HTTP API and still enforces candidate scope, public-address validation, redirects, status/MIME, response size, and request budgets.
 
-The checked-in hosting configuration is replay-only: it contains no provider key and reports `liveConfigured: false`. The API refuses non-local live execution unless explicit enablement, a provider key, and protected ingress are all configured. The bearer guard protects the application boundary; production operators should also add Cloudflare Access or an equivalent identity-aware gateway with per-principal request, token, and cost limits.
+`liveConfigured: true` in `/api/health` means a server-side provider is configured; it is not a provider quota probe. Credentialed live smoke tests separately verify a successful search, hardened fetch, admitted exact excerpt, and terminal citation. Rate-limit failures remain explicit and never fabricate a working report.
+
+After a retryable provider-search outage, or a successful provider response with no valid HTTPS source annotations, Atlas attempts one bounded keyless DuckDuckGo HTML request and retains at most eight safe HTTPS titles and targets—never snippets or raw result HTML. For an exact named-person bootstrap, if those public-web results contain no deterministic code-profile lead, Atlas may supplement them with GitHub's official unauthenticated public APIs: exact `in:fullname` search, at most three canonical user-detail records, and exact normalized public-name matches only. GitHub records remain unverified T2 discovery leads; every profile must pass the same DNS-aware hardened HTML fetch and exact-excerpt admission path before it can support a report. Neither fallback retains GitHub email, location, bio, or search snippets.
+
+If structured planning is itself retryably unavailable, a run-scoped circuit breaker permits only policy-derived actions already legal for the selected frontier; it never invents tool arguments or relaxes source tiers. If later synthesis is unavailable, Atlas may retain one explicitly diagnosed deterministic observation only from an unused supporting `direct_fetch` record on the selected non-ambiguous candidate whose claim equals its excerpt, status is HTTP 200, hash is SHA-256, and confidence remains below `0.45`. This low-confidence projection cannot satisfy supported coverage or turn a partial run into a completed one. A successful empty synthesis remains an abstention.
+
+The included Sites configuration is replay-only: it contains no provider key and reports `liveConfigured: false`. The bearer guard protects the application boundary; a production operator should additionally use Cloudflare Access or an equivalent identity-aware gateway with per-principal request, token, and cost limits. Never enable `ATLAS_ALLOW_UNAUTHENTICATED_LOCAL` outside local development.
 
 Provider `reasoning_details`, when present, are retained only as opaque continuation data required by the provider. They are never logged or streamed. Atlas exposes only normalized usage and a provider-reported reasoning-token count; unavailable values remain `null` with a reason. Missing configuration returns a `configuration_error`, never fabricated live research.
 
@@ -121,15 +115,15 @@ One seeded proposal slot per batch may use a finite neighboring policy. The acce
 
 The kernel searches the strongest legal public-professional tier before broader discovery:
 
-| Tier | Source class                                                                                        | Admission rule                                                            |
-| ---- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| T0   | Exact user-supplied HTTPS URL, domain/repository/DOI/ORCID/package/handle, or exact email codegraph | Exact-input only; direct content still passes hardened evidence admission |
-| T1   | First-party organization pages, official biographies, explicit personal sites                       | Direct fetch required for evidence                                        |
-| T2   | Code/publication indexes, patents, official organization filings, public proof systems              | Candidate-bound where required; structured claims remain labeled          |
-| T3   | Universities, conferences, and primary publishers                                                   | Direct source required                                                    |
-| T4   | Reputable reporting and named interviews                                                            | Corroboration and timeline context                                        |
-| T5   | Candidate-linked Wayback history                                                                    | Exact already-bound HTTPS URL only                                        |
-| T6   | General web discovery                                                                               | Discovery leads only; snippets have zero finding weight                   |
+| Tier | Source class                                                                                                                                   | Admission rule                                                                                           |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| T0   | Exact user-supplied HTTPS URL, domain/repository/DOI/ORCID/package/handle, or exact email codegraph                                            | Exact-input only; direct content still passes hardened evidence admission                                |
+| T1   | First-party organization pages, official biographies, explicit personal sites                                                                  | Direct fetch required for evidence                                                                       |
+| T2   | Professional/code profiles, publication indexes, patents, official organization filings, public proof systems, and official App Store listings | Host-classified and candidate-bound where required; structured or page-declared metadata remains labeled |
+| T3   | Universities, conferences, and primary publishers                                                                                              | Direct source required                                                                                   |
+| T4   | Reputable reporting and named interviews                                                                                                       | Corroboration and timeline context                                                                       |
+| T5   | Temporal provenance diff                                                                                                                       | Exact already-bound HTTPS URL only; bounded raw captures and observation-window language                 |
+| T6   | General web discovery and candidate-bound hardened fetches for otherwise unclassified leads                                                    | Snippets have zero finding weight; fetched pages still pass identity separation and evidence admission   |
 
 People-search sites, reverse-phone services, data brokers, residential/property/tax-assessor surfaces, family mapping, credentials, and private contact enrichment are denied before frontier creation. Official organization filings are allowed only for public-professional organization context.
 
@@ -139,19 +133,31 @@ See [docs/architecture.md](docs/architecture.md) for the trust boundary and scal
 
 ## Differentiated OSINT tactics
 
+### Deterministic operator-query program
+
+For a public-professional name, role, or organization, `compileOsintQueries` creates at most ten auditable query instructions. The first is an untouched quoted exact-match baseline. Later variants may add a separately labeled noise-exclusion refinement, exact organization/role context, mechanically derived initials or punctuation folding, `site:` scopes for GitHub, ORCID, Google Scholar, an official App Store listing, up to two explicitly admitted academic domains, and a bounded `filetype:pdf`/`intitle:` document pivot. A selected frontier entry—not model prose—owns the query that actually reaches the search transport, and every returned URL remains discovery-only until an exact hardened fetch succeeds.
+
+Atlas never generates email variants. An email enters the stack only when the user supplied that exact value, and the existing GitHub codegraph boundary remains its only specialist lookup. Exclusion variants always follow the neutral baseline, so they cannot erase the trace of an unmodified search. Search operators improve discovery precision; a zero-result operator query is never treated as proof of absence.
+
 ### Exact email → GitHub codegraph
 
 `github_email_codegraph` is legal only when the user explicitly supplied one exact email. It searches GitHub public commits with the literal `author-email:<exact> is:public` qualifier, normalizes immutable commit URLs and SHAs, records linked accounts/repositories/dates, and inspects the strongest commit's signature. It may query Keybase only for a GitHub login already linked by that graph.
 
 Raw Git author metadata is labeled spoofable. A verified signature helps only when its verified identity matches the relevant author edge. Git-only support cannot reach high confidence; a distinct non-Git source family or genuinely unique strong anchor is required. Zero hits means “not observed in indexed public default branches,” not “no activity,” and GitHub `incomplete_results` and rate state remain visible.
 
-### Candidate-linked Wayback history
+### Temporal provenance diff
 
-`wayback_profile_history` accepts only an HTTPS profile, team, or personal URL already linked to one candidate. It performs a bounded CDX lookup, collapses duplicate digests, and inspects at most a few snapshots to produce quote-backed Then/Now changes. It cannot discover or merge a candidate, and archive unavailability fails softly.
+`wayback_profile_history` accepts only an exact HTTPS profile, team, repository, listing, or personal URL already attached to one candidate by admitted non-discovery evidence. It performs an exact CDX lookup, validates every returned original URL, retains a bounded digest-change timeline, and retrieves at most two raw `id_` captures with redirects disabled. The result includes exact raw-body SHA-256, bounded normalized static-HTML-text/metadata/HTML-structure hashes, the actual earliest/latest selection policy, changed metadata fields, and short normalized static-HTML text fragments added or removed between the selected captures. This is an inert HTML projection, not a CSS/layout/JavaScript rendering. A change is reported only as observed after the earlier capture and on or before the later capture—not as an exact edit date. It cannot identify the editor, prove page ownership or archive completeness, discover or merge a candidate, or call Save Page Now; archive unavailability fails softly.
+
+### Page-declared web and app footprint
+
+Every already-authorized HTML fetch can produce a small inert `public_page_footprint_v1` projection without another request. It retains safe title/description, same-page canonical status, language, selected Open Graph fields, generator/application names, bounded JSON-LD `@type` values, and referenced public resource hosts/provider families. This can surface an official App Store listing or a page-observed CDN/cloud family, but it never enumerates subdomains, buckets, accounts, ports, apps, or credentials and never follows the observed resources. Observed values originate in spoofable page-authored declarations; Atlas-derived classifications do not establish hosting ownership. Atlas does not run AI-authorship detectors or infer that a person used AI from detector scores.
+
+If exact-quote extraction fails or the extracted subject must be quarantined, a SHA-256-bound footprint may survive only as a visibly unverified, discovery-only metadata observation. That record carries no excerpt, identity or ownership binding, finding authority, or confidence weight; ordinary search-result metadata still cannot smuggle a footprint into a report.
 
 ## Trace semantics
 
-The API, UI, CLI, and examples share one append-only trace schema. Events carry a monotonic `seq`, stable run/event/span and parent IDs, phase, timestamp and cumulative elapsed time, attempt, status, sanitized payload, and normalized usage. The stream covers LangGraph node transitions, frontier seeding/selection/pruning/outcomes, source-tier advances, mutation proposals and decisions, LLM and tool spans, retries, candidate gates/scoring, evidence admission, budgets, and the terminal result.
+The API, UI, CLI, and examples share one append-only trace schema. Events carry a monotonic `seq`, stable run/event/span and parent IDs, phase, timestamp and cumulative elapsed time, attempt, status, sanitized payload, and normalized usage. Each live trace batch also attaches the latest sanitized canonical graph snapshot to its final existing event, so the UI can render admitted and status-updated nodes before the terminal report without inventing graph deltas. The stream covers LangGraph node transitions, frontier seeding/selection/pruning/outcomes, source-tier advances, mutation proposals and decisions, LLM and tool spans, retries, candidate gates/scoring, evidence admission, budgets, and the terminal result.
 
 Every started span has exactly one terminal span. Payload sanitation removes secrets, unnecessary contact information, fetched full bodies, and thought/reasoning prose. Provider attempts are reserved before dispatch and charged separately from tool transport; returned prompt, completion, reasoning, and cached-input token counts are normalized, while unavailable fields remain `null` with a reason. The UI can download the deterministic Markdown report, a browser-rendered PDF, the structured report JSON, and the exact trace NDJSON. Markdown and PDF are produced from the same JSON-safe report view model, with stable `E01…` evidence references and explicit labels for exact excerpts versus canonical structured API claims.
 
@@ -175,9 +181,14 @@ npm run verify    # formatting + secret scan + typecheck + lint + build + tests
 npm run security:audit  # current npm advisory check, also run by CI
 npm run test:pdf  # opt-in React-PDF byte smoke
 npm run report:example  # write matching PDF and Markdown reports under output/
+npm run test:browser    # intercepted dense graph in Playwright, desktop + mobile
+npm run test:browser:live # opt-in credentialed search/fetch/citation contract
+npm run test:selenium   # independent headless Chrome geometry/console pass
 ```
 
-The test suite covers all three target shapes, deterministic safety classes, general identifier parsing, same-name isolation, no cross-candidate evidence, spoofable-confidence caps, source-family deduplication, immutable cumulative costs, tier ordering, dominance pruning, deterministic MH math and mutation-share caps, graph/trace/action integrity, LangGraph control flow, snippet exclusion, CoT-field exclusion, budgets/cancellation, NDJSON ordering and terminal closure, replay zero-network stability, Markdown determinism, PDF smoke, and rendered accessibility foundations. Tool fixtures cover SSRF/redirect/size/timeout controls, `429`/`Retry-After`, malformed responses, GitHub incomplete results, `author: null`, multiple accounts, signature mismatch, stale Keybase proofs, and unavailable Wayback.
+Set `ATLAS_SELENIUM_BROWSER=safari` to repeat the Selenium smoke in Safari after enabling Safari Developer → Allow Remote Automation. The test harness never changes that operating-system setting itself.
+
+The test suite covers all three target shapes, deterministic safety classes, general identifier parsing, same-name isolation, no cross-candidate evidence, spoofable-confidence caps, source-family deduplication, immutable cumulative costs, tier ordering, dominance pruning, deterministic query compilation and canonical execution, deterministic MH math and mutation-share caps, graph/trace/action integrity, LangGraph control flow, snippet exclusion, CoT-field exclusion, budgets/cancellation, NDJSON ordering and terminal closure, replay zero-network stability, Markdown determinism, PDF smoke, and rendered accessibility foundations. Tool fixtures cover SSRF/redirect/size/timeout controls, `429`/`Retry-After`, malformed responses, GitHub incomplete results, `author: null`, multiple accounts, signature mismatch, stale Keybase proofs, adversarial page metadata, and exact raw Wayback capture/diff behavior.
 
 Container verification uses Node 22:
 
@@ -186,32 +197,16 @@ docker build --target verifier -t atlas-verify .
 docker compose up --build
 ```
 
-Compose publishes only to `127.0.0.1`, drops Linux capabilities, sets `no-new-privileges`, runs as the unprivileged Node user, and includes a health check. The app remains Cloudflare Sites/Vinext compatible. `worker/index.ts` handles API routes before the Vinext handler, applies browser security headers to every response, and `.openai/hosting.json` intentionally declares no D1 or R2 binding.
+Compose publishes only to `127.0.0.1`, drops Linux capabilities, sets `no-new-privileges`, runs as the unprivileged Node user, and includes a health check. The app remains Cloudflare Sites/Vinext compatible. `worker/index.ts` handles the API routes before the Vinext handler, applies browser security headers to every response, and `.openai/hosting.json` intentionally declares no D1 or R2 binding.
 
-## Production checklist
+For a production handoff:
 
-1. Run `npm ci --ignore-scripts`, `npm run verify`, `npm run security:audit`, and the optional PDF smoke.
-2. Keep `ATLAS_LIVE_ENABLED=false` for any public replay-only deployment.
-3. If live mode is required, store the provider key and 32-byte-or-longer `ATLAS_API_TOKEN` in the platform secret manager. Never commit either value or use a `NEXT_PUBLIC_*` binding.
-4. Put public live ingress behind an identity-aware gateway and enforce per-principal request, token, and cost limits. Do not enable `ATLAS_ALLOW_UNAUTHENTICATED_LOCAL` outside local development.
-5. Preserve HTTPS end to end. The Worker emits CSP, frame, referrer, permissions, cross-origin, MIME-sniffing, and HTTPS transport headers.
-6. Verify `/api/health`, one replay stream, an unauthorized live request (`401`), an authorized bounded live request, cancellation, and report downloads in the target environment.
+1. Run `npm ci --ignore-scripts`, `npm run verify`, `npm run security:audit`, and the optional PDF/browser smoke suites.
+2. Keep `ATLAS_LIVE_ENABLED=false` for public replay-only deployments.
+3. Store provider keys and the 32-byte-or-longer `ATLAS_API_TOKEN` in the platform secret manager; never commit them.
+4. Put public live ingress behind an identity-aware gateway and enforce per-principal request, token, and cost limits.
 
 CI uses read-only GitHub permissions, immutable action SHAs, formatting and secret gates, the full release suite, and an npm advisory gate. Dependabot tracks npm, Docker, and GitHub Actions updates. See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
-
-## Repository map
-
-| Path                                        | Purpose                                                                                     |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `app/`                                      | Live graph-first React interface and client-only report downloads                           |
-| `worker/` and `lib/api/`                    | Cloudflare/Vinext entry point, security headers, health, replay, and guarded live streaming |
-| `lib/agent/`, `lib/search/`, `lib/harness/` | LangGraph control flow and deterministic frontier kernel                                    |
-| `lib/domain/`                               | Safety, candidates, evidence, confidence, budgets, integrity, and report contracts          |
-| `lib/providers/` and `lib/tools/`           | Provider protocol, web discovery, specialist OSINT tools, and hardened fetch                |
-| `lib/replay/` and `examples/`               | Zero-network capture catalog and three provenance-bound bundles                             |
-| `lib/report-export/`                        | Shared Markdown/PDF-safe report view model                                                  |
-| `tests/`                                    | Domain, adversarial, API, UI, CLI, tool, replay, and export coverage                        |
-| `docs/`                                     | Architecture, safety model, and evaluation methodology                                      |
 
 ## Limits and scaling path
 

@@ -178,6 +178,8 @@ export type Candidate = CandidateV1;
 export interface CandidateDraft {
   /** Optional tool-local reference used to link evidence from the same result. */
   ref?: string;
+  /** Conservative tool-local scope; `none` prevents derived candidate frontier expansion. */
+  frontierExpansion?: "default" | "none";
   displayName: string;
   signals?: IdentitySignal[];
 }

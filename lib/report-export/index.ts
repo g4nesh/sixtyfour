@@ -1,4 +1,5 @@
 export { reportMarkdownFilename, reportPdfFilename, reportViewModelToMarkdown } from "./markdown";
+export { projectPageFootprint, projectTemporalComparison } from "./evidence-context";
 export { createReportViewModel } from "./view-model";
 export type {
   CanonicalSearchGraphInput,
@@ -10,9 +11,13 @@ export type {
   ReportGraphCount,
   ReportIdentityView,
   ReportMetricView,
+  ReportPageFootprintView,
+  ReportPageProviderFamily,
   ReportPathView,
   ReportRunView,
   ReportSearchStrategyView,
   ReportSourceTierView,
+  ReportTemporalComparisonView,
+  ReportTemporalMetadataField,
   ReportViewModel,
 } from "./types";

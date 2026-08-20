@@ -88,7 +88,67 @@ export interface ReportFindingView {
   caveats: string[];
 }
 
-export type EvidenceContentLabel = "Exact source excerpt" | "Structured API claim" | "Admitted source claim";
+export type EvidenceContentLabel =
+  | "Exact source excerpt"
+  | "Normalized archived text"
+  | "Structured API claim"
+  | "Admitted source claim"
+  | "Passive page metadata observation"
+  | "Unverified discovery lead";
+
+export type ReportTemporalMetadataField =
+  "title" | "description" | "canonicalUrl" | "language" | "publishedAt" | "modifiedAt";
+
+export interface ReportTemporalComparisonView {
+  observedAfter: string;
+  observedOnOrBefore: string;
+  bodyChanged: boolean;
+  visibleTextChanged: boolean;
+  metadataChanged: boolean;
+  structureChanged: boolean;
+  changedMetadataFields: ReportTemporalMetadataField[];
+  addedTextFragments: string[];
+  removedTextFragments: string[];
+  addedFragmentCount: number;
+  removedFragmentCount: number;
+  unchangedFragmentCount: number;
+  comparisonBounded: boolean;
+  caveat: string;
+}
+
+export type ReportPageProviderFamily =
+  | "amazon-cloudfront"
+  | "amazon-web-services"
+  | "apple-hosted-assets"
+  | "cloudflare"
+  | "fastly"
+  | "github"
+  | "google-hosted-assets"
+  | "jsdelivr"
+  | "microsoft-azure"
+  | "netlify"
+  | "unpkg"
+  | "vercel";
+
+export type ReportPageCanonicalStatus = "not_declared" | "accepted_same_page" | "discarded";
+
+export interface ReportPageFootprintView {
+  footprintHash: string;
+  title: string | null;
+  description: string | null;
+  canonicalUrl: string | null;
+  canonicalStatus: ReportPageCanonicalStatus | null;
+  language: string | null;
+  openGraphType: string | null;
+  openGraphSiteName: string | null;
+  generators: string[];
+  applicationNames: string[];
+  observedProviderFamilies: ReportPageProviderFamily[];
+  observedResourceHosts: string[];
+  jsonLdTypes: string[];
+  bounded: boolean;
+  caveat: string;
+}
 
 export interface ReportEvidenceView {
   ref: string;
@@ -112,6 +172,8 @@ export interface ReportEvidenceView {
   contentHash: string | null;
   reliability: number;
   spoofable: boolean;
+  temporalComparison: ReportTemporalComparisonView | null;
+  pageFootprint: ReportPageFootprintView | null;
 }
 
 export interface ReportGraphCount {

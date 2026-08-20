@@ -52,6 +52,8 @@ test("server-renders the black graph-first Atlas workspace", async () => {
   assert.match(html, /<title>Atlas — People Intelligence<\/title>/i);
   assert.match(html, /class="atlas-shell"/);
   assert.match(html, /Public-professional research input/);
+  assert.match(html, /Research depth/);
+  assert.match(html, /<option value="deep" selected="">Deep<\/option>/);
   assert.match(html, /Name, role, organization, work email, URL, handle, or publication/);
   // Live-first workspace: no replay/example mode switch is exposed in the UI.
   assert.doesNotMatch(html, /Replay/);
@@ -123,6 +125,7 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(workbench, /<label className="sr-only" htmlFor="atlas-query">/);
   assert.match(workbench, /aria-live="polite"/);
   assert.match(workbench, /aria-describedby="research-scope-note"/);
+  assert.match(workbench, /useState<ResearchDepth>\("deep"\)/);
   assert.match(workbench, /AbortController/);
   assert.match(workbench, /\/api\/research/);
   assert.match(workbench, /mergeGraphEvent/);
@@ -144,7 +147,16 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(workspace, /rejected same-name candidates remain visible/i);
   assert.match(canvas, /@xyflow\/react/);
   assert.match(canvas, /import\("elkjs\/lib\/elk\.bundled\.js"\)/);
-  assert.match(canvas, /deterministicPositions/);
+  assert.match(canvas, /deterministicGraphLayout/);
+  assert.match(canvas, /BaseEdge/);
+  assert.match(canvas, /ORTHOGONAL/);
+  assert.match(canvas, /isCollisionFreeGraphLayout/);
+  assert.match(canvas, /style: \{ width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT \}/);
+  assert.match(canvas, /GRAPH_FIT_MIN_ZOOM = 0\.46/);
+  assert.match(canvas, /GRAPH_FIT_MIN_ZOOM_COMPACT = 0\.62/);
+  assert.match(canvas, /minZoom: readableFitMinimum\(\)/);
+  assert.match(canvas, /crossingMinimization\.forceNodeModelOrder": "false"/);
+  assert.match(canvas, /nodesDraggable=\{false\}/);
   assert.match(canvas, /nodesFocusable=\{false\}/);
   assert.match(inspector, /nodeRelationships/);
   assert.match(report, /candidates\.map/);
@@ -154,13 +166,18 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(css, /\.atlas-shell/);
   assert.match(css, /\.graph-list-view/);
   assert.match(css, /\.status-rejected/);
+  assert.match(css, /grid-template-rows:\s*0\.875rem minmax\(0, 2rem\) 0\.875rem/);
+  assert.match(css, /\.source-ladder ol\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(css, /\.source-ladder:not\(\.is-collapsed\) ol\s*\{\s*display:\s*flex/);
+  assert.doesNotMatch(css, /\.source-ladder ol\s*\{\s*display:\s*flex/);
+  assert.match(css, /:has\(\.source-ladder\.is-collapsed\) \.graph-canvas\s*\{\s*top:\s*13\.5rem/);
+  assert.match(css, /\.atlas-flow-controls\s*\{\s*display:\s*none !important/);
+  assert.match(css, /\.graph-legend\s*\{\s*display:\s*none/);
+  assert.match(css, /:has\(\.node-inspector:not\(\.inspector-empty\)\) \.graph-canvas/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /prefers-contrast:\s*more/);
   assert.match(css, /@media \(max-width: 700px\)/);
   assert.match(css, /@media \(max-width: 400px\)/);
-  assert.match(css, /\.scope-row \.scope-note\s*\{[^}]*position:\s*static/s);
-  assert.match(css, /\.scope-row\s*\{[^}]*padding:\s*43px 8px 0/s);
-  assert.match(css, /\.graph-toolbar\s*\{[^}]*top:\s*146px/s);
 });
 
 test("browser-only graph and PDF libraries stay out of the Worker module graph", async () => {

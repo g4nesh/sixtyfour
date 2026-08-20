@@ -399,6 +399,18 @@ export function validateReferentialIntegrity(
 
   if (state.searchGraph) {
     const graph = state.searchGraph;
+    const candidatesExplicitlySeparated = (leftCandidateId: string, rightCandidateId: string): boolean => {
+      if (leftCandidateId === rightCandidateId) return false;
+      const leftNode = graph.nodes.find((node) => node.kind === "candidate" && node.candidateId === leftCandidateId);
+      const rightNode = graph.nodes.find((node) => node.kind === "candidate" && node.candidateId === rightCandidateId);
+      if (!leftNode || !rightNode) return false;
+      return graph.edges.some(
+        (edge) =>
+          edge.kind === "separates" &&
+          ((edge.fromNodeId === leftNode.id && edge.toNodeId === rightNode.id) ||
+            (edge.fromNodeId === rightNode.id && edge.toNodeId === leftNode.id)),
+      );
+    };
     graph.nodes.forEach((node, nodeIndex) => {
       if (node.candidateId !== null && !candidateIds.has(node.candidateId)) {
         issues.push({
@@ -442,7 +454,12 @@ export function validateReferentialIntegrity(
         );
         const frontierEntry = graph.frontier.find((entry) => entry.actionId === node.actionId);
         const boundCandidateId = actionNode?.candidateId ?? frontierEntry?.candidateId ?? null;
-        if (evidence && boundCandidateId !== null && evidence.candidateId !== boundCandidateId) {
+        if (
+          evidence &&
+          boundCandidateId !== null &&
+          evidence.candidateId !== boundCandidateId &&
+          !candidatesExplicitlySeparated(boundCandidateId, evidence.candidateId)
+        ) {
           issues.push({
             code: "action_evidence_candidate_mismatch",
             path: `searchGraph.nodes[${nodeIndex}].candidateId`,
@@ -488,6 +505,9 @@ export function validateReferentialIntegrity(
         }
         const node = nodes[0];
         const allowedData = new Set([
+          "classifiedSourceLaneId",
+          "classifiedSourceTier",
+          "classifiedSourceType",
           "contentHash",
           "disposition",
           "entityKey",
@@ -505,6 +525,9 @@ export function validateReferentialIntegrity(
           node.data.sourceType !== evidence.sourceType ||
           node.data.disposition !== evidence.disposition ||
           node.data.contentHash !== evidence.contentHash ||
+          node.data.classifiedSourceTier !== evidence.attributes.classifiedSourceTier ||
+          node.data.classifiedSourceType !== evidence.attributes.classifiedSourceType ||
+          node.data.classifiedSourceLaneId !== evidence.attributes.classifiedSourceLaneId ||
           node.data.entityKey !== `evidence:${evidence.id}` ||
           (node.data.verificationMethod !== undefined &&
             node.data.verificationMethod !== evidence.verificationMethod) ||
@@ -527,7 +550,15 @@ export function validateReferentialIntegrity(
           });
         } else {
           const sourceNode = sourceNodes[0];
-          const allowedSourceData = new Set(["entityKey", "sourceFamily", "sourceType", "sourceUrl"]);
+          const allowedSourceData = new Set([
+            "classifiedSourceLaneId",
+            "classifiedSourceTier",
+            "classifiedSourceType",
+            "entityKey",
+            "sourceFamily",
+            "sourceType",
+            "sourceUrl",
+          ]);
           if (
             sourceNode.label !== (evidence.title ?? evidence.sourceFamily) ||
             sourceNode.candidateId !== evidence.candidateId ||
@@ -538,6 +569,9 @@ export function validateReferentialIntegrity(
             sourceNode.data.sourceUrl !== evidence.sourceUrl ||
             sourceNode.data.sourceFamily !== evidence.sourceFamily ||
             sourceNode.data.sourceType !== evidence.sourceType ||
+            sourceNode.data.classifiedSourceTier !== evidence.attributes.classifiedSourceTier ||
+            sourceNode.data.classifiedSourceType !== evidence.attributes.classifiedSourceType ||
+            sourceNode.data.classifiedSourceLaneId !== evidence.attributes.classifiedSourceLaneId ||
             sourceNode.data.entityKey !== `source:${evidence.id}` ||
             Object.keys(sourceNode.data).some((key) => !allowedSourceData.has(key))
           ) {

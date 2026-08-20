@@ -239,7 +239,7 @@ function isTraceName(value: string): boolean {
 }
 
 function isStructuralHash(value: string): boolean {
-  return /^(?:sha(?:1|256|384|512):)?[a-f0-9]{8,128}$/i.test(value);
+  return /^(?:(?:sha(?:1|256|384|512):)?[a-f0-9]{8,128}|fnv1a32:[a-f0-9]{8})$/i.test(value);
 }
 
 function structuralTraceStringIsValid(key: string | undefined, value: string): boolean {

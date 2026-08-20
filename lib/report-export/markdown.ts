@@ -16,6 +16,10 @@ function human(value: string): string {
   return value.replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function contextHuman(value: string): string {
+  return human(value.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("-", " "));
+}
+
 function row(values: readonly (string | number)[]): string {
   return `| ${values.map((value) => markdownInline(String(value))).join(" | ")} |`;
 }
@@ -81,6 +85,73 @@ function sourceLink(evidence: ReportEvidenceView): string {
   return `[${markdownInline(evidence.sourceUrl)}](${target})`;
 }
 
+function temporalContextSection(evidence: ReportEvidenceView): string[] {
+  const temporal = evidence.temporalComparison;
+  if (!temporal) return [];
+  const lines = [
+    "",
+    "#### Temporal comparison",
+    "",
+    `**Observation window:** after ${markdownInline(temporal.observedAfter)}; on or before ${markdownInline(temporal.observedOnOrBefore)}  `,
+    `**Comparison scope:** ${temporal.comparisonBounded ? "Bounded comparison" : "Observed captures"}  `,
+    `**Archived response body bytes changed:** ${temporal.bodyChanged ? "Yes" : "No"}  `,
+    `**Normalized static-HTML text changed:** ${temporal.visibleTextChanged ? "Yes" : "No"}  `,
+    `**Page-declared metadata changed:** ${temporal.metadataChanged ? "Yes" : "No"}  `,
+    `**Static-HTML structure changed:** ${temporal.structureChanged ? "Yes" : "No"}  `,
+    `**Changed metadata fields:** ${markdownInline(temporal.changedMetadataFields.map(contextHuman).join(", ") || "None observed")}  `,
+    `**Static-HTML fragment counts:** ${temporal.addedFragmentCount} added; ${temporal.removedFragmentCount} removed; ${temporal.unchangedFragmentCount} unchanged`,
+  ];
+  if (temporal.addedTextFragments.length > 0) {
+    lines.push(
+      "",
+      "**Added in the later capture:**",
+      "",
+      ...temporal.addedTextFragments.map((fragment) => `- ${markdownInline(fragment)}`),
+    );
+  }
+  if (temporal.removedTextFragments.length > 0) {
+    lines.push(
+      "",
+      "**Removed by the later capture:**",
+      "",
+      ...temporal.removedTextFragments.map((fragment) => `- ${markdownInline(fragment)}`),
+    );
+  }
+  lines.push("", `**Caveat:** ${markdownInline(temporal.caveat)}`);
+  return lines;
+}
+
+function pageFootprintSection(evidence: ReportEvidenceView): string[] {
+  const footprint = evidence.pageFootprint;
+  if (!footprint) return [];
+  const canonicalTarget = footprint.canonicalUrl ? markdownUrl(footprint.canonicalUrl) : "";
+  const canonicalValue =
+    footprint.canonicalUrl && canonicalTarget
+      ? `[${markdownInline(footprint.canonicalUrl)}](${canonicalTarget})`
+      : "Not retained";
+  return [
+    "",
+    "#### Page-declared footprint",
+    "",
+    `**Footprint projection hash:** ${markdownInline(footprint.footprintHash)}  `,
+    `**Page title:** ${markdownInline(footprint.title ?? "Not observed")}  `,
+    `**Description:** ${markdownInline(footprint.description ?? "Not observed")}  `,
+    `**Canonical status:** ${markdownInline(footprint.canonicalStatus ? contextHuman(footprint.canonicalStatus) : "Not retained")}  `,
+    `**Canonical URL:** ${canonicalValue}  `,
+    `**Language:** ${markdownInline(footprint.language ?? "Not observed")}  `,
+    `**Open Graph type:** ${markdownInline(footprint.openGraphType ?? "Not observed")}  `,
+    `**Open Graph site name:** ${markdownInline(footprint.openGraphSiteName ?? "Not observed")}  `,
+    `**Declared generators:** ${markdownInline(footprint.generators.join(", ") || "None observed")}  `,
+    `**Declared applications:** ${markdownInline(footprint.applicationNames.join(", ") || "None observed")}  `,
+    `**Observed provider families:** ${markdownInline(footprint.observedProviderFamilies.map(contextHuman).join(", ") || "None observed")}  `,
+    `**Referenced resource hosts:** ${markdownInline(footprint.observedResourceHosts.join(", ") || "None observed")}  `,
+    `**JSON-LD types:** ${markdownInline(footprint.jsonLdTypes.join(", ") || "None observed")}  `,
+    `**Projection scope:** ${footprint.bounded ? "Bounded projection" : "Projection not truncated by configured extraction limits"}`,
+    "",
+    `**Caveat:** ${markdownInline(footprint.caveat)}`,
+  ];
+}
+
 function evidenceSection(evidence: ReportEvidenceView): string[] {
   const heading = evidence.title ?? evidence.sourceFamily;
   const lines = [
@@ -108,13 +179,18 @@ function evidenceSection(evidence: ReportEvidenceView): string[] {
   ];
   if (evidence.exactExcerpt !== null) {
     const excerpt = evidence.exactExcerpt.split("\n");
-    lines.push("", "**Exact source excerpt:**", "", ...excerpt.map((line) => `> ${markdownInline(line)}`));
+    const heading =
+      evidence.contentLabel === "Normalized archived text"
+        ? "**Normalized archived text:**"
+        : "**Exact source excerpt:**";
+    lines.push("", heading, "", ...excerpt.map((line) => `> ${markdownInline(line)}`));
   } else if (evidence.contentLabel === "Structured API claim") {
     lines.push(
       "",
       "**Structured API claim:** The admitted claim above is the human-readable projection of a canonical API subset; no raw provider payload is embedded in this export.",
     );
   }
+  lines.push(...temporalContextSection(evidence), ...pageFootprintSection(evidence));
   return lines;
 }
 
@@ -196,7 +272,7 @@ export function reportViewModelToMarkdown(viewModel: ReportViewModel): string {
   lines.push(
     "## Evidence and source ledger",
     "",
-    "Evidence references are stable within this report. Exact source excerpts and structured API claims are labeled separately.",
+    "Evidence references are stable within this report. Exact source excerpts, normalized archived text, and structured API claims are labeled separately.",
     "",
   );
   if (viewModel.evidence.length === 0) {

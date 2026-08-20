@@ -41,6 +41,13 @@ export interface TraceEvent {
   result?: { report?: Report };
 }
 
+export interface TraceDiagnostic {
+  code: string;
+  severity: "info" | "warning" | "error";
+  message: string;
+  retryable: boolean;
+}
+
 export interface Candidate {
   id?: string;
   candidateId?: string;
@@ -192,6 +199,32 @@ export type RunStatus = "idle" | "loading" | "running" | "complete" | "error" | 
 
 export function eventType(event: TraceEvent): string {
   return event.name ?? event.type ?? event.eventType ?? "event";
+}
+
+/** Read only the bounded, operator-facing diagnostic projection from a trace event. */
+export function traceDiagnostics(event: TraceEvent): TraceDiagnostic[] {
+  const container = event.payload ?? event.attributes;
+  const value = container?.diagnostics;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const severity = record.severity;
+    if (
+      typeof record.code !== "string" ||
+      typeof record.message !== "string" ||
+      !["info", "warning", "error"].includes(String(severity))
+    )
+      return [];
+    return [
+      {
+        code: record.code,
+        severity: severity as TraceDiagnostic["severity"],
+        message: record.message,
+        retryable: record.retryable === true,
+      },
+    ];
+  });
 }
 
 export function humanize(value: string | undefined): string {

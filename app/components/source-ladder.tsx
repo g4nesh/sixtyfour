@@ -19,9 +19,31 @@ export function SourceLadder({
           graph?.nodes.filter((node) => node.sourceTier === item.tier && node.sourceLaneId === item.id) ?? [];
         const frontier = graph?.frontier.filter((entry) => entry.sourceLaneId === item.id) ?? [];
         const active = nodes.filter((node) => ["selected", "running"].includes(node.status)).length;
-        const complete = nodes.filter((node) => node.status === "verified").length;
+        const attempts = nodes.filter((node) => node.kind === "action").length;
+        const verifiedSources = nodes.filter(
+          (node) => node.kind === "source" && node.status === "verified" && node.data.sourceType !== "search_result",
+        ).length;
+        const classifiedLeads =
+          graph?.nodes.filter(
+            (node) =>
+              node.kind === "source" &&
+              node.status === "exhausted" &&
+              node.data.sourceType === "search_result" &&
+              node.data.classifiedSourceTier === item.tier &&
+              (typeof node.data.classifiedSourceLaneId !== "string" || node.data.classifiedSourceLaneId === item.id),
+          ).length ?? 0;
+        const complete = verifiedSources;
         const rejected = nodes.filter((node) => node.status === "rejected").length;
-        return { item, count: Math.max(nodes.length, frontier.length), active, complete, rejected };
+        return {
+          item,
+          attempts,
+          verifiedSources,
+          classifiedLeads,
+          active,
+          complete,
+          rejected,
+          queued: frontier.length,
+        };
       }),
     [graph],
   );
@@ -43,15 +65,42 @@ export function SourceLadder({
         <ChevronIcon className="source-ladder-chevron" />
       </button>
       <ol id="source-ladder-steps" hidden={collapsed}>
-        {rows.map(({ item, count, active, complete, rejected }) => (
-          <li key={item.id} className={active ? "is-active" : complete ? "is-complete" : rejected ? "is-rejected" : ""}>
+        {rows.map(({ item, attempts, verifiedSources, classifiedLeads, active, complete, rejected, queued }) => (
+          <li
+            key={item.id}
+            className={
+              active
+                ? "is-active"
+                : complete
+                  ? "is-complete"
+                  : classifiedLeads
+                    ? "has-leads"
+                    : rejected
+                      ? "is-rejected"
+                      : ""
+            }
+          >
             <span className="ladder-index">T{item.tier}</span>
             <span className="ladder-copy">
               <strong>{item.label}</strong>
               <small>{item.description}</small>
             </span>
-            <span className="ladder-count" aria-label={`${count} graph nodes`}>
-              {active ? "live" : count}
+            <span
+              className="ladder-count"
+              aria-label={`${verifiedSources} verified sources and ${classifiedLeads} unverified leads from ${attempts} tool attempts; ${queued} frontier entries`}
+            >
+              <strong>
+                {active
+                  ? "live"
+                  : verifiedSources
+                    ? `${verifiedSources} cited`
+                    : classifiedLeads
+                      ? `${classifiedLeads} lead${classifiedLeads === 1 ? "" : "s"}`
+                      : "none"}
+              </strong>
+              <small>
+                {attempts} {attempts === 1 ? "try" : "tries"}
+              </small>
             </span>
           </li>
         ))}

@@ -21,11 +21,10 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_SEARCH_MODEL=gpt-4o-mini
 # OPENAI_BASE_URL=https://api.openai.com/v1
 
-# Google Gemini (reasoning via the OpenAI-compat endpoint). Gemini's own search
-# grounding needs billing, so in gemini mode web discovery is delegated to
-# OpenAI's web_search when OPENAI_API_KEY is also set (hybrid: Gemini reasoning
-# + OpenAI discovery). Gemini's free per-minute limits suit the many
-# planner/extraction calls.
+# Google Gemini uses the OpenAI-compatible endpoint for structured reasoning
+# turns and the native Interactions API with Google Search for grounded web
+# discovery. Google Search grounding can be billable; configure account limits
+# before enabling live mode on shared ingress.
 # GEMINI_API_KEY=
 # GEMINI_MODEL=gemini-3.6-flash
 

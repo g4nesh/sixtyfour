@@ -18,9 +18,33 @@ export type HardenedFetchErrorCode =
   | "timeout"
   | "aborted"
   | "network_error"
+  | "nonstandard_http_status"
   | "retry_exhausted"
   | "response_too_large"
   | "mime_not_allowed";
+
+const HARDENED_FETCH_ERROR_CODES: ReadonlySet<string> = new Set<HardenedFetchErrorCode>([
+  "invalid_url",
+  "blocked_scheme",
+  "blocked_credentials",
+  "blocked_query_secret",
+  "blocked_port",
+  "blocked_host",
+  "dns_resolution_failed",
+  "blocked_address",
+  "budget_exhausted",
+  "method_not_allowed",
+  "redirect_missing_location",
+  "redirect_limit",
+  "unsafe_redirect",
+  "timeout",
+  "aborted",
+  "network_error",
+  "nonstandard_http_status",
+  "retry_exhausted",
+  "response_too_large",
+  "mime_not_allowed",
+]);
 
 export class HardenedFetchError extends Error {
   readonly code: HardenedFetchErrorCode;
@@ -51,6 +75,34 @@ export class HardenedFetchError extends Error {
     this.attempt = options.attempt ?? 0;
     this.requests = options.requests ?? 0;
   }
+}
+
+/** Rehydrate a safe diagnostic across Worker/Vite JavaScript realms. */
+export function asHardenedFetchError(value: unknown): HardenedFetchError | null {
+  if (value instanceof HardenedFetchError) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.name !== "HardenedFetchError" || !HARDENED_FETCH_ERROR_CODES.has(String(candidate.code))) {
+    return null;
+  }
+  const status =
+    candidate.status === null || (typeof candidate.status === "number" && Number.isInteger(candidate.status))
+      ? (candidate.status as number | null)
+      : null;
+  const attempt =
+    typeof candidate.attempt === "number" && Number.isInteger(candidate.attempt) && candidate.attempt >= 0
+      ? candidate.attempt
+      : 0;
+  const requests =
+    typeof candidate.requests === "number" && Number.isInteger(candidate.requests) && candidate.requests >= 0
+      ? candidate.requests
+      : 0;
+  return new HardenedFetchError(candidate.code as HardenedFetchErrorCode, "The outbound request failed safely.", {
+    retryable: candidate.retryable === true,
+    status,
+    attempt,
+    requests,
+  });
 }
 
 export interface OutboundRequestAttempt {
@@ -351,7 +403,11 @@ function mimeAllowed(contentType: string, allowed: readonly string[]): boolean {
 async function readBoundedResponse(response: Response, maxBytes: number, safeResponseUrl: string): Promise<Uint8Array> {
   const advertised = Number(response.headers.get("content-length"));
   if (Number.isFinite(advertised) && advertised > maxBytes) {
-    await response.body?.cancel();
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Preserve the primary size-policy failure when stream cleanup rejects.
+    }
     throw new HardenedFetchError("response_too_large", "The response exceeds the configured byte limit.", {
       status: response.status,
       safeUrl: safeResponseUrl,
@@ -478,6 +534,51 @@ function withTransportCounts(error: HardenedFetchError, requests: number, attemp
   });
 }
 
+async function cancelResponseBody(
+  response: Response,
+  safeResponseUrl: string,
+  attempt: number,
+  requests: number,
+): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch (error) {
+    throw new HardenedFetchError("network_error", "The outbound response could not be released safely.", {
+      retryable: true,
+      status: response.status,
+      safeUrl: safeResponseUrl,
+      attempt,
+      requests,
+      cause: error,
+    });
+  }
+}
+
+async function waitForRetry(
+  policy: NormalizedPolicy,
+  milliseconds: number,
+  signal: AbortSignal | undefined,
+  safeRequestUrl: string,
+  attempt: number,
+  requests: number,
+): Promise<void> {
+  try {
+    await policy.sleep(milliseconds, signal);
+  } catch (error) {
+    throw new HardenedFetchError(
+      signal?.aborted ? "aborted" : "network_error",
+      signal?.aborted ? "The outbound retry was aborted." : "The outbound retry wait failed.",
+      {
+        retryable: !signal?.aborted,
+        safeUrl: safeRequestUrl,
+        attempt,
+        requests,
+        cause: error,
+      },
+    );
+  }
+}
+
 /**
  * Fetch with explicit redirect handling and bounded response buffering.
  *
@@ -574,12 +675,19 @@ export function createHardenedFetch(policyInput: HardenedFetchPolicy) {
           attemptSignal.cleanup();
           if (!mapped.retryable || !canRetry(method, policy) || attempt > policy.maxRetries) throw mapped;
           lastError = mapped;
-          await policy.sleep(backoffDelay(attempt, policy, null), init.signal ?? undefined);
+          await waitForRetry(
+            policy,
+            backoffDelay(attempt, policy, null),
+            init.signal ?? undefined,
+            safeUrl(attemptUrl),
+            attempt,
+            requestCount,
+          );
           break;
         }
         if (REDIRECT_STATUSES.has(response.status)) {
-          await response.body?.cancel();
           attemptSignal.cleanup();
+          await cancelResponseBody(response, safeUrl(attemptUrl), attempt, requestCount);
           const location = response.headers.get("location");
           if (!location) {
             throw new HardenedFetchError("redirect_missing_location", "The redirect response omitted Location.", {
@@ -625,19 +733,51 @@ export function createHardenedFetch(policyInput: HardenedFetchPolicy) {
           continue;
         }
 
-        if (RETRYABLE_STATUSES.has(response.status) && canRetry(method, policy) && attempt <= policy.maxRetries) {
-          await response.body?.cancel();
+        // Native server-side fetch implementations can surface nonstandard
+        // status codes even though the Fetch Response constructor only accepts
+        // 200-599. Reject them explicitly before buffering/reconstruction so a
+        // remote block response (for example HTTP 999) cannot escape as a raw
+        // RangeError and lose its request/status telemetry.
+        if (!Number.isInteger(response.status) || response.status < 200 || response.status > 599) {
+          try {
+            await response.body?.cancel();
+          } catch {
+            // Preserve the more specific status-policy failure.
+          }
           attemptSignal.cleanup();
-          await policy.sleep(
+          throw new HardenedFetchError(
+            "nonstandard_http_status",
+            "The outbound server returned a nonstandard HTTP status.",
+            {
+              status: Number.isInteger(response.status) ? response.status : null,
+              safeUrl: safeUrl(attemptUrl),
+              attempt,
+              requests: requestCount,
+            },
+          );
+        }
+
+        if (RETRYABLE_STATUSES.has(response.status) && canRetry(method, policy) && attempt <= policy.maxRetries) {
+          attemptSignal.cleanup();
+          await cancelResponseBody(response, safeUrl(attemptUrl), attempt, requestCount);
+          await waitForRetry(
+            policy,
             backoffDelay(attempt, policy, response.headers.get("retry-after")),
             init.signal ?? undefined,
+            safeUrl(attemptUrl),
+            attempt,
+            requestCount,
           );
           break;
         }
 
         const hasBody = ![204, 205, 304].includes(response.status) && attemptMethod !== "HEAD";
         if (hasBody && !mimeAllowed(response.headers.get("content-type") ?? "", policy.allowedMimeTypes)) {
-          await response.body?.cancel();
+          try {
+            await response.body?.cancel();
+          } catch {
+            // Preserve the deterministic MIME-policy failure.
+          }
           attemptSignal.cleanup();
           throw new HardenedFetchError("mime_not_allowed", "The response Content-Type is not allowed.", {
             status: response.status,
@@ -675,17 +815,40 @@ export function createHardenedFetch(policyInput: HardenedFetchPolicy) {
           );
           if (!mapped.retryable || !canRetry(method, policy) || attempt > policy.maxRetries) throw mapped;
           lastError = mapped;
-          await policy.sleep(backoffDelay(attempt, policy, null), init.signal ?? undefined);
+          await waitForRetry(
+            policy,
+            backoffDelay(attempt, policy, null),
+            init.signal ?? undefined,
+            safeUrl(attemptUrl),
+            attempt,
+            requestCount,
+          );
           break;
         }
         attemptSignal.cleanup();
         const responseBody = new ArrayBuffer(bytes.byteLength);
         new Uint8Array(responseBody).set(bytes);
-        const boundedResponse = new Response(responseBody, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        });
+        let boundedResponse: Response;
+        try {
+          boundedResponse = new Response(responseBody, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+        } catch (error) {
+          throw new HardenedFetchError(
+            "network_error",
+            "The bounded outbound response could not be reconstructed safely.",
+            {
+              retryable: false,
+              status: response.status,
+              safeUrl: safeUrl(attemptUrl),
+              attempt,
+              requests: requestCount,
+              cause: error,
+            },
+          );
+        }
         return {
           response: boundedResponse,
           finalUrl: attemptUrl.href,

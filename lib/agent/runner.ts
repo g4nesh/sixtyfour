@@ -10,6 +10,9 @@ import {
 import type { Clock, IdFactory } from "../domain/runtime";
 import { cloneJson, isJsonValue } from "../domain/runtime";
 import { identitySignalGroundedByEvidence } from "../domain/candidates";
+import { assessConfidence } from "../domain/confidence";
+import { evidenceSupportsFindingCategory } from "../domain/integrity";
+import { requestedCategoriesForInput, resolveIdentity } from "../domain/report";
 import {
   SCHEMA_VERSION,
   type BudgetLimits,
@@ -37,7 +40,9 @@ import {
   admitGraphNode,
   assertSearchGraph,
   enqueueCandidateFrontier,
+  enqueueCandidateUrlFrontier,
   frontierEntryById,
+  isCanonicalCompilerSearchEntry,
   isDeniedResearchSource,
   isDeniedResearchTool,
   markSearchGraphTerminal,
@@ -48,6 +53,7 @@ import {
   selectFrontierBatch,
   setFrontierStatus,
   sourceLaneForFrontierEntry,
+  sourceTierContextForState,
   sourceTierForUrl,
   type SearchKernelEvent,
 } from "../search";
@@ -153,6 +159,13 @@ export interface CandidateSignalUpdate {
   signals: IdentitySignal[];
 }
 
+export interface QuarantinedCandidateBranch {
+  /** The selected candidate whose fetched lead produced this isolated branch. */
+  parentCandidateId: string;
+  reason: "fetched_subject_unverified";
+  candidate: CandidateDraft;
+}
+
 export interface ActionResultMeta {
   durationMs?: number;
   requests?: number;
@@ -166,6 +179,8 @@ export interface ResearchActionResult {
   status: ActionStatus;
   data?: JsonValue | null;
   candidates?: CandidateDraft[];
+  /** Explicit, non-merging branch for fetched text that lacks a strong identity binding. */
+  candidateBranches?: QuarantinedCandidateBranch[];
   candidateSignals?: CandidateSignalUpdate[];
   evidence?: EvidenceDraft[];
   findings?: FindingDraft[];
@@ -695,51 +710,6 @@ function recordSearchEvents(
   }
 }
 
-function publicHostname(value: string): string | null {
-  try {
-    const url = new URL(value.includes("://") ? value : `https://${value}`);
-    return url.protocol === "https:" ? url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "") : null;
-  } catch {
-    return null;
-  }
-}
-
-function sourceTierContextForAction(
-  state: InvestigationState,
-  candidateId: string | undefined,
-): { firstPartyHosts: string[]; organizationNames: string[] } {
-  const firstPartyHosts = new Set<string>();
-  for (const identifier of state.target.identifiers) {
-    if (identifier.provenance !== "user_input") continue;
-    const host =
-      identifier.kind === "email"
-        ? (identifier.normalizedValue.split("@")[1] ?? null)
-        : publicHostname(identifier.value);
-    if (host) firstPartyHosts.add(host);
-  }
-  const candidate = candidateId ? state.candidates.find((item) => item.id === candidateId) : undefined;
-  for (const signal of candidate?.signals ?? []) {
-    if (
-      !["profile_url", "personal_domain"].includes(signal.kind) ||
-      !["verified", "corroborated"].includes(signal.assurance) ||
-      !signal.sourceEvidenceId ||
-      !state.evidence.some(
-        (evidence) =>
-          evidence.id === signal.sourceEvidenceId &&
-          evidence.candidateId === candidateId &&
-          evidence.disposition === "supports",
-      )
-    )
-      continue;
-    const host = publicHostname(signal.value);
-    if (host) firstPartyHosts.add(host);
-  }
-  return {
-    firstPartyHosts: [...firstPartyHosts].sort(),
-    organizationNames: state.target.organizationHints.map((organization) => organization.name),
-  };
-}
-
 async function executeActions(
   engine: InvestigationEngine,
   dependencies: ResearchDependencies,
@@ -839,7 +809,12 @@ async function executeActions(
       frontierEntryId: entry.id,
       tool: proposal.tool.trim(),
       purpose: proposal.purpose.trim(),
-      arguments: cloneJson(proposal.arguments),
+      arguments:
+        proposal.tool.trim() === "search_web"
+          ? { query: entry.queryHint }
+          : proposal.tool.trim() === "wayback_profile_history"
+            ? { url: entry.queryHint }
+            : cloneJson(proposal.arguments),
       ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
       budgetClass: actionBudgetClass(proposal),
       sourceTier: entry.sourceTier,
@@ -967,24 +942,59 @@ async function executeActions(
   for (const { entry, action, actionNodeId, spanId, modelAccounting, result } of settled) {
     executedEntries.push(entry);
     let actionMutations = 0;
+    let actionTrustMutations = 0;
     const localCandidateIds = new Map<string, string>();
+    const isolatedCandidateIds = new Set<string>();
     const pendingSignalUpdates: CandidateSignalUpdate[] = [];
-    for (const draft of result.candidates ?? []) {
-      if (action.candidateId) {
+    const sourceLane = sourceLaneForFrontierEntry(entry);
+    const proposedCandidates: Array<{
+      draft: CandidateDraft;
+      isolated: boolean;
+      expandFrontier: boolean;
+      parentCandidateId?: string;
+    }> = [
+      ...(result.candidates ?? []).map((draft) => ({
+        draft,
+        isolated: false,
+        expandFrontier: draft.frontierExpansion !== "none",
+      })),
+      ...(result.candidateBranches ?? []).map((branch) => ({
+        draft: branch.candidate,
+        isolated: true,
+        expandFrontier: false,
+        parentCandidateId: branch.parentCandidateId,
+      })),
+    ];
+    for (const proposal of proposedCandidates) {
+      const { draft } = proposal;
+      const isolatedBranchAllowed =
+        proposal.isolated &&
+        Boolean(action.candidateId) &&
+        proposal.parentCandidateId === action.candidateId &&
+        Boolean(draft.ref) &&
+        graph.nodes.some((node) => node.kind === "candidate" && node.candidateId === proposal.parentCandidateId) &&
+        (draft.signals ?? []).every(
+          (signal) =>
+            !signal.sourceEvidenceId && signal.assurance !== "verified" && signal.assurance !== "corroborated",
+        );
+      if (action.candidateId && !isolatedBranchAllowed) {
         engine.trace.record("candidate.rejected", {
           phase: engine.phase,
           parentSpanId: spanId,
           payload: {
-            reason: "candidate_bound_action_cannot_create_candidates",
+            reason: proposal.isolated
+              ? "invalid_quarantined_candidate_branch"
+              : "candidate_bound_action_cannot_create_candidates",
             expectedCandidateId: action.candidateId,
           },
         });
         continue;
       }
       try {
-        const { signals: proposedSignals, ...identityDraft } = draft;
+        const { signals: proposedSignals, frontierExpansion: _frontierExpansion, ...identityDraft } = draft;
         const candidateMutation = engine.addCandidate(identityDraft);
         if (draft.ref) localCandidateIds.set(draft.ref, candidateMutation.candidate.id);
+        if (proposal.isolated) isolatedCandidateIds.add(candidateMutation.candidate.id);
         if (proposedSignals?.length) {
           pendingSignalUpdates.push({
             candidateId: candidateMutation.candidate.id,
@@ -1004,7 +1014,9 @@ async function executeActions(
           {
             kind: "candidate",
             label: candidateMutation.candidate.displayName,
-            status: candidateMutation.created ? "verified" : "selected",
+            // Discovery-created and quarantined identities remain visibly
+            // provisional until evidence-backed scoring resolves them.
+            status: candidateMutation.candidate.status === "resolved" ? "verified" : "selected",
             candidateId: candidateMutation.candidate.id,
             data: {},
             dedupeEntityKey: `candidate:${candidateMutation.candidate.id}`,
@@ -1014,13 +1026,34 @@ async function executeActions(
         );
         graph = candidateNodeAdmission.graph;
         recordSearchEvents(engine, candidateNodeAdmission.events, spanId);
+        if (proposal.isolated && proposal.parentCandidateId) {
+          const parentCandidateNode = graph.nodes.find(
+            (node) => node.kind === "candidate" && node.candidateId === proposal.parentCandidateId,
+          );
+          if (!parentCandidateNode) throw new Error("quarantined branch parent candidate node is missing");
+          const separation = admitGraphEdge(
+            graph,
+            {
+              fromNodeId: parentCandidateNode.id,
+              toNodeId: candidateNodeAdmission.value.id,
+              kind: "separates",
+              status: "verified",
+              edgeCost: 0.07,
+              pathCost: entry.pathCost + 0.1,
+            },
+            engine.ids,
+            engine.clock.now(),
+          );
+          graph = separation.graph;
+          recordSearchEvents(engine, separation.events, spanId);
+        }
         const candidateEdgeAdmission = admitGraphEdge(
           graph,
           {
             fromNodeId: actionNodeId,
             toNodeId: candidateNodeAdmission.value.id,
             kind: "expands",
-            status: "verified",
+            status: candidateNodeAdmission.value.status,
             frontierEntryId: entry.id,
             actionId: action.id,
             edgeCost: 0.06,
@@ -1057,7 +1090,7 @@ async function executeActions(
           recordSearchEvents(engine, separation.events, spanId);
         }
 
-        if (candidateMutation.created) {
+        if (candidateMutation.created && !proposal.isolated && proposal.expandFrontier) {
           const candidateFrontier = enqueueCandidateFrontier(
             graph,
             state.target,
@@ -1081,8 +1114,7 @@ async function executeActions(
         });
       }
     }
-    const sourceLane = sourceLaneForFrontierEntry(entry);
-    const sourceTierContext = sourceTierContextForAction(state, action.candidateId);
+    const sourceTierContext = sourceTierContextForState(state, action.candidateId);
     for (const draft of result.evidence ?? []) {
       const candidateFromRef = draft.candidateRef ? localCandidateIds.get(draft.candidateRef) : undefined;
       const candidateId = draft.candidateId ?? candidateFromRef ?? action.candidateId;
@@ -1116,7 +1148,11 @@ async function executeActions(
         });
         continue;
       }
-      if (action.candidateId && candidateId !== action.candidateId) {
+      if (
+        action.candidateId &&
+        candidateId !== action.candidateId &&
+        !(candidateFromRef && isolatedCandidateIds.has(candidateFromRef))
+      ) {
         engine.trace.record("evidence.admission", {
           phase: engine.phase,
           parentSpanId: spanId,
@@ -1236,12 +1272,31 @@ async function executeActions(
       if (admission.admitted && admission.evidence) {
         mutations += 1;
         actionMutations += 1;
+        if (!discoveryOnly) actionTrustMutations += 1;
+        const evidenceStatus = discoveryOnly
+          ? ("exhausted" as const)
+          : admission.evidence.disposition === "contradicts"
+            ? ("rejected" as const)
+            : ("verified" as const);
+        const classifiedLeadData: JsonObject = discoveryOnly
+          ? {
+              ...(typeof admission.evidence.attributes.classifiedSourceTier === "number"
+                ? { classifiedSourceTier: admission.evidence.attributes.classifiedSourceTier }
+                : {}),
+              ...(typeof admission.evidence.attributes.classifiedSourceType === "string"
+                ? { classifiedSourceType: admission.evidence.attributes.classifiedSourceType }
+                : {}),
+              ...(typeof admission.evidence.attributes.classifiedSourceLaneId === "string"
+                ? { classifiedSourceLaneId: admission.evidence.attributes.classifiedSourceLaneId }
+                : {}),
+            }
+          : {};
         const sourceNodeAdmission = admitGraphNode(
           graph,
           {
             kind: "source",
             label: admission.evidence.title ?? admission.evidence.sourceFamily,
-            status: "verified",
+            status: evidenceStatus,
             sourceTier: entry.sourceTier,
             sourceLaneId: entry.sourceLaneId,
             frontierEntryId: entry.id,
@@ -1252,6 +1307,7 @@ async function executeActions(
               sourceUrl: admission.evidence.sourceUrl,
               sourceFamily: admission.evidence.sourceFamily,
               sourceType: admission.evidence.sourceType,
+              ...classifiedLeadData,
             },
             dedupeEntityKey: `source:${admission.evidence.id}`,
           },
@@ -1266,7 +1322,7 @@ async function executeActions(
             fromNodeId: actionNodeId,
             toNodeId: sourceNodeAdmission.value.id,
             kind: "expands",
-            status: "verified",
+            status: evidenceStatus,
             frontierEntryId: entry.id,
             actionId: action.id,
             edgeCost: 0.04,
@@ -1282,7 +1338,7 @@ async function executeActions(
           {
             kind: "evidence",
             label: admission.evidence.claim,
-            status: admission.evidence.disposition === "contradicts" ? "rejected" : "verified",
+            status: evidenceStatus,
             sourceTier: entry.sourceTier,
             sourceLaneId: entry.sourceLaneId,
             frontierEntryId: entry.id,
@@ -1296,6 +1352,7 @@ async function executeActions(
               sourceType: admission.evidence.sourceType,
               contentHash: admission.evidence.contentHash,
               verificationMethod: admission.evidence.verificationMethod,
+              ...classifiedLeadData,
             },
             dedupeEntityKey: `evidence:${admission.evidence.id}`,
           },
@@ -1343,21 +1400,51 @@ async function executeActions(
           graph = evidenceCandidateEdge.graph;
           recordSearchEvents(engine, evidenceCandidateEdge.events, spanId);
         }
+        if (
+          !discoveryOnly &&
+          admission.evidence.sourceType !== "web_archive" &&
+          admission.evidence.candidateId &&
+          availableTools.includes("wayback_profile_history")
+        ) {
+          const archiveCandidate = engine
+            .snapshot()
+            .candidates.find((candidate) => candidate.id === admission.evidence?.candidateId);
+          if (archiveCandidate) {
+            const archiveFrontier = enqueueCandidateUrlFrontier(
+              graph,
+              state.target,
+              archiveCandidate,
+              admission.evidence.sourceUrl,
+              entry,
+              sourceNodeAdmission.value.id,
+              availableTools,
+              engine.ids,
+              engine.clock.now(),
+            );
+            graph = archiveFrontier.graph;
+            recordSearchEvents(engine, archiveFrontier.events, spanId);
+          }
+        }
       }
     }
     pendingSignalUpdates.push(...(result.candidateSignals ?? []));
     for (const update of pendingSignalUpdates) {
       if (action.candidateId && update.candidateId !== action.candidateId) {
-        engine.trace.record("candidate_signal.rejected", {
-          phase: engine.phase,
-          parentSpanId: spanId,
-          payload: {
-            candidateId: update.candidateId,
-            expectedCandidateId: action.candidateId,
-            reason: "foreign_candidate_id",
-          },
-        });
-        continue;
+        if (isolatedCandidateIds.has(update.candidateId)) {
+          // The update is grounded below against evidence admitted for the
+          // explicitly isolated branch from this same action.
+        } else {
+          engine.trace.record("candidate_signal.rejected", {
+            phase: engine.phase,
+            parentSpanId: spanId,
+            payload: {
+              candidateId: update.candidateId,
+              expectedCandidateId: action.candidateId,
+              reason: "foreign_candidate_id",
+            },
+          });
+          continue;
+        }
       }
       const evidence = engine.snapshot().evidence;
       const accepted: IdentitySignal[] = [];
@@ -1382,6 +1469,16 @@ async function executeActions(
         engine.addCandidateSignals(update.candidateId, accepted);
         mutations += 1;
         actionMutations += 1;
+        if (
+          accepted.some((signal) => {
+            if (!signal.sourceEvidenceId) return false;
+            const source = evidence.find((record) => record.id === signal.sourceEvidenceId);
+            return (
+              source !== undefined && source.sourceType !== "search_result" && source.disposition !== "discovery_only"
+            );
+          })
+        )
+          actionTrustMutations += 1;
       } catch (error) {
         engine.trace.record("candidate_signal.rejected", {
           phase: engine.phase,
@@ -1409,6 +1506,7 @@ async function executeActions(
         if (engine.snapshot().findings.length > beforeFindingCount) {
           mutations += 1;
           actionMutations += 1;
+          actionTrustMutations += 1;
           const findingNodeAdmission = admitGraphNode(
             graph,
             {
@@ -1485,12 +1583,13 @@ async function executeActions(
         resultStatus: result.status,
         incomplete: result.meta?.incomplete ?? false,
         evidenceProposed: result.evidence?.length ?? 0,
-        candidateProposed: result.candidates?.length ?? 0,
+        candidateProposed: (result.candidates?.length ?? 0) + (result.candidateBranches?.length ?? 0),
         diagnostics: (result.diagnostics ?? []).map((diagnostic) => ({
           code: diagnostic.code,
           severity: diagnostic.severity,
           message: diagnostic.message,
           retryable: diagnostic.retryable,
+          ...(diagnostic.details ? { details: diagnostic.details } : {}),
         })),
       },
       usage: {
@@ -1509,13 +1608,32 @@ async function executeActions(
       },
     });
     const frontierStatus: Extract<SearchGraphStatus, "verified" | "rejected" | "exhausted"> =
-      actionMutations > 0 ? "verified" : result.status === "failed" ? "rejected" : "exhausted";
+      actionTrustMutations > 0 ? "verified" : result.status === "failed" ? "rejected" : "exhausted";
     const outcome = recordFrontierOutcome(graph, entry, frontierStatus, engine.clock.now());
     graph = outcome.graph;
     // The tool span is closed above after all tool-derived trust mutations are
     // admitted. Frontier bookkeeping is a scheduler concern, so it must not be
     // attached to the now-closed span.
     recordSearchEvents(engine, outcome.events);
+
+    // Exhausting either a canonical compiler query or a zero-request
+    // classified-lead mismatch closes one finite scheduler branch. Count that
+    // irreversible contraction as progress so the bounded search can reach
+    // later legal tiers instead of tripping the no-progress stop. Neither case
+    // admits evidence or upgrades trust, and exhausted entries cannot rerun.
+    const exhaustedCanonicalCompilerQuery =
+      actionMutations === 0 &&
+      action.tool === "search_web" &&
+      result.status === "not_found" &&
+      isCanonicalCompilerSearchEntry(entry);
+    const exhaustedMismatchedLeadLane =
+      actionMutations === 0 &&
+      result.status === "skipped" &&
+      (result.meta?.requests ?? 0) === 0 &&
+      result.diagnostics?.some((diagnostic) => diagnostic.code === "lead_lane_mismatch") === true;
+    if (exhaustedCanonicalCompilerQuery || exhaustedMismatchedLeadLane) {
+      mutations += 1;
+    }
 
     if (actionMutations === 0) {
       const gapNodeAdmission = admitGraphNode(
@@ -1573,14 +1691,14 @@ async function synthesizeFindings(
   engine: InvestigationEngine,
   dependencies: ResearchDependencies,
   signal?: AbortSignal,
-): Promise<number> {
-  if (!dependencies.synthesize) return 0;
+): Promise<{ mutations: number; outcome: "succeeded" | "unavailable" | "skipped" }> {
+  if (!dependencies.synthesize) return { mutations: 0, outcome: "skipped" };
   if (!engine.canAttemptLlm()) {
     engine.trace.record("synthesis.skipped", {
       phase: engine.phase,
       payload: { reason: "llm_call_budget_exhausted" },
     });
-    return 0;
+    return { mutations: 0, outcome: "unavailable" };
   }
   const modelAccounting = createModelAccounting(engine);
   const spanId = engine.trace.startSpan({
@@ -1632,7 +1750,7 @@ async function synthesizeFindings(
         unavailableReason: model.usageUnavailableReason,
       },
     });
-    return mutations;
+    return { mutations, outcome: "succeeded" };
   } catch (error) {
     modelAccounting.finalizeOutstanding("synthesis_failed_with_unsettled_model_attempt");
     const accounted = modelAccounting.summary();
@@ -1648,8 +1766,95 @@ async function synthesizeFindings(
       },
     });
     if (signal?.aborted) throw error;
-    return 0;
+    return { mutations: 0, outcome: "unavailable" };
   }
+}
+
+/**
+ * Preserve one exact, low-confidence source observation when provider-backed
+ * synthesis is unavailable. This is deliberately narrower than model
+ * synthesis: search leads, ambiguous identities, non-200 responses, non-SHA
+ * content, cross-candidate evidence, and moderate-confidence claims can never
+ * enter this path.
+ */
+function admitDeterministicFallbackFinding(engine: InvestigationEngine): number {
+  const snapshot = engine.snapshot();
+  const identity = resolveIdentity(snapshot.candidates, snapshot.evidence);
+  if (identity.status === "ambiguous" || !identity.selectedCandidate) return 0;
+
+  const candidate = identity.selectedCandidate;
+  const requestedCategories = new Set(requestedCategoriesForInput(snapshot.input));
+  const usedEvidenceIds = new Set(snapshot.findings.flatMap((finding) => finding.evidenceIds));
+  const eligible = snapshot.evidence
+    .filter(
+      (evidence) =>
+        evidence.candidateId === candidate.id &&
+        evidence.disposition === "supports" &&
+        evidence.verificationMethod === "direct_fetch" &&
+        Boolean(evidence.excerpt) &&
+        evidence.claim === evidence.excerpt &&
+        evidence.httpStatus === 200 &&
+        /^sha256:[a-f0-9]{64}$/.test(evidence.contentHash ?? "") &&
+        !usedEvidenceIds.has(evidence.id) &&
+        assessConfidence([evidence]).score < 0.45,
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  for (const evidence of eligible) {
+    const category =
+      requestedCategories.has("online_presence") &&
+      evidenceSupportsFindingCategory(evidence, candidate, "online_presence")
+        ? "online_presence"
+        : requestedCategories.has("identity") && evidenceSupportsFindingCategory(evidence, candidate, "identity")
+          ? "identity"
+          : null;
+    if (!category) continue;
+    const before = engine.snapshot().findings.length;
+    try {
+      const finding = engine.addFinding({
+        candidateId: candidate.id,
+        title: "Deterministic source observation",
+        description: evidence.excerpt as string,
+        category,
+        evidenceIds: [evidence.id],
+        counterEvidenceIds: [],
+      });
+      if (engine.snapshot().findings.length === before) return 0;
+      engine.trace.record("synthesis.deterministic_fallback", {
+        phase: engine.phase,
+        payload: {
+          findingId: finding.id,
+          evidenceId: evidence.id,
+          diagnostics: [
+            {
+              code: "deterministic_finding_fallback_used",
+              severity: "warning",
+              message:
+                "Provider synthesis was unavailable; Atlas retained one exact direct-source observation at low confidence.",
+              retryable: false,
+            },
+          ],
+        },
+      });
+      return 1;
+    } catch (error) {
+      engine.trace.record("finding.rejected", {
+        phase: engine.phase,
+        payload: {
+          source: "deterministic_fallback",
+          evidenceId: evidence.id,
+          error: safeError(error),
+        },
+      });
+    }
+  }
+  return 0;
+}
+
+function isRetryableProviderFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+  const candidate = error as Record<string, unknown>;
+  return candidate.name === "OpenRouterError" && candidate.retryable === true;
 }
 
 function terminalGraphStatus(reason: NonNullable<ReturnType<typeof evaluateStop>["reason"]>): SearchGraph["status"] {
@@ -2049,11 +2254,12 @@ export async function* runResearch(
           finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
           return { route: "terminal" };
         }
-        const synthesized = await synthesizeFindings(engine, dependencies, options.signal);
+        const synthesis = await synthesizeFindings(engine, dependencies, options.signal);
+        const deterministic = synthesis.outcome === "unavailable" ? admitDeterministicFallbackFinding(engine) : 0;
         graph = admitMissingFindingNodes(engine, graph);
         engine.replaceSearchGraph(graph);
         if (turnStarted) {
-          engine.endTurn(turnMutations + synthesized > 0);
+          engine.endTurn(turnMutations + synthesis.mutations + deterministic > 0);
           turnStarted = false;
         }
         if (options.signal?.aborted) {
@@ -2108,28 +2314,53 @@ export async function* runResearch(
           : snapshot.evidence.length > 0
             ? evaluateStop(snapshot, { noLegalActions: true })
             : null;
+        const gracefulStopOptions: StopEvaluationOptions = naturalStop.allowed ? {} : { noLegalActions: true };
         let gracefullyStopped = false;
         if (gracefulStop?.allowed && gracefulStop.reason !== "goal_satisfied") {
           try {
             // Finalize from the last committed (valid) graph, since the local
             // graph may be mid-mutation at the point the error surfaced.
             graph = engine.snapshot().searchGraph;
+            const interruptedEntryIds = graph.frontier
+              .filter((entry) => ["queued", "mutated", "selected", "running"].includes(entry.status))
+              .map((entry) => entry.id);
+            if (interruptedEntryIds.length > 0) {
+              graph = setFrontierStatus(graph, interruptedEntryIds, "exhausted", engine.clock.now());
+              graph.telemetry.exhausted += interruptedEntryIds.length;
+              engine.trace.record("frontier.exhausted", {
+                phase: engine.phase,
+                payload: {
+                  reason: "upstream_failure_after_partial_results",
+                  entryCount: interruptedEntryIds.length,
+                },
+              });
+            }
             engine.replaceSearchGraph(graph);
+            if (isRetryableProviderFailure(error)) {
+              admitDeterministicFallbackFinding(engine);
+              graph = admitMissingFindingNodes(engine, graph);
+              engine.replaceSearchGraph(graph);
+            }
             // A terminal report can only be committed from a report-eligible
             // phase. The error may have surfaced mid-plan/discover, so advance
             // the phase the same way the normal completion paths do before
             // finishing. Provider synthesis is unavailable here (the provider is
-            // what just failed), so the partial report preserves the admitted
-            // evidence without new findings.
+            // what just failed), so the partial report preserves admitted
+            // evidence and may project only the exact low-confidence fallback
+            // observation admitted above.
             try {
               advanceToCalibrate();
               if (engine.phase === "calibrate") engine.transition("report");
             } catch {
               // Best-effort: fall through and finish from the current phase.
             }
-            finish(gracefulStop);
+            finish(gracefulStop, gracefulStopOptions);
             gracefullyStopped = true;
-          } catch {
+          } catch (terminalizationError) {
+            engine.trace.record("terminalization.rejected", {
+              phase: engine.phase,
+              payload: { error: safeError(terminalizationError) },
+            });
             gracefullyStopped = false;
           }
         }

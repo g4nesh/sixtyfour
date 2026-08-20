@@ -8,6 +8,7 @@ import type {
   SearchGraphNode,
 } from "../domain/types";
 import { cleanInlineReportText, cleanReportText, safePublicReportUrl } from "./sanitize";
+import { isPassivePageMetadataObservation, projectPageFootprint, projectTemporalComparison } from "./evidence-context";
 import type {
   ReportCandidateView,
   ReportEvidenceView,
@@ -38,7 +39,7 @@ const TIER_LABELS: Record<number, string> = {
   2: "Structured professional records",
   3: "Universities, conferences, and publishers",
   4: "Reputable media and interviews",
-  5: "Candidate-linked Wayback history",
+  5: "Temporal provenance diff",
   6: "General web discovery",
 };
 
@@ -85,18 +86,26 @@ function evidenceViews(
     refsById.set(item.id, ref);
     const tier = evidenceTier(item, graph);
     const url = safePublicReportUrl(item.canonicalUrl) ?? safePublicReportUrl(item.sourceUrl) ?? "";
-    const exactExcerpt = item.excerpt === null ? null : cleanReportText(item.excerpt);
+    const discoveryOnly = item.disposition === "discovery_only" || item.sourceType === "search_result";
+    const passiveMetadataObservation = isPassivePageMetadataObservation(item);
+    const exactExcerpt = discoveryOnly || item.excerpt === null ? null : cleanReportText(item.excerpt);
+    const normalizedArchiveText = item.verificationMethod === "archive_snapshot";
     return {
       ref,
       id: cleanInlineReportText(item.id),
       candidateId: cleanInlineReportText(item.candidateId),
       claim: cleanReportText(item.claim),
-      contentLabel:
-        exactExcerpt !== null
-          ? "Exact source excerpt"
-          : item.canonicalSubset !== null
-            ? "Structured API claim"
-            : "Admitted source claim",
+      contentLabel: passiveMetadataObservation
+        ? "Passive page metadata observation"
+        : discoveryOnly
+          ? "Unverified discovery lead"
+          : exactExcerpt !== null
+            ? normalizedArchiveText
+              ? "Normalized archived text"
+              : "Exact source excerpt"
+            : item.canonicalSubset !== null
+              ? "Structured API claim"
+              : "Admitted source claim",
       exactExcerpt,
       disposition: item.disposition,
       sourceUrl: url,
@@ -113,6 +122,8 @@ function evidenceViews(
       contentHash: item.contentHash === null ? null : cleanInlineReportText(item.contentHash),
       reliability: finiteScore(item.reliability),
       spoofable: item.spoofable,
+      temporalComparison: discoveryOnly ? null : projectTemporalComparison(item.canonicalSubset),
+      pageFootprint: discoveryOnly && !passiveMetadataObservation ? null : projectPageFootprint(item.canonicalSubset),
     };
   });
   return { items, refsById };
@@ -384,7 +395,7 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
     },
     methodology: {
       evidenceStandard:
-        "Only admitted public-professional evidence appears here. Exact source excerpts are kept distinct from structured API claims, and discovery-only snippets are not promoted into findings.",
+        "Only admitted public-professional evidence appears here. Exact source excerpts, normalized archived text, and structured API claims are labeled distinctly, and discovery-only snippets are not promoted into findings.",
       confidenceStandard:
         "Finding confidence is computed from candidate-bound evidence, independent source families, contradictions, reliability, and spoofability caps. Model prose is never finding authority.",
       graphStandard:

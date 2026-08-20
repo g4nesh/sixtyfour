@@ -1,13 +1,22 @@
 "use client";
 
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { FindingCategory, InvestigationReport } from "../lib/domain/types";
+import type { FindingCategory, InvestigationReport, ResearchDepth } from "../lib/domain/types";
 import type { Report, RunStatus, TraceEvent } from "./atlas-types";
-import { eventType, formatDuration, formatUsage, humanize, traceDuration, traceUsage } from "./atlas-types";
+import {
+  eventType,
+  formatDuration,
+  formatUsage,
+  humanize,
+  traceDiagnostics,
+  traceDuration,
+  traceUsage,
+} from "./atlas-types";
 import {
   eventStableId,
   graphFromReport,
   mergeGraphEvent,
+  mergeGraphSnapshot,
   stableNodeForEvent,
   type CanonicalSearchGraph,
 } from "./graph-model";
@@ -57,11 +66,32 @@ function terminalStatusFor(event: TraceEvent, report: Report | null): string | u
   return report?.status ?? event.status;
 }
 
-function runMessage(status: string | undefined): string {
-  if (status === "configuration_error") return "Live mode needs an enabled server-side provider and protected ingress.";
+function runMessage(
+  status: string | undefined,
+  diagnosticCodes: ReadonlySet<string> = new Set(),
+  hasDirectEvidence = false,
+): string {
+  if (status === "configuration_error")
+    return "Live mode is not configured on this server. Enable live mode and configure a server-side provider key.";
   if (status === "blocked") return "The request was refused by the public-professional safety policy.";
   if (status === "failed") return "The run ended early. Inspect the terminal trace for the recorded boundary.";
   if (status === "canceled") return "The run was canceled. Its partial graph and trace remain inspectable.";
+  const providerUnavailable =
+    diagnosticCodes.has("search_provider_quota_exhausted") || diagnosticCodes.has("search_provider_unavailable");
+  const providerUngrounded = diagnosticCodes.has("search_provider_sources_not_observed");
+  const retainedSourceMessage = hasDirectEvidence
+    ? "A directly fetched citation is in the report."
+    : "No directly fetched citation was admitted before the run stopped.";
+  const providerBoundary = providerUnavailable ? "was unavailable" : "returned no usable source annotations";
+  if ((providerUnavailable || providerUngrounded) && diagnosticCodes.has("public_web_fallback_used")) {
+    return `${status === "partial" ? "Partial coverage" : "Run complete"} — provider search ${providerBoundary}, so Atlas used its bounded public-web fallback. ${retainedSourceMessage}`;
+  }
+  if ((providerUnavailable || providerUngrounded) && diagnosticCodes.has("github_public_user_fallback_used")) {
+    return `${status === "partial" ? "Partial coverage" : "Run complete"} — provider search ${providerBoundary}, so Atlas used its exact-name GitHub fallback. ${retainedSourceMessage}`;
+  }
+  if (providerUnavailable || providerUngrounded) {
+    return `Partial coverage — the configured web-search provider ${providerBoundary} and no fallback source was verified. Inspect the trace for the recorded boundary.`;
+  }
   if (status === "partial")
     return "Stopped with partial coverage — the cited sources gathered so far are in the report.";
   if (status === "ambiguous") return "Identity remained ambiguous; competing candidate branches were not merged.";
@@ -108,6 +138,7 @@ function compactViewportSnapshot(): boolean {
 
 export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkbenchProps = {}) {
   const [query, setQuery] = useState<string>("");
+  const [researchDepth, setResearchDepth] = useState<ResearchDepth>("deep");
   const [categories, setCategories] = useState<ReadonlySet<FindingCategory>>(() => new Set(DEFAULT_MODALITIES));
   const [report, setReport] = useState<Report | null>(null);
   const [trace, setTrace] = useState<TraceEvent[]>([]);
@@ -140,8 +171,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
   const applyReport = useCallback((nextReport: Report | null) => {
     setReport(nextReport);
     const nextGraph = graphFromReport(nextReport);
-    setGraph(nextGraph);
-    setSelectedNodeId((current) => (current && nextGraph?.nodes.some((node) => node.id === current) ? current : null));
+    setGraph((current) => mergeGraphSnapshot(current, nextGraph));
   }, []);
 
   const toggleModality = useCallback((id: FindingCategory) => {
@@ -201,11 +231,18 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     setRunStatus("running");
     setMessage("Searching public professional sources…");
     let terminalStatus: string | undefined;
+    let completedReport: Report | null = null;
+    const diagnosticCodes = new Set<string>();
     try {
       const response = await fetch("/api/research", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/x-ndjson" },
-        body: JSON.stringify({ query: trimmed, mode: "live", requestedCategories: [...categories] }),
+        body: JSON.stringify({
+          query: trimmed,
+          mode: "live",
+          requestedDepth: researchDepth,
+          requestedCategories: [...categories],
+        }),
         signal: controller.signal,
       });
       if (abortRef.current !== controller || controller.signal.aborted) return;
@@ -224,14 +261,24 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         for (const line of lines) {
           if (!line.trim()) continue;
           if (abortRef.current !== controller || controller.signal.aborted) return;
-          terminalStatus = ingestEvent(JSON.parse(line) as TraceEvent) ?? terminalStatus;
+          const streamed = JSON.parse(line) as TraceEvent;
+          traceDiagnostics(streamed).forEach((diagnostic) => diagnosticCodes.add(diagnostic.code));
+          completedReport = terminalReport(streamed) ?? completedReport;
+          terminalStatus = ingestEvent(streamed) ?? terminalStatus;
         }
         if (done) break;
       }
-      if (buffered.trim()) terminalStatus = ingestEvent(JSON.parse(buffered) as TraceEvent) ?? terminalStatus;
+      if (buffered.trim()) {
+        const streamed = JSON.parse(buffered) as TraceEvent;
+        traceDiagnostics(streamed).forEach((diagnostic) => diagnosticCodes.add(diagnostic.code));
+        completedReport = terminalReport(streamed) ?? completedReport;
+        terminalStatus = ingestEvent(streamed) ?? terminalStatus;
+      }
       if (abortRef.current !== controller || controller.signal.aborted) return;
       setRunStatus((current) => (current === "running" ? "complete" : current));
-      setMessage(runMessage(terminalStatus));
+      const hasDirectEvidence =
+        completedReport?.evidence?.some((evidence) => evidence.verificationMethod === "direct_fetch") ?? false;
+      setMessage(runMessage(terminalStatus, diagnosticCodes, hasDirectEvidence));
     } catch (error) {
       if (abortRef.current !== controller) return;
       if (controller.signal.aborted) {
@@ -354,6 +401,21 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
             spellCheck="false"
             aria-describedby="research-scope-note"
           />
+          <label className="sr-only" htmlFor="atlas-research-depth">
+            Research depth
+          </label>
+          <select
+            id="atlas-research-depth"
+            className="research-depth-select"
+            value={researchDepth}
+            onChange={(event) => setResearchDepth(event.target.value as ResearchDepth)}
+            disabled={runStatus === "running"}
+            title="Research depth"
+          >
+            <option value="quick">Quick</option>
+            <option value="standard">Standard</option>
+            <option value="deep">Deep</option>
+          </select>
           <kbd>/</kbd>
         </form>
         {runStatus === "running" ? (
@@ -376,11 +438,12 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
           type="button"
           onClick={() => setReportOpen(true)}
           disabled={!report}
+          aria-label="Report"
           title="Open intelligence report (R)"
         >
           <ReportIcon />
           <span>Report</span>
-          {exporting ? <i aria-label={`Exporting ${exporting}`} /> : null}
+          {exporting ? <i role="status" aria-label={`Exporting ${exporting}`} /> : null}
         </button>
       </header>
 
@@ -388,8 +451,8 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         <div className="workspace-status" role="status" aria-live="polite">
           <span className={`run-status-pip status-${runStatus}`} aria-hidden="true" />
           <strong>{humanize(reportStatus)}</strong>
-          <span>{message}</span>
-          <div>
+          <span className="workspace-message">{message}</span>
+          <div className="workspace-metrics">
             <span>{graphStatusLabel(graph, runStatus)}</span>
             <span>{formatDuration(elapsed)}</span>
             <span>{formatUsage(usage)}</span>
@@ -398,6 +461,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
 
         <div className="scope-row">
           <fieldset className="modality-toggles" aria-label="Research modalities">
+            <legend className="sr-only">Research modalities</legend>
             {MODALITIES.map((modality) => {
               const active = categories.has(modality.id);
               return (

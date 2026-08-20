@@ -8,6 +8,7 @@ import {
   SCHEMA_VERSION,
   type FindingCategory,
   type InvestigationInput,
+  type InvestigationReport,
   type JsonObject,
   type ResearchDepth,
   type TerminalStatus,
@@ -97,12 +98,12 @@ interface ResolvedLiveProvider {
  * Resolve the live model provider from the environment.
  *
  * Selection: an explicit LIVE_PROVIDER wins; otherwise Gemini is used when its
- * key is present (its generous free per-minute limits suit the many
- * planner/extraction calls), then OpenAI, then OpenRouter.
+ * key is present, then OpenAI, then OpenRouter. Health reports only whether a
+ * usable server-side configuration exists; it never discloses this selection.
  *
- * Gemini has no free web-search grounding, so its web-discovery turn is
- * delegated to OpenAI's web_search when an OpenAI key is also present (a hybrid
- * run: Gemini reasoning + OpenAI discovery).
+ * Gemini uses its native Google Search grounding path. Keeping reasoning and
+ * discovery on the same configured provider avoids turning an unrelated
+ * OpenAI quota failure into a fatal Gemini run.
  */
 function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider | null {
   const openaiKey = environment.OPENAI_API_KEY?.trim();
@@ -130,15 +131,6 @@ function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider 
       apiKey: geminiKey,
       model: environment.GEMINI_MODEL?.trim() || "gemini-3.6-flash",
       endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      // Gemini grounding needs billing; delegate discovery to OpenAI when available.
-      ...(openaiKey
-        ? {
-            searchProvider: "openai" as const,
-            searchApiKey: openaiKey,
-            searchModel: openaiSearchModel,
-            searchEndpoint: "https://api.openai.com/v1/chat/completions",
-          }
-        : {}),
     };
   };
 
@@ -394,6 +386,62 @@ function fallbackTerminalEvents(
   return events;
 }
 
+function reportMatchesRequest(report: InvestigationReport, input: InvestigationInput): boolean {
+  if (report.status === "blocked" && classifySafety(input).level === "block") {
+    return (
+      report.input.query === "[redacted: restricted personal content]" &&
+      report.target.rawInput === "[redacted: restricted personal content]"
+    );
+  }
+  const leftCategories = report.input.requestedCategories ?? [];
+  const rightCategories = input.requestedCategories ?? [];
+  return (
+    report.input.schemaVersion === input.schemaVersion &&
+    report.input.query === input.query &&
+    report.input.objective === input.objective &&
+    report.input.requestedDepth === input.requestedDepth &&
+    report.input.locale === input.locale &&
+    leftCategories.length === rightCategories.length &&
+    leftCategories.every((category, index) => category === rightCategories[index]) &&
+    JSON.stringify(report.target) === JSON.stringify(parseTarget(input))
+  );
+}
+
+function preservedTerminalEvents(
+  last: TraceEvent | null,
+  openSpans: readonly StreamSpan[],
+  terminal: TraceEvent,
+): TraceEvent[] {
+  const ids = runtimeIds();
+  const clock = runtimeClock();
+  let sequence = last?.seq ?? 0;
+  const elapsedMs = Math.max(last?.elapsedMs ?? 0, terminal.elapsedMs);
+  const events: TraceEvent[] = [...openSpans].reverse().map((span) => ({
+    schemaVersion: SCHEMA_VERSION,
+    seq: ++sequence,
+    eventId: ids.next("event"),
+    runId: terminal.runId,
+    timestamp: clock.now(),
+    elapsedMs,
+    kind: "span_end",
+    name: span.name,
+    phase: span.phase,
+    spanId: span.spanId,
+    parentSpanId: span.parentSpanId,
+    attempt: span.attempt,
+    status: "failed",
+    payload: { code: "stream_envelope_failure" },
+    usage: unavailableUsage("stream_envelope_failed_after_a_valid_terminal_report"),
+  }));
+  events.push({
+    ...terminal,
+    seq: ++sequence,
+    eventId: ids.next("event"),
+    elapsedMs,
+  });
+  return events;
+}
+
 export function traceNdjsonResponse(
   source: (signal: AbortSignal) => AsyncIterable<TraceEvent>,
   requestSignal: AbortSignal,
@@ -404,6 +452,7 @@ export function traceNdjsonResponse(
   const encoder = new TextEncoder();
   let last: TraceEvent | null = null;
   let terminalSeen = false;
+  let preservedTerminal: TraceEvent | null = null;
   const openSpans = new Map<string, StreamSpan>();
   const allowedEmails = new Set(
     parseTarget(input)
@@ -421,6 +470,16 @@ export function traceNdjsonResponse(
           if (last && (event.runId !== last.runId || event.seq !== last.seq + 1)) {
             throw new TypeError("trace source violated run or sequence ordering");
           }
+          if (event.name === "result.terminal") {
+            const report = event.payload.report;
+            if (!isInvestigationReport(report) || report.runId !== event.runId) {
+              throw new TypeError("terminal event did not contain a valid report for its run");
+            }
+            if (!reportMatchesRequest(report, input)) {
+              throw new TypeError("terminal report did not match the requested investigation input");
+            }
+            preservedTerminal = event;
+          }
           if (event.kind === "span_start" && event.spanId) {
             if (openSpans.has(event.spanId)) throw new TypeError("trace source started a duplicate span");
             openSpans.set(event.spanId, {
@@ -436,12 +495,6 @@ export function traceNdjsonResponse(
           if (event.name === "result.terminal" && openSpans.size > 0) {
             throw new TypeError("trace source reached terminal with open spans");
           }
-          if (event.name === "result.terminal") {
-            const report = event.payload.report;
-            if (!isInvestigationReport(report) || report.runId !== event.runId) {
-              throw new TypeError("terminal event did not contain a valid report for its run");
-            }
-          }
           last = event;
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
           if (event.name === "result.terminal") {
@@ -452,7 +505,11 @@ export function traceNdjsonResponse(
         if (!terminalSeen) throw new Error("trace source ended without a terminal event");
       } catch {
         if (!terminalSeen && !localAbort.signal.aborted) {
-          for (const event of fallbackTerminalEvents(last, [...openSpans.values()], input, combined.aborted)) {
+          const recovered =
+            preservedTerminal && !combined.aborted
+              ? preservedTerminalEvents(last, [...openSpans.values()], preservedTerminal)
+              : fallbackTerminalEvents(last, [...openSpans.values()], input, combined.aborted);
+          for (const event of recovered) {
             controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
           }
         }
@@ -563,7 +620,7 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
         422,
       );
     }
-    return traceNdjsonResponse(() => replayEvents(example.trace), request.signal, input);
+    return traceNdjsonResponse(() => replayEvents(example.trace), request.signal, example.input);
   }
 
   const liveEnabled = environment.ATLAS_LIVE_ENABLED?.trim() === "true";

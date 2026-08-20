@@ -200,6 +200,7 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
     {
       schemaVersion: domain.SCHEMA_VERSION,
       id: "action-role-fetch",
+      frontierEntryId: "action-role-fetch",
       tool: "fetch_public_source",
       purpose: "Bind the attested candidate to the exact fetched source.",
       arguments: {
@@ -208,6 +209,10 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
       },
       candidateId: candidate.id,
       budgetClass: "fetch",
+      sourceTier: 6,
+      sourceLaneId: "t6.candidate_public_source",
+      pathCost: 1,
+      mutated: false,
     },
     actionContext(engine),
   );
@@ -317,6 +322,7 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
     {
       schemaVersion: domain.SCHEMA_VERSION,
       id: "action-plain-fetch",
+      frontierEntryId: "action-plain-fetch",
       tool: "fetch_public_source",
       purpose: "Inspect the exact provider-attested lead without assuming identity.",
       arguments: {
@@ -325,6 +331,10 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
       },
       candidateId: primary.id,
       budgetClass: "fetch",
+      sourceTier: 6,
+      sourceLaneId: "t6.candidate_public_source",
+      pathCost: 1,
+      mutated: false,
     },
     actionContext(engine),
   );
@@ -334,11 +344,21 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
     direct.diagnostics.some((item) => item.code === "candidate_binding_strong_binding_missing"),
     true,
   );
-  assert.equal(direct.candidates.length, 1);
-  assert.equal(direct.evidence.length, 1);
-  assert.equal(direct.evidence[0].candidateId, undefined);
-  assert.equal(typeof direct.evidence[0].candidateRef, "string");
-  assert.equal(direct.evidence[0].excerpt, "Chris Anderson works at Acme Labs.");
+  assert.equal(direct.candidates, undefined);
+  assert.equal(direct.candidateBranches.length, 1);
+  assert.equal(direct.candidateBranches[0].parentCandidateId, primary.id);
+  assert.equal(direct.candidateBranches[0].reason, "fetched_subject_unverified");
+  assert.equal(direct.evidence.length, 2);
+  const metadataObservation = direct.evidence.find((item) => item.attributes.metadataObservation === true);
+  assert.ok(metadataObservation);
+  assert.equal(metadataObservation.candidateId, primary.id);
+  assert.equal(metadataObservation.disposition, "discovery_only");
+  assert.equal(metadataObservation.excerpt ?? null, null);
+  const quarantinedDraft = direct.evidence.find((item) => typeof item.candidateRef === "string");
+  assert.ok(quarantinedDraft);
+  assert.equal(quarantinedDraft.candidateId, undefined);
+  assert.equal(quarantinedDraft.attributes.quarantinedFromCandidateId, primary.id);
+  assert.equal(quarantinedDraft.excerpt, "Chris Anderson works at Acme Labs.");
   assert.equal(
     engine
       .snapshot()
@@ -346,8 +366,8 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
     true,
   );
 
-  const quarantined = engine.addCandidate(direct.candidates[0]).candidate;
-  const quoted = { ...direct.evidence[0] };
+  const quarantined = engine.addCandidate(direct.candidateBranches[0].candidate).candidate;
+  const quoted = { ...quarantinedDraft };
   delete quoted.candidateRef;
   assert.equal(engine.admitEvidence({ ...quoted, candidateId: quarantined.id }).admitted, true);
   assert.notEqual(quarantined.id, primary.id);
