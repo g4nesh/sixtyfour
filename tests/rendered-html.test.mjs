@@ -141,6 +141,10 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(canvas, /ORTHOGONAL/);
   assert.match(canvas, /isCollisionFreeGraphLayout/);
   assert.match(canvas, /style: \{ width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT \}/);
+  assert.match(canvas, /GRAPH_FIT_MIN_ZOOM = 0\.46/);
+  assert.match(canvas, /GRAPH_FIT_MIN_ZOOM_COMPACT = 0\.62/);
+  assert.match(canvas, /minZoom: readableFitMinimum\(\)/);
+  assert.match(canvas, /crossingMinimization\.forceNodeModelOrder": "false"/);
   assert.match(canvas, /nodesDraggable=\{false\}/);
   assert.match(canvas, /nodesFocusable=\{false\}/);
   assert.match(inspector, /nodeRelationships/);
@@ -151,6 +155,14 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(css, /\.atlas-shell/);
   assert.match(css, /\.graph-list-view/);
   assert.match(css, /\.status-rejected/);
+  assert.match(css, /grid-template-rows:\s*0\.875rem minmax\(0, 2rem\) 0\.875rem/);
+  assert.match(css, /\.source-ladder ol\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(css, /\.source-ladder:not\(\.is-collapsed\) ol\s*\{\s*display:\s*flex/);
+  assert.doesNotMatch(css, /\.source-ladder ol\s*\{\s*display:\s*flex/);
+  assert.match(css, /:has\(\.source-ladder\.is-collapsed\) \.graph-canvas\s*\{\s*top:\s*13\.5rem/);
+  assert.match(css, /\.atlas-flow-controls\s*\{\s*display:\s*none !important/);
+  assert.match(css, /\.graph-legend\s*\{\s*display:\s*none/);
+  assert.match(css, /:has\(\.node-inspector:not\(\.inspector-empty\)\) \.graph-canvas/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /prefers-contrast:\s*more/);
   assert.match(css, /@media \(max-width: 700px\)/);

@@ -5,10 +5,8 @@ import {
   Background,
   BackgroundVariant,
   BaseEdge,
-  Controls,
   Handle,
   MarkerType,
-  MiniMap,
   Position,
   ReactFlow,
   ReactFlowProvider,
@@ -35,6 +33,7 @@ import {
   nodeDetail,
   nodePathCost,
   nodeVisualStatus,
+  unrelatedEdgeCrossings,
   type CanonicalSearchGraph,
   type GraphLayout,
   type GraphPoint,
@@ -71,6 +70,19 @@ const statusColor: Record<GraphVisualStatus, string> = {
   rejected: "#e47670",
   exhausted: "#727e76",
 };
+
+// A literal fit of a dense live graph can make a 300 x 96 card smaller than a
+// status pip. Keep the automatic and explicit fit actions readable instead;
+// the full topology remains available by panning (and deliberate zooming).
+const GRAPH_FIT_MIN_ZOOM = 0.46;
+const GRAPH_FIT_MIN_ZOOM_COMPACT = 0.62;
+const GRAPH_COMPACT_MEDIA_QUERY = "(max-width: 700px)";
+
+function readableFitMinimum(): number {
+  return window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY).matches
+    ? GRAPH_FIT_MIN_ZOOM_COMPACT
+    : GRAPH_FIT_MIN_ZOOM;
+}
 
 function flowNodes(graph: CanonicalSearchGraph, layout: GraphLayout, selectedNodeId: string | null, focusedStableId: string | null, onSelect: (id: string) => void): AtlasFlowNode[] {
   return graph.nodes.flatMap((node) => {
@@ -205,7 +217,7 @@ async function elkGraphLayout(graph: CanonicalSearchGraph): Promise<GraphLayout 
       "elk.layered.spacing.edgeEdgeBetweenLayers": "18",
       "elk.layered.mergeEdges": "false",
       "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
-      "elk.layered.crossingMinimization.forceNodeModelOrder": "true",
+      "elk.layered.crossingMinimization.forceNodeModelOrder": "false",
       "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
       "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
     },
@@ -238,7 +250,10 @@ async function elkGraphLayout(graph: CanonicalSearchGraph): Promise<GraphLayout 
     routes,
     source: "elk",
   };
-  return isCollisionFreeGraphLayout(graph, layout) ? layout : null;
+  return isCollisionFreeGraphLayout(graph, layout)
+    && unrelatedEdgeCrossings(graph, layout).length === 0
+    ? layout
+    : null;
 }
 
 function GraphCanvasInner({ graph, selectedNodeId, onSelectNode, focusedStableId, fitRequest }: {
@@ -288,24 +303,27 @@ function GraphCanvasInner({ graph, selectedNodeId, onSelectNode, focusedStableId
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      void instanceRef.current?.fitView({ padding: 0.14, duration: 180, minZoom: 0.06, maxZoom: 0.92 });
+      // Live snapshots can arrive faster than a fit animation completes. An
+      // immediate bounded fit prevents overlapping viewport tweens from
+      // briefly shrinking every card below the readability floor.
+      void instanceRef.current?.fitView({ padding: 0.18, minZoom: readableFitMinimum(), maxZoom: 0.92 });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeLayout.source, activeLayout.topologyKey]);
 
   useEffect(() => {
     if (fitRequest <= 0) return;
-    void instanceRef.current?.fitView({ padding: 0.16, duration: 260, minZoom: 0.08, maxZoom: 1.1 });
+    void instanceRef.current?.fitView({ padding: 0.2, duration: 260, minZoom: readableFitMinimum(), maxZoom: 1.1 });
   }, [fitRequest]);
 
   const handleInit = useCallback((instance: ReactFlowInstance<AtlasFlowNode, AtlasFlowEdge>) => {
     instanceRef.current = instance;
     if (didInitialFit.current) return;
     didInitialFit.current = true;
-    requestAnimationFrame(() => void instance.fitView({ padding: 0.18, minZoom: 0.08, maxZoom: 0.9 }));
+    requestAnimationFrame(() => void instance.fitView({ padding: 0.2, minZoom: readableFitMinimum(), maxZoom: 0.9 }));
   }, []);
 
-  return <div className="graph-canvas" data-testid="canonical-graph-canvas">
+  return <div className="graph-canvas" data-testid="canonical-graph-canvas" data-layout-source={activeLayout.source}>
     <ReactFlow<AtlasFlowNode, AtlasFlowEdge>
       nodes={preparedNodes}
       edges={preparedEdges}
@@ -314,7 +332,7 @@ function GraphCanvasInner({ graph, selectedNodeId, onSelectNode, focusedStableId
       onInit={handleInit}
       onPaneClick={() => onSelectNode(null)}
       onNodeClick={(_, node) => onSelectNode(node.id)}
-      minZoom={0.04}
+      minZoom={0.24}
       maxZoom={2}
       panOnScroll
       selectionOnDrag
@@ -327,11 +345,6 @@ function GraphCanvasInner({ graph, selectedNodeId, onSelectNode, focusedStableId
       defaultEdgeOptions={{ interactionWidth: 18 }}
     >
       <Background variant={BackgroundVariant.Dots} gap={24} size={0.75} color="rgba(114, 126, 118, 0.18)" />
-      <Controls className="atlas-flow-controls" showInteractive={false} />
-      <MiniMap className="atlas-minimap" nodeColor={(node) => {
-        const source = node.data?.source as SearchGraphNode | undefined;
-        return source ? statusColor[nodeVisualStatus(source)] : "#727e76";
-      }} nodeStrokeWidth={1} maskColor="rgba(3, 6, 4, .78)" pannable zoomable ariaLabel="Search graph minimap" />
     </ReactFlow>
   </div>;
 }

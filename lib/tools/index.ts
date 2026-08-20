@@ -1,4 +1,5 @@
 export * from "./contracts";
+export * from "./duckduckgo-search";
 export * from "./github-codegraph";
 export * from "./github-user-search";
 export * from "./hardened-fetch";

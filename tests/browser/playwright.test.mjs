@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chromium } from "playwright";
 import {
+  chromeChromeCollisions,
   chromeSelectors,
   denseReplayFixture,
   graphChromeCollisions,
@@ -13,6 +14,145 @@ const viewports = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
 ];
+
+function installStreamedResearchFixture({ events, delayMs }) {
+  const nativeFetch = window.fetch.bind(window);
+  window.__atlasFixtureRequest = null;
+  window.__atlasFixtureEmitted = 0;
+  window.fetch = (input, init) => {
+    const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const url = new URL(rawUrl, window.location.href);
+    if (url.pathname !== "/api/research") return nativeFetch(input, init);
+    try {
+      window.__atlasFixtureRequest = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
+    } catch {
+      window.__atlasFixtureRequest = null;
+    }
+    const encoder = new TextEncoder();
+    let canceled = false;
+    let nextIndex = 0;
+    const stream = new ReadableStream({
+      start(controller) {
+        const emit = () => {
+          if (canceled) return;
+          if (nextIndex >= events.length) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(encoder.encode(`${JSON.stringify(events[nextIndex])}\n`));
+          nextIndex += 1;
+          window.__atlasFixtureEmitted = nextIndex;
+          if (nextIndex >= events.length) window.setTimeout(() => controller.close(), delayMs);
+        };
+        window.__atlasFixtureAdvance = () => window.setTimeout(emit, delayMs);
+        emit();
+      },
+      cancel() { canceled = true; },
+    });
+    return Promise.resolve(new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" },
+    }));
+  };
+}
+
+function startLiveGeometrySampler(selectors) {
+  const rectangle = (element) => {
+    const value = element.getBoundingClientRect();
+    return { left: value.left, top: value.top, right: value.right, bottom: value.bottom };
+  };
+  const intersects = (left, right, tolerance = 0.75) =>
+    Math.min(left.right, right.right) - Math.max(left.left, right.left) > tolerance
+    && Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top) > tolerance;
+  const clippedTo = (value, clip) => ({
+    left: Math.max(value.left, clip.left),
+    top: Math.max(value.top, clip.top),
+    right: Math.min(value.right, clip.right),
+    bottom: Math.min(value.bottom, clip.bottom),
+  });
+  window.__atlasLiveGeometry = { positiveCounts: [], failures: [] };
+  const recordFailure = (message) => {
+    if (!window.__atlasLiveGeometry.failures.includes(message)) {
+      window.__atlasLiveGeometry.failures.push(message);
+    }
+  };
+  const sample = () => {
+    const canvasElement = document.querySelector(".graph-canvas");
+    const canvas = canvasElement ? rectangle(canvasElement) : null;
+    const nodes = [...document.querySelectorAll(".react-flow__node")].map((element) => ({
+      id: element.getAttribute("data-id") ?? "unknown-node",
+      element,
+      rect: rectangle(element),
+    }));
+    if (nodes.length > 0 && !window.__atlasLiveGeometry.positiveCounts.includes(nodes.length)) {
+      window.__atlasLiveGeometry.positiveCounts.push(nodes.length);
+    }
+    for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) {
+        if (intersects(nodes[leftIndex].rect, nodes[rightIndex].rect)) {
+          recordFailure(`node overlap: ${nodes[leftIndex].id} / ${nodes[rightIndex].id}`);
+        }
+      }
+      if (nodes[leftIndex].rect.right - nodes[leftIndex].rect.left < 120
+        || nodes[leftIndex].rect.bottom - nodes[leftIndex].rect.top < 38) {
+        recordFailure(`unreadable node scale: ${nodes[leftIndex].id}`);
+      }
+      const button = nodes[leftIndex].element.querySelector("button");
+      if (button) {
+        const blocks = [...button.querySelectorAll(":scope > .node-topline, :scope > strong, :scope > .node-bottomline")]
+          .map((element) => rectangle(element));
+        for (let index = 0; index < blocks.length - 1; index += 1) {
+          if (blocks[index].bottom > blocks[index + 1].top + 0.75) {
+            recordFailure(`node text overlap: ${nodes[leftIndex].id}`);
+          }
+        }
+      }
+    }
+    const chrome = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        const bounds = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && bounds.width > 0 && bounds.height > 0;
+      })
+      .map((element) => ({ selector, rect: rectangle(element) })));
+    for (const node of nodes) {
+      for (const item of chrome) {
+        const visibleNode = canvas ? clippedTo(node.rect, canvas) : node.rect;
+        if (intersects(visibleNode, item.rect)) recordFailure(`chrome overlap: ${node.id} / ${item.selector}`);
+      }
+    }
+    for (let leftIndex = 0; leftIndex < chrome.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < chrome.length; rightIndex += 1) {
+        if (intersects(chrome[leftIndex].rect, chrome[rightIndex].rect)) {
+          recordFailure(`chrome/chrome overlap: ${chrome[leftIndex].selector} / ${chrome[rightIndex].selector}`);
+        }
+      }
+    }
+    if (document.documentElement.scrollWidth !== window.innerWidth || document.body.scrollWidth !== window.innerWidth) {
+      recordFailure("horizontal overflow");
+    }
+    if (window.__atlasLiveGeometry.failures.length > 100) window.__atlasLiveGeometry.failures.length = 100;
+  };
+  window.__atlasLiveGeometryTimer = window.setInterval(sample, 75);
+  sample();
+}
+
+function stopLiveGeometrySampler() {
+  window.clearInterval(window.__atlasLiveGeometryTimer);
+  return window.__atlasLiveGeometry;
+}
+
+function searchGraphFromEvent(event) {
+  return event.payload?.searchGraph ?? event.payload?.report?.searchGraph ?? null;
+}
+
+function diagnosticsFromEvents(events) {
+  return events.flatMap((event) => Array.isArray(event.payload?.diagnostics) ? event.payload.diagnostics : []);
+}
+
+function evidenceUrl(evidence) {
+  return evidence?.canonicalUrl ?? evidence?.sourceUrl ?? evidence?.url ?? evidence?.source?.canonicalUrl ?? evidence?.source?.url;
+}
 
 async function assertServerReady() {
   try {
@@ -38,6 +178,8 @@ async function renderedLayout(page, graph) {
       };
     };
     const nodeElements = [...document.querySelectorAll(".react-flow__node")];
+    const canvasElement = document.querySelector(".graph-canvas");
+    const canvas = canvasElement ? rect(canvasElement, "graph-canvas") : null;
     const nodes = nodeElements.map((element) => ({
       ...rect(element, element.getAttribute("data-id") ?? "unknown-node"),
       layoutWidth: element.offsetWidth,
@@ -45,7 +187,28 @@ async function renderedLayout(page, graph) {
       button: element.querySelector("button")
         ? rect(element.querySelector("button"), `${element.getAttribute("data-id")}:button`)
         : null,
+      textCollisions: (() => {
+        const button = element.querySelector("button");
+        if (!button) return ["missing button"];
+        const blocks = [...button.querySelectorAll(":scope > .node-topline, :scope > strong, :scope > .node-bottomline")]
+          .map((child, index) => rect(child, `${element.getAttribute("data-id")}:text:${index}`));
+        return blocks.slice(0, -1).flatMap((block, index) =>
+          block.bottom > blocks[index + 1].top + 0.75 ? [`${block.id}/${blocks[index + 1].id}`] : []);
+      })(),
     }));
+    const visibleNodes = nodes.flatMap((node) => {
+      if (!canvas) return [node];
+      const visible = {
+        ...node,
+        left: Math.max(node.left, canvas.left),
+        top: Math.max(node.top, canvas.top),
+        right: Math.min(node.right, canvas.right),
+        bottom: Math.min(node.bottom, canvas.bottom),
+      };
+      visible.width = Math.max(0, visible.right - visible.left);
+      visible.height = Math.max(0, visible.bottom - visible.top);
+      return visible.width > 0 && visible.height > 0 ? [visible] : [];
+    });
     const chrome = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]
       .filter((element) => {
         const style = getComputedStyle(element);
@@ -88,6 +251,7 @@ async function renderedLayout(page, graph) {
     }
     return {
       nodes,
+      visibleNodes,
       chrome,
       edgeNodeCrossings,
       documentWidth: document.documentElement.scrollWidth,
@@ -102,14 +266,18 @@ function assertLayout(layout, graph, viewport) {
   assert.equal(layout.documentWidth, layout.viewportWidth, `${viewport.name}: document overflowed horizontally`);
   assert.equal(layout.bodyWidth, layout.viewportWidth, `${viewport.name}: body overflowed horizontally`);
   assert.deepEqual(intersectingRectangles(layout.nodes), [], `${viewport.name}: graph nodes overlap`);
-  assert.deepEqual(graphChromeCollisions(layout.nodes, layout.chrome), [], `${viewport.name}: nodes overlap fixed graph chrome`);
+  assert.deepEqual(graphChromeCollisions(layout.visibleNodes, layout.chrome), [], `${viewport.name}: visible nodes overlap fixed graph chrome`);
+  assert.deepEqual(chromeChromeCollisions(layout.chrome), [], `${viewport.name}: fixed graph chrome overlaps itself`);
   assert.deepEqual(layout.edgeNodeCrossings, [], `${viewport.name}: an edge crosses an unrelated node`);
   assert.equal(new Set(layout.nodes.map((node) => node.layoutWidth)).size, 1, `${viewport.name}: node layout widths diverged`);
   assert.equal(new Set(layout.nodes.map((node) => node.layoutHeight)).size, 1, `${viewport.name}: node layout heights diverged`);
   for (const node of layout.nodes) {
     assert.ok(node.layoutWidth >= 220 && node.layoutWidth <= 360, `${viewport.name}: ${node.id} has an invalid layout width ${node.layoutWidth}`);
     assert.ok(node.layoutHeight >= 72 && node.layoutHeight <= 120, `${viewport.name}: ${node.id} has an invalid layout height ${node.layoutHeight}`);
+    assert.ok(node.width >= 120, `${viewport.name}: ${node.id} rendered too narrowly to read (${node.width}px)`);
+    assert.ok(node.height >= 38, `${viewport.name}: ${node.id} rendered too short to read (${node.height}px)`);
     assert.ok(node.button, `${viewport.name}: ${node.id} has no interactive card`);
+    assert.deepEqual(node.textCollisions, [], `${viewport.name}: ${node.id} has overlapping text regions`);
     assert.ok(node.button.left >= node.left - 1 && node.button.right <= node.right + 1, `${viewport.name}: ${node.id} card escapes horizontally`);
     assert.ok(node.button.top >= node.top - 1 && node.button.bottom <= node.bottom + 1, `${viewport.name}: ${node.id} card escapes vertically`);
   }
@@ -124,7 +292,6 @@ test("dense intercepted NDJSON has collision-free desktop and mobile graph geome
       const page = await browser.newPage({ viewport });
       const consoleIssues = [];
       const pageErrors = [];
-      let researchRequest = null;
       page.on("console", (message) => {
         if (["warning", "error"].includes(message.type())) consoleIssues.push(`${message.type()}: ${message.text()}`);
       });
@@ -134,31 +301,49 @@ test("dense intercepted NDJSON has collision-free desktop and mobile graph geome
         contentType: "application/json",
         body: JSON.stringify({ status: "ok", liveConfigured: true }),
       }));
-      await page.route("**/api/research", async (route) => {
-        researchRequest = route.request().postDataJSON();
-        await route.fulfill({
-          status: 200,
-          headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" },
-          body: fixture.ndjson,
-        });
-      });
       try {
         const healthResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/health");
         await page.goto(baseUrl.href, { waitUntil: "domcontentloaded" });
         await healthResponse;
+        await page.evaluate(installStreamedResearchFixture, { events: fixture.events, delayMs: 50 });
+        await page.evaluate(startLiveGeometrySampler, chromeSelectors);
         const searchbox = page.getByRole("searchbox", { name: "Public-professional research input" });
         await searchbox.fill("Chris Anderson, TED");
         assert.equal(await searchbox.inputValue(), "Chris Anderson, TED");
-        const researchResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/research");
         await page.getByRole("button", { name: "Research", exact: true }).click();
-        await researchResponse;
-        await page.locator(".react-flow__node").nth(fixture.graph.nodes.length - 1).waitFor({ timeout: 20_000 });
-        await page.locator(".graph-fit-button").click();
-        await page.waitForTimeout(900);
+        const checkpointGraphs = fixture.events.map(searchGraphFromEvent).filter(Boolean);
+        for (let index = 0; index < checkpointGraphs.length; index += 1) {
+          const checkpoint = checkpointGraphs[index];
+          await page.waitForFunction(({ emitted, count }) =>
+            window.__atlasFixtureEmitted === emitted
+            && document.querySelectorAll(".react-flow__node").length === count,
+          { emitted: index + 1, count: checkpoint.nodes.length }, { timeout: 20_000 });
+          await page.waitForTimeout(350);
+          await page.waitForFunction(() => document.querySelector(".graph-canvas")?.getAttribute("data-layout-source") === "elk", undefined, { timeout: 5_000 });
+          await page.locator(".graph-fit-button").click();
+          await page.waitForTimeout(450);
+          assertLayout(await renderedLayout(page, checkpoint), checkpoint, viewport);
+          if (index < checkpointGraphs.length - 1) await page.evaluate(() => window.__atlasFixtureAdvance());
+        }
+        const researchRequest = await page.evaluate(() => window.__atlasFixtureRequest);
         assert.equal(researchRequest?.query, "Chris Anderson, TED");
         assert.equal(researchRequest?.mode, "live");
-        const layout = await renderedLayout(page, fixture.graph);
-        assertLayout(layout, fixture.graph, viewport);
+        assert.equal(researchRequest?.requestedDepth, "quick", "interactive research must use the bounded quick-depth contract");
+        if (viewport.name === "mobile") {
+          const ladder = page.locator(".source-ladder");
+          assert.equal(await ladder.locator(".source-ladder-toggle").getAttribute("aria-expanded"), "false");
+          assert.equal(await ladder.locator("ol").evaluate((element) => getComputedStyle(element).display), "none", "mobile collapsed ladder content must remain hidden");
+        }
+        const streamedGeometry = await page.evaluate(stopLiveGeometrySampler);
+        assert.deepEqual(streamedGeometry.positiveCounts, checkpointGraphs.map((graph) => graph.nodes.length), `${viewport.name}: every streamed topology must be observed`);
+        assert.deepEqual(streamedGeometry.failures, [], `${viewport.name}: streamed geometry must remain collision-free and readable`);
+        if (viewport.name === "desktop") {
+          const zoomedViewport = { name: "desktop at 200% page zoom", width: 720, height: 450 };
+          await page.setViewportSize(zoomedViewport);
+          await page.locator(".graph-fit-button").click();
+          await page.waitForTimeout(500);
+          assertLayout(await renderedLayout(page, fixture.graph), fixture.graph, zoomedViewport);
+        }
         assert.deepEqual(consoleIssues, [], `${viewport.name}: browser console warnings/errors`);
         assert.deepEqual(pageErrors, [], `${viewport.name}: uncaught page errors`);
       } catch (error) {
@@ -177,24 +362,46 @@ test("dense intercepted NDJSON has collision-free desktop and mobile graph geome
   }
 });
 
-test("credentialed live contract returns fetched citations and grounded findings", {
+test("credentialed live browser streams genuine public-web discovery, fetched citations, and grounded findings", {
   skip: process.env.ATLAS_LIVE_E2E !== "1",
-  timeout: 300_000,
-}, async () => {
+  timeout: 360_000,
+}, async (context) => {
   const query = process.env.ATLAS_LIVE_E2E_QUERY?.trim() || "Chris Anderson, TED";
-  const response = await fetch(new URL("/api/research", baseUrl), {
-    method: "POST",
-    headers: { accept: "application/x-ndjson", "content-type": "application/json" },
-    body: JSON.stringify({
-      query,
-      mode: "live",
-      requestedDepth: "standard",
-      requestedCategories: ["identity", "employment", "online_presence"],
-    }),
-    signal: AbortSignal.timeout(285_000),
+  await assertServerReady();
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: viewports[1] });
+  context.after(async () => browser.close());
+  const consoleIssues = [];
+  const pageErrors = [];
+  page.on("console", (message) => {
+    if (["warning", "error"].includes(message.type())) consoleIssues.push(`${message.type()}: ${message.text()}`);
   });
-  const responseBody = await response.text();
-  assert.equal(response.ok, true, `live API returned HTTP ${response.status}: ${responseBody}`);
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  let responseBody = "";
+  try {
+    const healthPromise = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/health");
+    await page.goto(baseUrl.href, { waitUntil: "domcontentloaded" });
+    const health = await (await healthPromise).json();
+    assert.equal(health.liveConfigured, true, "localhost live mode is not configured");
+    assert.equal("model" in health, false, "health response exposed provider/model configuration");
+    await page.evaluate(startLiveGeometrySampler, chromeSelectors);
+    await page.getByRole("searchbox", { name: "Public-professional research input" }).fill(query);
+    const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/research", { timeout: 30_000 });
+    await page.getByRole("button", { name: "Research", exact: true }).click();
+    const response = await responsePromise;
+    assert.equal(response.ok(), true, `live API returned HTTP ${response.status()}`);
+    await page.getByRole("button", { name: "Report", exact: true }).waitFor({ state: "visible", timeout: 300_000 });
+    await page.waitForFunction(() => {
+      const report = document.querySelector(".report-button");
+      const run = document.querySelector(".run-button");
+      return report instanceof HTMLButtonElement && !report.disabled && run?.textContent?.includes("Research");
+    }, undefined, { timeout: 300_000 });
+    responseBody = await response.text();
+  } catch (error) {
+    const screenshot = "/private/tmp/atlas-browser-live-failure.png";
+    await page.screenshot({ path: screenshot, fullPage: true }).catch(() => undefined);
+    throw new Error(`credentialed live browser run failed; screenshot: ${screenshot}; console: ${JSON.stringify(consoleIssues)}; page errors: ${JSON.stringify(pageErrors)}`, { cause: error });
+  }
   const events = responseBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
   assert.deepEqual(events.map((event) => event.seq), Array.from({ length: events.length }, (_, index) => index + 1));
   const terminalEvents = events.filter((event) => event.name === "result.terminal");
@@ -210,6 +417,34 @@ test("credentialed live contract returns fetched citations and grounded findings
   assert.ok(search, "no successful search_web span was recorded");
   assert.ok(search.usage?.searchCalls >= 1, "search_web did not account for a search call");
   assert.ok(search.usage?.networkRequests >= 1, "search_web did not account for a network request");
+
+  const diagnostics = diagnosticsFromEvents(events);
+  const diagnosticCodes = new Set(diagnostics.map((diagnostic) => diagnostic.code));
+  const discoveryEvidence = report.evidence.filter((evidence) => evidence.verificationMethod === "search_discovery");
+  const publicWebProviders = new Set([
+    "gemini:google_search",
+    "openai:web_search",
+    "openrouter:web_search",
+    "duckduckgo:html_search",
+  ]);
+  const observedPublicWebProviders = new Set(discoveryEvidence
+    .map((evidence) => evidence.attributes?.provider)
+    .filter((provider) => publicWebProviders.has(provider)));
+  assert.ok(observedPublicWebProviders.size >= 1, "search succeeded without provider-native or bounded public-web discovery provenance");
+  assert.equal(
+    discoveryEvidence.every((evidence) => evidence.attributes?.provider !== "github:public_user_search")
+      || observedPublicWebProviders.size > 0,
+    true,
+    "GitHub exact-name lookup cannot be the only successful web discovery surface",
+  );
+  if (diagnosticCodes.has("search_provider_quota_exhausted") || diagnosticCodes.has("search_provider_unavailable")) {
+    assert.ok(observedPublicWebProviders.has("duckduckgo:html_search"), "provider outage did not fail over to genuine public-web discovery");
+    assert.ok(
+      diagnosticCodes.has("public_web_fallback_used") || diagnosticCodes.has("duckduckgo_html_fallback_used"),
+      "public-web fallback use was not diagnosed",
+    );
+    assert.match(await page.locator(".workspace-message").innerText(), /public-web fallback/i, "degraded provider state was hidden from the run banner");
+  }
 
   const fetchSpan = events.find((event) =>
     event.kind === "span_end"
@@ -233,4 +468,44 @@ test("credentialed live contract returns fetched citations and grounded findings
   const directIds = new Set(directEvidence.map((evidence) => evidence.id));
   assert.ok(report.findings.length >= 1, "report has no grounded finding");
   assert.ok(report.findings.some((finding) => finding.evidenceIds?.some((id) => directIds.has(id))), "no finding cites direct evidence");
+
+  const finalGraph = report.searchGraph;
+  assert.ok(finalGraph?.nodes?.length > 0, "live terminal omitted its nonempty graph");
+  await page.waitForFunction(() => document.querySelector(".graph-canvas")?.getAttribute("data-layout-source") === "elk", undefined, { timeout: 10_000 });
+  const liveGeometry = await page.evaluate(stopLiveGeometrySampler);
+  assert.ok(liveGeometry.positiveCounts.length >= 2, `live UI did not visibly stream graph growth: ${JSON.stringify(liveGeometry.positiveCounts)}`);
+  assert.deepEqual(liveGeometry.failures, [], "live mobile graph overlapped, overflowed, or became unreadable while streaming");
+  await page.locator(".graph-fit-button").click();
+  await page.waitForTimeout(500);
+  assertLayout(await renderedLayout(page, finalGraph), finalGraph, viewports[1]);
+  await page.setViewportSize(viewports[0]);
+  await page.locator(".graph-fit-button").click();
+  await page.waitForTimeout(500);
+  assertLayout(await renderedLayout(page, finalGraph), finalGraph, viewports[0]);
+
+  const ladder = page.locator(".source-ladder");
+  await page.waitForFunction(() => document.querySelector(".source-ladder-toggle")?.getAttribute("aria-expanded") === "true");
+  const ladderText = await ladder.innerText();
+  assert.match(ladderText, /(?:cited|lead|tr(?:y|ies))/i, "source ladder hid all attempts, leads, and citations");
+
+  await page.getByRole("button", { name: "Report", exact: true }).click();
+  const reportDialog = page.getByRole("dialog", { name: query });
+  await reportDialog.waitFor({ state: "visible" });
+  const directUrls = new Set(directEvidence.map(evidenceUrl));
+  const ledgerUrls = new Set(await reportDialog.locator(".evidence-source-link").evaluateAll((anchors) => anchors.map((anchor) => anchor.href)));
+  for (const url of directUrls) assert.ok(ledgerUrls.has(url), `report evidence ledger omitted direct citation ${url}`);
+  const citedDirectUrls = new Set(report.findings.flatMap((finding) => finding.evidenceIds ?? [])
+    .filter((id) => directIds.has(id))
+    .map((id) => evidenceUrl(report.evidence.find((evidence) => evidence.id === id))));
+  const findingUrls = new Set(await reportDialog.locator(".source-cite").evaluateAll((anchors) => anchors.map((anchor) => anchor.href)));
+  for (const url of citedDirectUrls) assert.ok(findingUrls.has(url), `rendered finding omitted its direct source ${url}`);
+  assert.equal(await reportDialog.locator(".report-evidence-list .is-discovery-lead").count(), discoveryEvidence.length, "discovery-only evidence was not visibly separated");
+  assert.equal(await reportDialog.locator(".evidence-source-link").evaluateAll((anchors) => anchors.some((anchor) => /^Public source at /i.test(anchor.textContent ?? ""))), false, "report rendered a placeholder source title");
+  await page.getByRole("button", { name: "Close report" }).click();
+  if (diagnostics.some((diagnostic) => diagnostic.severity !== "info")) {
+    await page.locator(".trace-rail-handle").click();
+    assert.ok(await page.locator(".trace-event-list .has-diagnostic").count() >= 1, "trace hid live diagnostics");
+  }
+  assert.deepEqual(consoleIssues, [], "live browser emitted console warnings/errors");
+  assert.deepEqual(pageErrors, [], "live browser emitted uncaught errors");
 });

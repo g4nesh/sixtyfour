@@ -22,8 +22,10 @@ Usage:
   npm run atlas -- research [--mode replay|live] [--example <id>] [--depth quick|standard|deep] [--ndjson] <query>
 
 Replay is the default and performs zero network requests. Live mode requires
-OPENROUTER_API_KEY in the server process environment. Ctrl-C propagates
-cancellation to the same engine used by the HTTP API.
+a server-side Gemini, OpenAI, or OpenRouter key in the process environment.
+Use LIVE_PROVIDER=gemini|openai|openrouter to prefer one when its key is configured;
+otherwise Atlas selects the first configured provider in its documented order.
+Ctrl-C propagates cancellation to the same engine used by the HTTP API.
 `;
 
 function parseArguments(arguments_: string[]): ParsedArguments {
@@ -155,6 +157,13 @@ async function research(arguments_: ParsedArguments): Promise<number> {
         // An explicit CLI `--mode live` is the local operator opt-in. Public
         // HTTP ingress remains disabled unless its server binding is enabled.
         ATLAS_LIVE_ENABLED: arguments_.mode === "live" ? "true" : undefined,
+        LIVE_PROVIDER: process.env.LIVE_PROVIDER,
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+        OPENAI_MODEL: process.env.OPENAI_MODEL,
+        OPENAI_SEARCH_MODEL: process.env.OPENAI_SEARCH_MODEL,
+        OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+        GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+        GEMINI_MODEL: process.env.GEMINI_MODEL,
         OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
         OPENROUTER_MODEL: process.env.OPENROUTER_MODEL,
         OPENROUTER_SITE_URL: process.env.OPENROUTER_SITE_URL,

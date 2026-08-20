@@ -44,6 +44,14 @@ export interface GraphLayout {
   source: "deterministic" | "elk";
 }
 
+export interface GraphEdgeCrossing {
+  leftEdgeId: string;
+  rightEdgeId: string;
+  leftSegmentIndex: number;
+  rightSegmentIndex: number;
+  point: GraphPoint;
+}
+
 export function nodeVisualStatus(node: SearchGraphNode): GraphVisualStatus {
   return node.kind === "seed" ? "seed" : node.status;
 }
@@ -232,6 +240,14 @@ export function nodePriority(graph: CanonicalSearchGraph, node: SearchGraphNode)
 }
 
 export function nodeDetail(graph: CanonicalSearchGraph, node: SearchGraphNode): string | undefined {
+  if (
+    (node.kind === "source" || node.kind === "evidence")
+    && node.data.sourceType === "search_result"
+    && typeof node.data.classifiedSourceTier === "number"
+  ) {
+    const lane = stringValue(node.data.classifiedSourceLaneId)?.split(".").slice(1).join(" ");
+    return `Unverified discovery lead · classified T${node.data.classifiedSourceTier}${lane ? ` ${lane}` : ""}`;
+  }
   const entry = frontierForNode(graph, node);
   if (entry?.intent) return entry.intent;
   const allowedKeys = ["description", "summary", "claim", "sourceFamily", "queryHint", "url"];
@@ -420,6 +436,86 @@ function pointOnRectangleBoundary(point: GraphPoint, rectangle: GraphRectangle):
   const withinVertical = point.y >= rectangle.top - epsilon && point.y <= rectangle.bottom + epsilon;
   return (withinVertical && (Math.abs(point.x - rectangle.left) <= epsilon || Math.abs(point.x - rectangle.right) <= epsilon))
     || (withinHorizontal && (Math.abs(point.y - rectangle.top) <= epsilon || Math.abs(point.y - rectangle.bottom) <= epsilon));
+}
+
+function properOrthogonalSegmentCrossing(
+  leftStart: GraphPoint,
+  leftEnd: GraphPoint,
+  rightStart: GraphPoint,
+  rightEnd: GraphPoint,
+): GraphPoint | null {
+  const epsilon = 0.001;
+  const leftVertical = Math.abs(leftStart.x - leftEnd.x) <= epsilon
+    && Math.abs(leftStart.y - leftEnd.y) > epsilon;
+  const leftHorizontal = Math.abs(leftStart.y - leftEnd.y) <= epsilon
+    && Math.abs(leftStart.x - leftEnd.x) > epsilon;
+  const rightVertical = Math.abs(rightStart.x - rightEnd.x) <= epsilon
+    && Math.abs(rightStart.y - rightEnd.y) > epsilon;
+  const rightHorizontal = Math.abs(rightStart.y - rightEnd.y) <= epsilon
+    && Math.abs(rightStart.x - rightEnd.x) > epsilon;
+  if (!(leftVertical && rightHorizontal) && !(leftHorizontal && rightVertical)) return null;
+
+  const verticalStart = leftVertical ? leftStart : rightStart;
+  const verticalEnd = leftVertical ? leftEnd : rightEnd;
+  const horizontalStart = leftHorizontal ? leftStart : rightStart;
+  const horizontalEnd = leftHorizontal ? leftEnd : rightEnd;
+  const x = verticalStart.x;
+  const y = horizontalStart.y;
+  if (
+    x <= Math.min(horizontalStart.x, horizontalEnd.x) + epsilon
+    || x >= Math.max(horizontalStart.x, horizontalEnd.x) - epsilon
+    || y <= Math.min(verticalStart.y, verticalEnd.y) + epsilon
+    || y >= Math.max(verticalStart.y, verticalEnd.y) - epsilon
+  ) return null;
+  return { x, y };
+}
+
+/**
+ * Report proper edge/edge crossings that do not belong to a shared graph
+ * junction. Collinear bundles and segment-end touches are deliberately not
+ * crossings: the former need a separate edge-bundling treatment, while the
+ * latter are ordinary orthogonal bends. This detector can therefore gate an
+ * asynchronous layout without rejecting legitimate fan-in/fan-out geometry.
+ */
+export function unrelatedEdgeCrossings(
+  graph: CanonicalSearchGraph,
+  layout: GraphLayout,
+): GraphEdgeCrossing[] {
+  const crossings: GraphEdgeCrossing[] = [];
+  for (let leftEdgeIndex = 0; leftEdgeIndex < graph.edges.length; leftEdgeIndex += 1) {
+    const leftEdge = graph.edges[leftEdgeIndex];
+    const leftRoute = layout.routes.get(leftEdge.id);
+    if (!leftRoute) continue;
+    for (let rightEdgeIndex = leftEdgeIndex + 1; rightEdgeIndex < graph.edges.length; rightEdgeIndex += 1) {
+      const rightEdge = graph.edges[rightEdgeIndex];
+      if (
+        leftEdge.fromNodeId === rightEdge.fromNodeId
+        || leftEdge.fromNodeId === rightEdge.toNodeId
+        || leftEdge.toNodeId === rightEdge.fromNodeId
+        || leftEdge.toNodeId === rightEdge.toNodeId
+      ) continue;
+      const rightRoute = layout.routes.get(rightEdge.id);
+      if (!rightRoute) continue;
+      for (let leftSegmentIndex = 1; leftSegmentIndex < leftRoute.points.length; leftSegmentIndex += 1) {
+        for (let rightSegmentIndex = 1; rightSegmentIndex < rightRoute.points.length; rightSegmentIndex += 1) {
+          const point = properOrthogonalSegmentCrossing(
+            leftRoute.points[leftSegmentIndex - 1],
+            leftRoute.points[leftSegmentIndex],
+            rightRoute.points[rightSegmentIndex - 1],
+            rightRoute.points[rightSegmentIndex],
+          );
+          if (point) crossings.push({
+            leftEdgeId: leftEdge.id,
+            rightEdgeId: rightEdge.id,
+            leftSegmentIndex: leftSegmentIndex - 1,
+            rightSegmentIndex: rightSegmentIndex - 1,
+            point,
+          });
+        }
+      }
+    }
+  }
+  return crossings;
 }
 
 /**

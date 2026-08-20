@@ -18,6 +18,7 @@ export type HardenedFetchErrorCode =
   | "timeout"
   | "aborted"
   | "network_error"
+  | "nonstandard_http_status"
   | "retry_exhausted"
   | "response_too_large"
   | "mime_not_allowed";
@@ -39,6 +40,7 @@ const HARDENED_FETCH_ERROR_CODES: ReadonlySet<string> = new Set<HardenedFetchErr
   "timeout",
   "aborted",
   "network_error",
+  "nonstandard_http_status",
   "retry_exhausted",
   "response_too_large",
   "mime_not_allowed",
@@ -731,6 +733,30 @@ export function createHardenedFetch(policyInput: HardenedFetchPolicy) {
           continue;
         }
 
+        // Native server-side fetch implementations can surface nonstandard
+        // status codes even though the Fetch Response constructor only accepts
+        // 200-599. Reject them explicitly before buffering/reconstruction so a
+        // remote block response (for example HTTP 999) cannot escape as a raw
+        // RangeError and lose its request/status telemetry.
+        if (!Number.isInteger(response.status) || response.status < 200 || response.status > 599) {
+          try {
+            await response.body?.cancel();
+          } catch {
+            // Preserve the more specific status-policy failure.
+          }
+          attemptSignal.cleanup();
+          throw new HardenedFetchError(
+            "nonstandard_http_status",
+            "The outbound server returned a nonstandard HTTP status.",
+            {
+              status: Number.isInteger(response.status) ? response.status : null,
+              safeUrl: safeUrl(attemptUrl),
+              attempt,
+              requests: requestCount,
+            },
+          );
+        }
+
         if (RETRYABLE_STATUSES.has(response.status) && canRetry(method, policy) && attempt <= policy.maxRetries) {
           attemptSignal.cleanup();
           await cancelResponseBody(response, safeUrl(attemptUrl), attempt, requestCount);
@@ -800,11 +826,27 @@ export function createHardenedFetch(policyInput: HardenedFetchPolicy) {
         attemptSignal.cleanup();
         const responseBody = new ArrayBuffer(bytes.byteLength);
         new Uint8Array(responseBody).set(bytes);
-        const boundedResponse = new Response(responseBody, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        });
+        let boundedResponse: Response;
+        try {
+          boundedResponse = new Response(responseBody, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+        } catch (error) {
+          throw new HardenedFetchError(
+            "network_error",
+            "The bounded outbound response could not be reconstructed safely.",
+            {
+              retryable: false,
+              status: response.status,
+              safeUrl: safeUrl(attemptUrl),
+              attempt,
+              requests: requestCount,
+              cause: error,
+            },
+          );
+        }
         return {
           response: boundedResponse,
           finalUrl: attemptUrl.href,

@@ -1,14 +1,19 @@
 import type { TraceEvent } from "../atlas-types";
-import { eventType, formatDuration, formatUsage, humanize, traceDuration, traceUsage } from "../atlas-types";
+import { eventType, formatDuration, formatUsage, humanize, traceDiagnostics, traceDuration, traceUsage } from "../atlas-types";
 import { ChevronIcon } from "./atlas-icons";
 import { eventStableId } from "../graph-model";
 
 function traceSummary(event: TraceEvent): string {
   const attributes = event.payload ?? event.attributes;
-  return event.decisionSummary
+  const diagnostic = traceDiagnostics(event).find((item) => item.severity !== "info")
+    ?? traceDiagnostics(event)[0];
+  const ordinarySummary = event.decisionSummary
     ?? (typeof attributes?.decisionSummary === "string" ? attributes.decisionSummary : undefined)
     ?? (typeof attributes?.summary === "string" ? attributes.summary : undefined)
     ?? (event.tool ? `Tool · ${event.tool}` : humanize(eventType(event)));
+  return diagnostic && diagnostic.severity !== "info"
+    ? `${humanize(diagnostic.code)} · ${diagnostic.message}`
+    : ordinarySummary ?? (diagnostic ? `${humanize(diagnostic.code)} · ${diagnostic.message}` : humanize(eventType(event)));
 }
 
 export function TraceRail({ trace, expanded, onToggle, focusedStableId, onFocusStableId }: {
@@ -37,8 +42,10 @@ export function TraceRail({ trace, expanded, onToggle, focusedStableId, onFocusS
           const sequence = event.seq ?? event.sequence ?? index + 1;
           const elapsed = traceDuration(event);
           const usage = traceUsage(event);
+          const diagnostic = traceDiagnostics(event).find((item) => item.severity !== "info")
+            ?? traceDiagnostics(event)[0];
           const focused = Boolean(stableId && stableId === focusedStableId);
-          return <li key={`${sequence}-${event.spanId ?? eventType(event)}`}>
+          return <li key={`${sequence}-${event.spanId ?? eventType(event)}`} className={diagnostic ? `has-diagnostic severity-${diagnostic.severity}` : undefined}>
             <button type="button" className={focused ? "is-focused" : ""} onClick={() => onFocusStableId(stableId)} aria-pressed={focused}>
               <span className="trace-sequence">{String(sequence).padStart(2, "0")}</span>
               <span className="trace-event-copy"><small>{humanize(event.phase)} · {typeof elapsed === "number" ? `t+${(elapsed / 1000).toFixed(2)}s` : "time unavailable"}</small><strong>{humanize(eventType(event))}</strong><span>{traceSummary(event)}</span></span>

@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { Builder, By, logging, until } from "selenium-webdriver";
 import { Options as ChromeOptions } from "selenium-webdriver/chrome.js";
 import {
+  chromeChromeCollisions,
   chromeSelectors,
   denseReplayFixture,
   graphChromeCollisions,
@@ -43,11 +44,34 @@ function measureInPage(selectors, graphEdges) {
     return { id, left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height };
   };
   const nodeElements = [...document.querySelectorAll(".react-flow__node")];
+  const canvasElement = document.querySelector(".graph-canvas");
+  const canvas = canvasElement ? rect(canvasElement, "graph-canvas") : null;
   const nodes = nodeElements.map((element) => ({
     ...rect(element, element.getAttribute("data-id") ?? "unknown-node"),
     layoutWidth: element.offsetWidth,
     layoutHeight: element.offsetHeight,
+    textCollisions: (() => {
+      const button = element.querySelector("button");
+      if (!button) return ["missing button"];
+      const blocks = [...button.querySelectorAll(":scope > .node-topline, :scope > strong, :scope > .node-bottomline")]
+        .map((child, index) => rect(child, `${element.getAttribute("data-id")}:text:${index}`));
+      return blocks.slice(0, -1).flatMap((block, index) =>
+        block.bottom > blocks[index + 1].top + 0.75 ? [`${block.id}/${blocks[index + 1].id}`] : []);
+    })(),
   }));
+  const visibleNodes = nodes.flatMap((node) => {
+    if (!canvas) return [node];
+    const visible = {
+      ...node,
+      left: Math.max(node.left, canvas.left),
+      top: Math.max(node.top, canvas.top),
+      right: Math.min(node.right, canvas.right),
+      bottom: Math.min(node.bottom, canvas.bottom),
+    };
+    visible.width = Math.max(0, visible.right - visible.left);
+    visible.height = Math.max(0, visible.bottom - visible.top);
+    return visible.width > 0 && visible.height > 0 ? [visible] : [];
+  });
   const chrome = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]
     .filter((element) => {
       const style = getComputedStyle(element);
@@ -81,6 +105,7 @@ function measureInPage(selectors, graphEdges) {
   }
   return {
     nodes,
+    visibleNodes,
     chrome,
     edgeNodeCrossings,
     documentWidth: document.documentElement.scrollWidth,
@@ -99,8 +124,14 @@ function assertLayout(layout, graph, viewport) {
   assert.equal(layout.documentWidth, layout.viewportWidth, `${viewport.name}: ${seleniumBrowser} document overflow`);
   assert.equal(layout.bodyWidth, layout.viewportWidth, `${viewport.name}: ${seleniumBrowser} body overflow`);
   assert.deepEqual(intersectingRectangles(layout.nodes), [], `${viewport.name}: ${seleniumBrowser} node collisions`);
-  assert.deepEqual(graphChromeCollisions(layout.nodes, layout.chrome), [], `${viewport.name}: ${seleniumBrowser} graph/chrome collisions`);
+  assert.deepEqual(graphChromeCollisions(layout.visibleNodes, layout.chrome), [], `${viewport.name}: ${seleniumBrowser} graph/chrome collisions`);
+  assert.deepEqual(chromeChromeCollisions(layout.chrome), [], `${viewport.name}: ${seleniumBrowser} chrome/chrome collisions`);
   assert.deepEqual(layout.edgeNodeCrossings, [], `${viewport.name}: ${seleniumBrowser} edge crossed an unrelated node`);
+  for (const node of layout.nodes) {
+    assert.ok(node.width >= 120, `${viewport.name}: ${seleniumBrowser} ${node.id} is too narrow to read`);
+    assert.ok(node.height >= 38, `${viewport.name}: ${seleniumBrowser} ${node.id} is too short to read`);
+    assert.deepEqual(node.textCollisions, [], `${viewport.name}: ${seleniumBrowser} ${node.id} text overlaps`);
+  }
   assert.deepEqual(layout.consoleIssues, [], `${viewport.name}: ${seleniumBrowser} console warnings/errors`);
   assert.deepEqual(layout.pageErrors, [], `${viewport.name}: ${seleniumBrowser} page errors`);
 }
@@ -165,20 +196,42 @@ try {
   }
   await driver.get(baseUrl.href);
   await driver.executeScript(installQaInstrumentation);
-  await driver.executeScript(function installAtlasFixture(ndjson) {
+  await driver.executeScript(function installAtlasFixture(events) {
     const originalFetch = window.fetch.bind(window);
     window.fetch = (input, init) => {
       const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const url = new URL(rawUrl, window.location.href);
       if (url.pathname === "/api/research") {
-        return Promise.resolve(new Response(ndjson, {
+        const encoder = new TextEncoder();
+        let index = 0;
+        let canceled = false;
+        const stream = new ReadableStream({
+          start(controller) {
+            const emit = () => {
+              if (canceled) return;
+              if (index >= events.length) {
+                controller.close();
+                return;
+              }
+              controller.enqueue(encoder.encode(`${JSON.stringify(events[index])}\n`));
+              index += 1;
+              window.__atlasSeleniumEmitted = index;
+              if (index >= events.length) window.setTimeout(() => controller.close(), 50);
+            };
+            window.__atlasSeleniumAdvance = () => window.setTimeout(emit, 50);
+            emit();
+          },
+          cancel() { canceled = true; },
+        });
+        return Promise.resolve(new Response(stream, {
           status: 200,
           headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" },
         }));
       }
       return originalFetch(input, init);
     };
-  }, fixture.ndjson);
+  }, fixture.events);
+  await setViewport(driver, viewports[0]);
   const search = await driver.wait(until.elementLocated(By.css('input[name="query"]')), 10_000);
   await driver.wait(
     () => driver.executeScript(
@@ -196,8 +249,25 @@ try {
     "Atlas search input did not retain the query",
   );
   await driver.findElement(By.css(".run-button")).click();
-  await driver.wait(async () => (await driver.findElements(By.css(".react-flow__node"))).length === fixture.graph.nodes.length, 20_000);
   await driver.wait(until.elementIsEnabled(await driver.findElement(By.css(".graph-fit-button"))), 10_000);
+
+  const checkpointGraphs = fixture.events
+    .map((event) => event.payload?.searchGraph ?? event.payload?.report?.searchGraph)
+    .filter(Boolean);
+  for (let index = 0; index < checkpointGraphs.length; index += 1) {
+    const checkpoint = checkpointGraphs[index];
+    await driver.wait(async () =>
+      (await driver.executeScript("return window.__atlasSeleniumEmitted;")) === index + 1
+      && (await driver.findElements(By.css(".react-flow__node"))).length === checkpoint.nodes.length,
+    20_000, `Selenium did not render streamed graph checkpoint ${index + 1}`);
+    await driver.findElement(By.css(".graph-fit-button")).click();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const layout = await driver.executeScript(measureInPage, chromeSelectors, checkpoint.edges);
+    assertLayout(layout, checkpoint, viewports[0]);
+    if (index < checkpointGraphs.length - 1) {
+      await driver.executeScript("window.__atlasSeleniumAdvance();");
+    }
+  }
 
   for (const viewport of viewports) {
     await setViewport(driver, viewport);

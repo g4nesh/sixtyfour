@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Report, TraceEvent } from "../atlas-types";
-import { candidateName, humanize, limitationText, reportCandidates, reportEvidence, reportQuery } from "../atlas-types";
+import { candidateName, humanize, limitationText, reportCandidates, reportEvidence, reportQuery, traceDiagnostics } from "../atlas-types";
 import { CloseIcon, DownloadIcon, ExternalIcon } from "./atlas-icons";
 
 function candidateScore(candidate: ReturnType<typeof reportCandidates>[number]): number | undefined {
@@ -56,6 +56,10 @@ export function ReportSheet({ report, trace, open, onClose, onDownloadMarkdown, 
   const evidence = reportEvidence(report);
   const findings = report?.findings ?? [];
   const reportId = report?.runId ?? report?.run?.id ?? "atlas-report";
+  const coverageDiagnostics = [...new Map(trace
+    .flatMap(traceDiagnostics)
+    .filter((diagnostic) => diagnostic.code.startsWith("search_provider_") || diagnostic.code.endsWith("fallback_used"))
+    .map((diagnostic) => [diagnostic.code, diagnostic])).values()];
 
   const evidenceUrl = (item: (typeof evidence)[number]): string | undefined =>
     item.canonicalUrl ?? item.sourceUrl ?? item.url ?? item.source?.canonicalUrl ?? item.source?.url;
@@ -91,6 +95,7 @@ export function ReportSheet({ report, trace, open, onClose, onDownloadMarkdown, 
       </div>
       {report ? <div className="report-sheet-body">
         <section className="report-lede"><span className={`report-status status-${report.status ?? "unknown"}`}>{humanize(report.status)}</span><p>{report.input?.objective ?? "Auditable public-professional intelligence assembled from admitted evidence."}</p></section>
+        {coverageDiagnostics.length > 0 ? <section className="report-coverage-note" aria-labelledby="report-coverage-heading"><h3 id="report-coverage-heading">Search coverage</h3><ul>{coverageDiagnostics.map((diagnostic) => <li key={diagnostic.code}><strong>{humanize(diagnostic.code)}</strong><span>{diagnostic.message}</span></li>)}</ul></section> : null}
         <section className="report-section" aria-labelledby="report-candidates-heading"><div className="report-section-heading"><h3 id="report-candidates-heading">Identity branches</h3><span>{candidates.length}</span></div>{candidates.length > 0 ? <div className="candidate-report-grid">{candidates.map((candidate) => {
           const id = candidate.id ?? candidate.candidateId ?? candidateName(candidate);
           const score = candidateScore(candidate);
@@ -103,7 +108,9 @@ export function ReportSheet({ report, trace, open, onClose, onDownloadMarkdown, 
         <section className="report-section" aria-labelledby="report-evidence-heading"><div className="report-section-heading"><h3 id="report-evidence-heading">Evidence ledger</h3><span>{evidence.length}</span></div>{evidence.length > 0 ? <ol className="report-evidence-list">{evidence.map((item, index) => {
           const href = evidenceUrl(item);
           const title = item.title ?? item.source?.title ?? item.claim ?? "Evidence record";
-          return <li key={item.id ?? item.evidenceId ?? index}><span>E{String(index + 1).padStart(2, "0")}</span><div><small>{item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} · {humanize(item.verificationMethod)}</small><strong>{title}</strong><p>{item.excerpt ?? item.minimalExcerpt ?? item.claim}</p>{href ? <a className="evidence-source-link" href={href} target="_blank" rel="noreferrer"><ExternalIcon />{title} — {domainOf(href, "source")}</a> : null}</div></li>;
+          const discoveryOnly = item.disposition === "discovery_only"
+            || item.verificationMethod === "search_discovery";
+          return <li key={item.id ?? item.evidenceId ?? index} className={discoveryOnly ? "is-discovery-lead" : undefined}><span>E{String(index + 1).padStart(2, "0")}</span><div><small>{item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} · {discoveryOnly ? "Unverified discovery lead" : humanize(item.verificationMethod)}</small><strong>{title}</strong><p>{discoveryOnly ? "Provider-attested URL metadata only; this lead does not support a finding until a hardened direct fetch succeeds." : item.excerpt ?? item.minimalExcerpt ?? item.claim}</p>{href ? <a className="evidence-source-link" href={href} target="_blank" rel="noreferrer"><ExternalIcon />{title} — {domainOf(href, "source")}</a> : null}</div></li>;
         })}</ol> : <p className="report-section-empty">No evidence record was admitted.</p>}</section>
         {(report.limitations?.length ?? 0) > 0 ? <section className="report-section report-limitations" aria-labelledby="report-limitations-heading"><div className="report-section-heading"><h3 id="report-limitations-heading">Limits</h3><span>{report.limitations?.length}</span></div><ul>{report.limitations?.map((limitation, index) => <li key={index}>{limitationText(limitation)}</li>)}</ul></section> : null}
       </div> : <div className="report-empty"><span aria-hidden="true">□</span><h3>No report loaded</h3><p>Run a verified replay or live investigation before exporting.</p></div>}

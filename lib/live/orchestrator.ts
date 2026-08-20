@@ -59,11 +59,13 @@ import type {
   ToolResult,
 } from "../tools/contracts";
 import { investigateGithubEmailCodegraph } from "../tools/github-codegraph";
+import { searchDuckDuckGoHtml } from "../tools/duckduckgo-search";
 import { searchGithubPublicUsersByExactName } from "../tools/github-user-search";
 import { fetchPublicSource, type PublicSourceData } from "../tools/public-source";
 import { lookupKeybaseGithub } from "../tools/keybase";
 import { inspectWaybackHistory } from "../tools/wayback";
 import {
+  classifiedFetchLaneId,
   deterministicSourceTypeForUrl,
   sourceLaneById,
   sourceTierContextForState,
@@ -109,6 +111,7 @@ interface Citation {
   provider: string;
   upstreamProvider: string | null;
   attestedSubjectName?: string;
+  querySubjectName?: string;
   roleBootstrap?: {
     displayName: string;
     signals: IdentitySignal[];
@@ -255,6 +258,9 @@ function compactState(state: InvestigationState): JsonObject {
         : null,
       classifiedSourceTier: typeof evidence.attributes.classifiedSourceTier === "number"
         ? evidence.attributes.classifiedSourceTier
+        : null,
+      classifiedSourceLaneId: typeof evidence.attributes.classifiedSourceLaneId === "string"
+        ? evidence.attributes.classifiedSourceLaneId
         : null,
     })),
     findings: state.findings.map((finding) => ({
@@ -477,6 +483,16 @@ function deterministicGithubProfileExtraction(
   source: PublicSourceData,
   subjectNameValue: string,
 ): EvidenceExtraction | null {
+  return deterministicNamedPersonPageExtraction(source, subjectNameValue, "code_profile", "GitHub");
+}
+
+function deterministicNamedPersonPageExtraction(
+  source: PublicSourceData,
+  subjectNameValue: string,
+  sourceType: EvidenceSourceType,
+  publisher: string | null,
+): EvidenceExtraction | null {
+  if (sourceType === "search_result") return null;
   const subjectName = stringValue(subjectNameValue, 120);
   if (!subjectName) return null;
   let excerpt: string | null = null;
@@ -502,8 +518,8 @@ function deterministicGithubProfileExtraction(
   return {
     claim: excerpt,
     excerpt,
-    publisher: "GitHub",
-    sourceType: "code_profile",
+    publisher,
+    sourceType,
     temporalStatus: "unknown",
     subjectName,
     organization: null,
@@ -765,8 +781,8 @@ function searchProviderFailureDiagnostic(error: OpenRouterError): {
     code: quotaExhausted ? "search_provider_quota_exhausted" : "search_provider_unavailable",
     severity: "warning",
     message: quotaExhausted
-      ? "The configured web-search provider exhausted its retryable quota; Atlas attempted the bounded official GitHub public-user fallback."
-      : "The configured web-search provider was retryably unavailable; Atlas attempted the bounded official GitHub public-user fallback.",
+      ? "The configured web-search provider exhausted its retryable quota; Atlas attempted the bounded keyless public-search fallback."
+      : "The configured web-search provider was retryably unavailable; Atlas attempted the bounded keyless public-search fallback.",
     retryable: true,
     details: {
       providerErrorCode: error.code,
@@ -1157,6 +1173,24 @@ export function createLiveDependencies(
     }
   };
   const plannerMessages: OpenRouterMessage[] = [{ role: "system", content: plannerSystemPrompt() }];
+  let degradedPlannerError: OpenRouterError | null = null;
+
+  const mechanicalModelTelemetry = (): DependencyModelTelemetry => ({
+    llmCalls: 0,
+    networkRequests: 0,
+  });
+
+  const degradedDecisionSummary = (
+    error: OpenRouterError,
+    action: string,
+  ): string => {
+    const reason = error.status === 429
+      ? "quota was exhausted"
+      : error.status === null
+        ? "was retryably unavailable"
+        : `returned retryable HTTP ${error.status}`;
+    return `The planner provider ${reason} after bounded retries; Atlas mechanically selected ${action} from the canonical frontier without synthesizing conclusions.`;
+  };
 
   const mechanicalFetchDecision = (context: PlannerContextV1): PlannerDecision | null => {
     // Once a search has yielded opaque candidate-scoped leads, choosing the
@@ -1182,12 +1216,29 @@ export function createLiveDependencies(
         && typeof evidence.attributes.leadId === "string");
       if (leads.length === 0) continue;
       const lane = sourceLaneById(entry.sourceLaneId);
-      const compatible = lane
-        ? leads.find((evidence) =>
+      const compatibleLeads = lane
+        ? leads.filter((evidence) =>
           evidence.attributes.classifiedSourceTier === entry.sourceTier
           && typeof evidence.attributes.classifiedSourceType === "string"
           && lane.sourceTypes.includes(evidence.attributes.classifiedSourceType as EvidenceSourceType))
         : undefined;
+      // Within the broad T2 lane, prefer directly fetchable structured/code
+      // surfaces over professional-network profiles that commonly require
+      // authentication. Equal source types retain provider evidence order.
+      const structuredLeadRank: Partial<Record<EvidenceSourceType, number>> = {
+        code_commit: 0,
+        code_profile: 1,
+        keybase_proof: 2,
+        public_document: 3,
+        professional_profile: 4,
+      };
+      const compatible = compatibleLeads?.map((evidence, index) => ({ evidence, index }))
+        .sort((left, right) => {
+          const leftType = left.evidence.attributes.classifiedSourceType as EvidenceSourceType;
+          const rightType = right.evidence.attributes.classifiedSourceType as EvidenceSourceType;
+          return (structuredLeadRank[leftType] ?? 0) - (structuredLeadRank[rightType] ?? 0)
+            || left.index - right.index;
+        })[0]?.evidence;
       // A mismatched lead is still executed through the zero-request preflight
       // so the lane closes honestly; the lead itself remains available for its
       // later compatible lane.
@@ -1206,8 +1257,85 @@ export function createLiveDependencies(
       });
     }
     return actions.length > 0
-      ? { kind: "actions", decisionSummary: "Applied deterministic candidate-scoped lead routing.", actions }
+      ? {
+          kind: "actions",
+          decisionSummary: "Applied deterministic candidate-scoped lead routing.",
+          actions,
+          modelTelemetry: mechanicalModelTelemetry(),
+        }
       : null;
+  };
+
+  const mechanicalOutageDecision = (
+    context: PlannerContextV1,
+    error: OpenRouterError,
+  ): PlannerDecision | null => {
+    const selected = context.selectedFrontierEntries ?? [];
+    const searchEntry = selected.find((entry) => entry.allowedTools.includes("search_web"));
+    if (searchEntry) {
+      return {
+        kind: "actions",
+        decisionSummary: degradedDecisionSummary(error, `search_web in ${searchEntry.sourceLaneId}`),
+        actions: [{
+          frontierEntryId: searchEntry.id,
+          tool: "search_web",
+          purpose: `Execute bounded public discovery in ${searchEntry.sourceLaneId} while the planner provider is unavailable.`,
+          arguments: { query: searchEntry.queryHint },
+          ...(searchEntry.candidateId ? { candidateId: searchEntry.candidateId } : {}),
+        }],
+        modelTelemetry: mechanicalModelTelemetry(),
+      };
+    }
+
+    const exactUrlEntry = selected.find((entry) =>
+      entry.sourceLaneId === "t0.explicit_url"
+      && entry.allowedTools.includes("fetch_public_source"));
+    const exactUrl = exactUrlEntry
+      ? exactUserSuppliedUrl(context.state, exactUrlEntry.queryHint)
+      : null;
+    if (exactUrlEntry && exactUrl) {
+      return {
+        kind: "actions",
+        decisionSummary: degradedDecisionSummary(error, "the exact user-supplied HTTPS fetch"),
+        actions: [{
+          frontierEntryId: exactUrlEntry.id,
+          tool: "fetch_public_source",
+          purpose: "Fetch only the exact public HTTPS URL supplied by the user.",
+          arguments: {
+            url: exactUrl,
+            claimFocus: "Public professional identity and organization",
+          },
+          ...(exactUrlEntry.candidateId ? { candidateId: exactUrlEntry.candidateId } : {}),
+        }],
+        modelTelemetry: mechanicalModelTelemetry(),
+      };
+    }
+
+    const emailEntry = selected.find((entry) =>
+      entry.sourceLaneId === "t0.explicit_email_codegraph"
+      && entry.allowedTools.includes("github_email_codegraph"));
+    const exactEmail = emailEntry
+      ? context.state.target.identifiers.find((identifier) =>
+        identifier.kind === "email"
+        && identifier.provenance === "user_input"
+        && identifier.normalizedValue === emailEntry.queryHint.toLocaleLowerCase("en-US"))
+      : undefined;
+    if (emailEntry && exactEmail) {
+      return {
+        kind: "actions",
+        decisionSummary: degradedDecisionSummary(error, "the exact supplied-email code graph"),
+        actions: [{
+          frontierEntryId: emailEntry.id,
+          tool: "github_email_codegraph",
+          purpose: "Inspect public code metadata for only the exact email supplied by the user.",
+          arguments: { email: exactEmail.normalizedValue },
+          ...(emailEntry.candidateId ? { candidateId: emailEntry.candidateId } : {}),
+        }],
+        modelTelemetry: mechanicalModelTelemetry(),
+      };
+    }
+
+    return null;
   };
 
   const planner = async (context: PlannerContextV1): Promise<PlannerDecision> => {
@@ -1215,7 +1343,25 @@ export function createLiveDependencies(
     // decision. Action decisions still require a selected compatible entry.
     const selectedFrontierEntries = context.selectedFrontierEntries ?? [];
     const mechanical = mechanicalFetchDecision(context);
-    if (mechanical) return mechanical;
+    if (mechanical) {
+      return degradedPlannerError
+        ? {
+            ...mechanical,
+            decisionSummary: degradedDecisionSummary(
+              degradedPlannerError,
+              "candidate-scoped hardened fetch routing",
+            ),
+          }
+        : mechanical;
+    }
+    if (degradedPlannerError) {
+      const degraded = mechanicalOutageDecision(context, degradedPlannerError);
+      if (degraded) return degraded;
+      // Do not invent arguments for a frontier that has no deterministic,
+      // policy-derived execution. Re-surface the original provider failure so
+      // the runner can preserve any admitted partial report honestly.
+      throw degradedPlannerError;
+    }
     plannerMessages.push({
       role: "user",
       content: `Choose the next legal decision from this JSON state and selected frontier:\n${JSON.stringify({
@@ -1237,18 +1383,29 @@ export function createLiveDependencies(
     let repairMessage: string | null = null;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       if (repairMessage) plannerMessages.push({ role: "user", content: repairMessage });
-      const completion = await completeModel({
-        messages: plannerMessages,
-        tools: [decisionTool(
-          context.availableTools,
-          selectedFrontierEntries.map((entry) => entry.id),
-        )],
-        maxCompletionTokens: 1_600,
-        temperature: 0,
-        parallelToolCalls: false,
-        reasoning: { effort: "medium" },
-        signal: context.signal ?? config.signal,
-      }, context.modelAccounting, modelTracker);
+      let completion: OpenRouterCompletion;
+      try {
+        completion = await completeModel({
+          messages: plannerMessages,
+          tools: [decisionTool(
+            context.availableTools,
+            selectedFrontierEntries.map((entry) => entry.id),
+          )],
+          maxCompletionTokens: 1_600,
+          temperature: 0,
+          parallelToolCalls: false,
+          reasoning: { effort: "medium" },
+          signal: context.signal ?? config.signal,
+        }, context.modelAccounting, modelTracker);
+      } catch (error) {
+        if (!isRetryableSearchProviderFailure(error) || !(error instanceof OpenRouterError)) {
+          throw error;
+        }
+        degradedPlannerError = error;
+        const degraded = mechanicalOutageDecision(context, error);
+        if (!degraded) throw error;
+        return degraded;
+      }
       plannerMessages.splice(0, plannerMessages.length, ...appendAssistantTurn(plannerMessages, completion));
       try {
         const extracted = extractFunctionArguments(completion, "propose_research_batch");
@@ -1335,6 +1492,7 @@ export function createLiveDependencies(
       let fallbackRequests = 0;
       let fallbackBytesRead = 0;
       let fallbackIncomplete = false;
+      let publicFallbackReason: "provider_unavailable" | "sources_not_observed" | null = null;
       const searchDiagnostics: NonNullable<ResearchActionResult["diagnostics"]> = [];
       try {
         const completion = await completeModel({
@@ -1354,53 +1512,161 @@ export function createLiveDependencies(
           context.state.target,
           searchProvider,
         );
-      } catch (error) {
-        const targetName = context.state.target.name;
-        const fallbackAllowed = context.state.target.kind === "named_person"
-          && Boolean(targetName)
-          && isRetryableSearchProviderFailure(error)
-          && !context.state.evidence.some((evidence) =>
-            evidence.attributes.provider === "github:public_user_search");
-        if (!fallbackAllowed || !targetName || !(error instanceof OpenRouterError)) throw error;
-        const fallback = await searchGithubPublicUsersByExactName(targetName, sharedContext);
-        fallbackRequests = fallback.meta.requests;
-        fallbackBytesRead = fallback.meta.bytesRead;
-        fallbackIncomplete = fallback.meta.incomplete;
-        searchDiagnostics.push(searchProviderFailureDiagnostic(error), ...diagnostics(fallback));
-        if (!fallback.data || fallback.data.matches.length === 0) {
-          return {
-            status: fallback.status === "rate_limited" || fallback.status === "failed"
-              ? fallback.status
-              : "not_found",
-            data: {
-              citationCount: 0,
-              observedCitationCount: 0,
-              provider: "github:public_user_search",
-            },
-            candidates: [],
-            evidence: [],
-            diagnostics: searchDiagnostics,
-            meta: {
-              requests: fallbackRequests,
-              bytesRead: fallbackBytesRead,
-              incomplete: fallbackIncomplete,
-            },
-          };
+        if (citations.length === 0) {
+          publicFallbackReason = "sources_not_observed";
+          searchDiagnostics.push({
+            code: "search_provider_sources_not_observed",
+            severity: "info",
+            message: "The configured provider returned no valid HTTPS source annotations; Atlas attempted the bounded keyless public-search fallback.",
+            retryable: false,
+          });
         }
-        searchProvider = "github:public_user_search";
-        citations = fallback.data.matches.map((match) => ({
-          url: match.htmlUrl,
-          title: `${match.name} (@${match.login}) — GitHub`,
-          provider: searchProvider,
-          upstreamProvider: null,
-          attestedSubjectName: match.name,
-        }));
-        searchDiagnostics.push({
-          code: "github_public_user_fallback_used",
-          severity: "info",
-          message: "Atlas admitted exact-name GitHub public-user records as discovery leads after the search provider was unavailable.",
-          retryable: false,
-        });
+      } catch (error) {
+        if (!isRetryableSearchProviderFailure(error) || !(error instanceof OpenRouterError)) throw error;
+        publicFallbackReason = "provider_unavailable";
+        searchDiagnostics.push(searchProviderFailureDiagnostic(error));
+      }
+
+      if (publicFallbackReason) {
+        const publicFallback = await searchDuckDuckGoHtml(query, sharedContext);
+        fallbackRequests += publicFallback.meta.requests;
+        fallbackBytesRead += publicFallback.meta.bytesRead;
+        fallbackIncomplete ||= publicFallback.meta.incomplete;
+        searchDiagnostics.push(...diagnostics(publicFallback));
+        if (publicFallback.data && publicFallback.data.results.length > 0) {
+          searchProvider = "duckduckgo:html_search";
+          const querySubjectName = context.state.target.kind === "named_person"
+            ? context.state.target.name
+            : null;
+          citations = publicFallback.data.results.map((result) => ({
+            url: result.url,
+            title: result.title,
+            provider: searchProvider,
+            upstreamProvider: null,
+            ...(querySubjectName ? { querySubjectName } : {}),
+          }));
+          searchDiagnostics.push({
+            code: "duckduckgo_html_fallback_used",
+            severity: "info",
+            message: publicFallbackReason === "provider_unavailable"
+              ? "Atlas admitted bounded title-and-URL leads from DuckDuckGo's public HTML search after the configured provider was unavailable."
+              : "Atlas admitted bounded title-and-URL leads from DuckDuckGo's public HTML search because the configured provider returned no valid HTTPS source annotations.",
+            retryable: false,
+          }, {
+            code: "public_web_fallback_used",
+            severity: "info",
+            message: "Atlas completed public web discovery through a bounded keyless fallback transport.",
+            retryable: false,
+          });
+
+          // Public HTML result ordering varies by request and can omit the
+          // exact structured profile even when broad same-name results exist.
+          // For an unbound named-person bootstrap, supplement (never replace)
+          // those real web leads with the bounded exact-name GitHub API lookup
+          // only when no deterministic code-profile lead is already present.
+          const targetName = context.state.target.name;
+          const tierContext = sourceTierContextForState(context.state, undefined);
+          const hasCodeProfileLead = citations.some((citation) =>
+            deterministicSourceTypeForUrl(citation.url, tierContext) === "code_profile");
+          const githubSupplementAllowed = !action.candidateId
+            && context.state.target.kind === "named_person"
+            && Boolean(targetName)
+            && !hasCodeProfileLead
+            && !context.state.evidence.some((evidence) =>
+              evidence.attributes.provider === "github:public_user_search");
+          if (githubSupplementAllowed && targetName) {
+            const githubSupplement = await searchGithubPublicUsersByExactName(targetName, sharedContext);
+            fallbackRequests += githubSupplement.meta.requests;
+            fallbackBytesRead += githubSupplement.meta.bytesRead;
+            fallbackIncomplete ||= githubSupplement.meta.incomplete;
+            searchDiagnostics.push(...diagnostics(githubSupplement));
+            const existingUrls = new Set(citations.map((citation) => citation.url));
+            const supplementalCitations = (githubSupplement.data?.matches ?? [])
+              .filter((match) => !existingUrls.has(match.htmlUrl))
+              .map((match) => ({
+                url: match.htmlUrl,
+                title: `${match.name} (@${match.login}) — GitHub`,
+                provider: "github:public_user_search",
+                upstreamProvider: null,
+                attestedSubjectName: match.name,
+              } satisfies Citation));
+            if (supplementalCitations.length > 0) {
+              citations.push(...supplementalCitations);
+              searchDiagnostics.push({
+                code: "github_public_user_fallback_used",
+                severity: "info",
+                message: "Atlas supplemented bounded public-web results with an exact-name GitHub public-user record because no code-profile lead was present.",
+                retryable: false,
+              });
+            }
+          }
+        } else {
+          const targetName = context.state.target.name;
+          const unsafeFallbackQuery = publicFallback.diagnostics.some((item) =>
+            item.code === "unsafe_public_search_query");
+          const githubAllowed = !unsafeFallbackQuery
+            && context.state.target.kind === "named_person"
+            && Boolean(targetName)
+            && !context.state.evidence.some((evidence) =>
+              evidence.attributes.provider === "github:public_user_search");
+          if (githubAllowed && targetName) {
+            const githubFallback = await searchGithubPublicUsersByExactName(targetName, sharedContext);
+            fallbackRequests += githubFallback.meta.requests;
+            fallbackBytesRead += githubFallback.meta.bytesRead;
+            fallbackIncomplete ||= githubFallback.meta.incomplete;
+            searchDiagnostics.push(...diagnostics(githubFallback));
+            if (githubFallback.data && githubFallback.data.matches.length > 0) {
+              searchProvider = "github:public_user_search";
+              citations = githubFallback.data.matches.map((match) => ({
+                url: match.htmlUrl,
+                title: `${match.name} (@${match.login}) — GitHub`,
+                provider: searchProvider,
+                upstreamProvider: null,
+                attestedSubjectName: match.name,
+              }));
+              searchDiagnostics.push({
+                code: "github_public_user_fallback_used",
+                severity: "info",
+                message: "Atlas admitted exact-name GitHub public-user API records after both provider and keyless public search yielded no safe leads.",
+                retryable: false,
+              });
+            } else {
+              return {
+                status: githubFallback.status,
+                data: {
+                  citationCount: 0,
+                  observedCitationCount: 0,
+                  provider: "github:public_user_search",
+                },
+                candidates: [],
+                evidence: [],
+                diagnostics: searchDiagnostics,
+                meta: {
+                  requests: fallbackRequests,
+                  bytesRead: fallbackBytesRead,
+                  incomplete: fallbackIncomplete,
+                },
+              };
+            }
+          } else {
+            return {
+              status: publicFallback.status,
+              data: {
+                citationCount: 0,
+                observedCitationCount: publicFallback.data?.observedResultAnchors ?? 0,
+                provider: "duckduckgo:html_search",
+              },
+              candidates: [],
+              evidence: [],
+              diagnostics: searchDiagnostics,
+              meta: {
+                requests: fallbackRequests,
+                bytesRead: fallbackBytesRead,
+                incomplete: fallbackIncomplete,
+              },
+            };
+          }
+        }
       }
       const candidates: CandidateDraft[] = [];
       const candidateRefs = new Map<string, string>();
@@ -1457,11 +1723,21 @@ export function createLiveDependencies(
         const classifiedSourceTier = classifiedSourceType
           ? sourceTierForUrl(citation.url, classifiedSourceType, false, tierContext)
           : null;
+        const classifiedSourceLaneId = classifiedFetchLaneId(
+          classifiedSourceType,
+          classifiedSourceTier,
+          true,
+        );
+        const discoveryClaim = citation.provider === "github:public_user_search"
+          ? `GitHub's public-user API surfaced a possible public profile titled “${citation.title}”; it is a discovery lead only.`
+          : citation.provider === "duckduckgo:html_search"
+            ? `DuckDuckGo's public HTML search surfaced a possible direct source titled “${citation.title}”; it is a discovery lead only.`
+            : `The configured web-search provider surfaced a possible direct source titled “${citation.title}”; it is a discovery lead only.`;
         return {
           ...(binding.candidateId
             ? { candidateId: binding.candidateId }
             : { candidateRef: binding.candidateRef }),
-          claim: `Web search surfaced a possible direct source titled “${citation.title}”; it is a discovery lead only.`,
+          claim: discoveryClaim,
           disposition: "discovery_only",
           sourceUrl: citation.url,
           queryUrl: null,
@@ -1471,8 +1747,14 @@ export function createLiveDependencies(
           observedAt: clock.now(),
           httpStatus: null,
           canonicalSubset: {
-            providerAttestedUrl: true,
-            providerResultTitle: citation.title,
+            discoveryTransport: citation.provider,
+            transportObservedUrl: true,
+            transportResultTitle: citation.title,
+            ...(citation.provider === "github:public_user_search"
+              ? { officialApiObservedUrl: true }
+              : citation.provider === "duckduckgo:html_search"
+                ? { publicHtmlSearchObservedUrl: true }
+                : { providerAttestedUrl: true }),
           },
           verificationMethod: "search_discovery",
           temporalStatus: "unknown",
@@ -1484,8 +1766,12 @@ export function createLiveDependencies(
             leadId,
             classifiedSourceType,
             classifiedSourceTier,
+            classifiedSourceLaneId,
             ...(citation.attestedSubjectName
               ? { attestedSubjectName: citation.attestedSubjectName }
+              : {}),
+            ...(citation.querySubjectName
+              ? { querySubjectName: citation.querySubjectName }
               : {}),
             ...(citation.roleBootstrap
               ? { roleCandidateBootstrap: true, attestedConstraintMatch: true }
@@ -1505,19 +1791,19 @@ export function createLiveDependencies(
         },
         candidates,
         evidence,
-        diagnostics: evidence.length > 0
-          ? [
-              ...searchDiagnostics,
-              ...(unboundRoleCitations > 0 ? [{ code: "role_search_results_unbound", severity: "info" as const, message: "Some search annotations did not structurally attest both the requested role and organization and were not authorized for fetch.", retryable: false }] : []),
-            ]
-          : [{
-              code: citations.length > 0 ? "role_candidate_not_attested" : "search_sources_not_observed",
-              severity: "info",
-              message: citations.length > 0
-                ? "Search annotations were observed, but none structurally attested a role-matched candidate and organization."
-                : "The bounded provider search returned no valid HTTPS source annotations.",
-              retryable: false,
-            }],
+        diagnostics: [
+          ...searchDiagnostics,
+          ...(evidence.length > 0
+            ? (unboundRoleCitations > 0 ? [{ code: "role_search_results_unbound", severity: "info" as const, message: "Some search annotations did not structurally attest both the requested role and organization and were not authorized for fetch.", retryable: false }] : [])
+            : [{
+                code: citations.length > 0 ? "role_candidate_not_attested" : "search_sources_not_observed",
+                severity: "info" as const,
+                message: citations.length > 0
+                  ? "Search annotations were observed, but none structurally attested a role-matched candidate and organization."
+                  : "The bounded provider search returned no valid HTTPS source annotations.",
+                retryable: false,
+              }]),
+        ],
         // Provider attempts are charged through context.modelAccounting.
         meta: {
           requests: fallbackRequests,
@@ -1591,6 +1877,7 @@ export function createLiveDependencies(
       const focus = stringValue(action.arguments.claimFocus, 500) ?? action.purpose;
       const candidate = context.state.candidates.find((item) => item.id === boundCandidateId);
       const attestedSubjectName = stringValue(leadEvidence?.attributes.attestedSubjectName, 120);
+      const querySubjectName = stringValue(leadEvidence?.attributes.querySubjectName, 120);
       const targetName = context.state.target.kind === "named_person"
         ? context.state.target.name
         : null;
@@ -1606,12 +1893,27 @@ export function createLiveDependencies(
         && normalizeComparable(attestedSubjectName) === normalizeComparable(targetName)
         && candidate?.normalizedName === normalizeComparable(targetName),
       );
+      const duckDuckGoNamedPersonLead = Boolean(
+        leadEvidence
+        && leadEvidence.attributes.provider === "duckduckgo:html_search"
+        && leadUrl
+        && safeHttpsUrl(fetched.data.finalUrl) === safeHttpsUrl(leadUrl)
+        && querySubjectName
+        && targetName
+        && normalizeComparable(querySubjectName) === normalizeComparable(targetName)
+        && candidate?.normalizedName === normalizeComparable(targetName),
+      );
       let extracted: EvidenceExtraction | null = deterministicGithubLead && targetName
         ? deterministicGithubProfileExtraction(fetched.data, targetName)
-        : null;
-      const extractionMethod = deterministicGithubLead
+        : duckDuckGoNamedPersonLead && targetName
+          ? deterministicNamedPersonPageExtraction(fetched.data, targetName, sourceType, null)
+          : null;
+      const deterministicDuckDuckGoExtraction = Boolean(duckDuckGoNamedPersonLead && extracted);
+      let extractionMethod = deterministicGithubLead
         ? "deterministic_github_profile_quote"
-        : "model_exact_quote";
+        : deterministicDuckDuckGoExtraction
+          ? "deterministic_duckduckgo_named_person_quote"
+          : "model_exact_quote";
       const extractionDiagnostics: NonNullable<ResearchActionResult["diagnostics"]> = [];
       if (deterministicGithubLead && !extracted) {
         return {
@@ -1632,7 +1934,15 @@ export function createLiveDependencies(
           message: "Atlas retained an exact GitHub page title/name quote for the API-attested public profile without model extraction.",
           retryable: false,
         });
+      } else if (deterministicDuckDuckGoExtraction) {
+        extractionDiagnostics.push({
+          code: "deterministic_duckduckgo_extraction",
+          severity: "info",
+          message: "Atlas retained only an exact fetched page title/name quote for the query-bound subject; no search snippet or organization inference was used.",
+          retryable: false,
+        });
       } else {
+        extractionMethod = "model_exact_quote";
         try {
           extracted = await callEvidenceExtractor(
             fetched.data,
@@ -1716,6 +2026,8 @@ export function createLiveDependencies(
           extractionMethod,
           ...(deterministicGithubLead
             ? { apiAttestedSubjectName: attestedSubjectName }
+            : deterministicDuckDuckGoExtraction
+              ? { queryBoundSubjectName: querySubjectName }
             : {
                 modelDescriptiveSourceType: extracted.sourceType,
                 modelClaimDiscarded: normalizeComparable(extracted.claim) !== normalizeComparable(extracted.excerpt),

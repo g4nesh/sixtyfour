@@ -10,6 +10,9 @@ import {
 import type { Clock, IdFactory } from "../domain/runtime";
 import { cloneJson, isJsonValue } from "../domain/runtime";
 import { identitySignalGroundedByEvidence } from "../domain/candidates";
+import { assessConfidence } from "../domain/confidence";
+import { evidenceSupportsFindingCategory } from "../domain/integrity";
+import { requestedCategoriesForInput, resolveIdentity } from "../domain/report";
 import {
   SCHEMA_VERSION,
   type BudgetLimits,
@@ -1239,6 +1242,17 @@ async function executeActions(
           : admission.evidence.disposition === "contradicts"
             ? "rejected" as const
             : "verified" as const;
+        const classifiedLeadData: JsonObject = discoveryOnly ? {
+          ...(typeof admission.evidence.attributes.classifiedSourceTier === "number"
+            ? { classifiedSourceTier: admission.evidence.attributes.classifiedSourceTier }
+            : {}),
+          ...(typeof admission.evidence.attributes.classifiedSourceType === "string"
+            ? { classifiedSourceType: admission.evidence.attributes.classifiedSourceType }
+            : {}),
+          ...(typeof admission.evidence.attributes.classifiedSourceLaneId === "string"
+            ? { classifiedSourceLaneId: admission.evidence.attributes.classifiedSourceLaneId }
+            : {}),
+        } : {};
         const sourceNodeAdmission = admitGraphNode(graph, {
           kind: "source",
           label: admission.evidence.title ?? admission.evidence.sourceFamily,
@@ -1253,6 +1267,7 @@ async function executeActions(
             sourceUrl: admission.evidence.sourceUrl,
             sourceFamily: admission.evidence.sourceFamily,
             sourceType: admission.evidence.sourceType,
+            ...classifiedLeadData,
           },
           dedupeEntityKey: `source:${admission.evidence.id}`,
         }, engine.ids, engine.clock.now());
@@ -1287,6 +1302,7 @@ async function executeActions(
             sourceType: admission.evidence.sourceType,
             contentHash: admission.evidence.contentHash,
             verificationMethod: admission.evidence.verificationMethod,
+            ...classifiedLeadData,
           },
           dedupeEntityKey: `evidence:${admission.evidence.id}`,
         }, engine.ids, engine.clock.now());
@@ -1506,6 +1522,21 @@ async function executeActions(
     // attached to the now-closed span.
     recordSearchEvents(engine, outcome.events);
 
+    // A zero-request classified-lead mismatch closes one finite, canonical
+    // source lane. Count that scheduler contraction as progress so a safe T6
+    // lead can traverse past inapplicable T1-T4 candidate lanes instead of
+    // tripping the no-progress stop before its mechanically derived lane.
+    // The exhausted entry cannot run again, so this cannot create an unbounded
+    // no-op loop or upgrade evidence trust.
+    if (
+      actionMutations === 0
+      && result.status === "skipped"
+      && (result.meta?.requests ?? 0) === 0
+      && result.diagnostics?.some((diagnostic) => diagnostic.code === "lead_lane_mismatch")
+    ) {
+      mutations += 1;
+    }
+
     if (actionMutations === 0) {
       const gapNodeAdmission = admitGraphNode(graph, {
         kind: "gap",
@@ -1558,14 +1589,14 @@ async function synthesizeFindings(
   engine: InvestigationEngine,
   dependencies: ResearchDependencies,
   signal?: AbortSignal,
-): Promise<number> {
-  if (!dependencies.synthesize) return 0;
+): Promise<{ mutations: number; outcome: "succeeded" | "unavailable" | "skipped" }> {
+  if (!dependencies.synthesize) return { mutations: 0, outcome: "skipped" };
   if (!engine.canAttemptLlm()) {
     engine.trace.record("synthesis.skipped", {
       phase: engine.phase,
       payload: { reason: "llm_call_budget_exhausted" },
     });
-    return 0;
+    return { mutations: 0, outcome: "unavailable" };
   }
   const modelAccounting = createModelAccounting(engine);
   const spanId = engine.trace.startSpan({
@@ -1616,7 +1647,7 @@ async function synthesizeFindings(
         unavailableReason: model.usageUnavailableReason,
       },
     });
-    return mutations;
+    return { mutations, outcome: "succeeded" };
   } catch (error) {
     modelAccounting.finalizeOutstanding("synthesis_failed_with_unsettled_model_attempt");
     const accounted = modelAccounting.summary();
@@ -1634,8 +1665,90 @@ async function synthesizeFindings(
       },
     });
     if (signal?.aborted) throw error;
-    return 0;
+    return { mutations: 0, outcome: "unavailable" };
   }
+}
+
+/**
+ * Preserve one exact, low-confidence source observation when provider-backed
+ * synthesis is unavailable. This is deliberately narrower than model
+ * synthesis: search leads, ambiguous identities, non-200 responses, non-SHA
+ * content, cross-candidate evidence, and moderate-confidence claims can never
+ * enter this path.
+ */
+function admitDeterministicFallbackFinding(engine: InvestigationEngine): number {
+  const snapshot = engine.snapshot();
+  const identity = resolveIdentity(snapshot.candidates, snapshot.evidence);
+  if (identity.status === "ambiguous" || !identity.selectedCandidate) return 0;
+
+  const candidate = identity.selectedCandidate;
+  const requestedCategories = new Set(requestedCategoriesForInput(snapshot.input));
+  const usedEvidenceIds = new Set(snapshot.findings.flatMap((finding) => finding.evidenceIds));
+  const eligible = snapshot.evidence
+    .filter((evidence) =>
+      evidence.candidateId === candidate.id
+      && evidence.disposition === "supports"
+      && evidence.verificationMethod === "direct_fetch"
+      && Boolean(evidence.excerpt)
+      && evidence.claim === evidence.excerpt
+      && evidence.httpStatus === 200
+      && /^sha256:[a-f0-9]{64}$/.test(evidence.contentHash ?? "")
+      && !usedEvidenceIds.has(evidence.id)
+      && assessConfidence([evidence]).score < 0.45)
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  for (const evidence of eligible) {
+    const category = requestedCategories.has("online_presence")
+      && evidenceSupportsFindingCategory(evidence, candidate, "online_presence")
+      ? "online_presence"
+      : requestedCategories.has("identity")
+        && evidenceSupportsFindingCategory(evidence, candidate, "identity")
+        ? "identity"
+        : null;
+    if (!category) continue;
+    const before = engine.snapshot().findings.length;
+    try {
+      const finding = engine.addFinding({
+        candidateId: candidate.id,
+        title: "Deterministic source observation",
+        description: evidence.excerpt as string,
+        category,
+        evidenceIds: [evidence.id],
+        counterEvidenceIds: [],
+      });
+      if (engine.snapshot().findings.length === before) return 0;
+      engine.trace.record("synthesis.deterministic_fallback", {
+        phase: engine.phase,
+        payload: {
+          findingId: finding.id,
+          evidenceId: evidence.id,
+          diagnostics: [{
+            code: "deterministic_finding_fallback_used",
+            severity: "warning",
+            message: "Provider synthesis was unavailable; Atlas retained one exact direct-source observation at low confidence.",
+            retryable: false,
+          }],
+        },
+      });
+      return 1;
+    } catch (error) {
+      engine.trace.record("finding.rejected", {
+        phase: engine.phase,
+        payload: {
+          source: "deterministic_fallback",
+          evidenceId: evidence.id,
+          error: safeError(error),
+        },
+      });
+    }
+  }
+  return 0;
+}
+
+function isRetryableProviderFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+  const candidate = error as Record<string, unknown>;
+  return candidate.name === "OpenRouterError" && candidate.retryable === true;
 }
 
 function terminalGraphStatus(reason: NonNullable<ReturnType<typeof evaluateStop>["reason"]>): SearchGraph["status"] {
@@ -2052,11 +2165,14 @@ export async function* runResearch(
           );
           return { route: "terminal" };
         }
-        const synthesized = await synthesizeFindings(engine, dependencies, options.signal);
+        const synthesis = await synthesizeFindings(engine, dependencies, options.signal);
+        const deterministic = synthesis.outcome === "unavailable"
+          ? admitDeterministicFallbackFinding(engine)
+          : 0;
         graph = admitMissingFindingNodes(engine, graph);
         engine.replaceSearchGraph(graph);
         if (turnStarted) {
-          engine.endTurn(turnMutations + synthesized > 0);
+          engine.endTurn(turnMutations + synthesis.mutations + deterministic > 0);
           turnStarted = false;
         }
         if (options.signal?.aborted) {
@@ -2143,12 +2259,18 @@ export async function* runResearch(
               });
             }
             engine.replaceSearchGraph(graph);
+            if (isRetryableProviderFailure(error)) {
+              admitDeterministicFallbackFinding(engine);
+              graph = admitMissingFindingNodes(engine, graph);
+              engine.replaceSearchGraph(graph);
+            }
             // A terminal report can only be committed from a report-eligible
             // phase. The error may have surfaced mid-plan/discover, so advance
             // the phase the same way the normal completion paths do before
             // finishing. Provider synthesis is unavailable here (the provider is
-            // what just failed), so the partial report preserves the admitted
-            // evidence without new findings.
+            // what just failed), so the partial report preserves admitted
+            // evidence and may project only the exact low-confidence fallback
+            // observation admitted above.
             try {
               advanceToCalibrate();
               if (engine.phase === "calibrate") engine.transition("report");

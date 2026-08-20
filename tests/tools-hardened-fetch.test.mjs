@@ -107,6 +107,23 @@ test("response MIME and byte limits are enforced", async () => {
   await assert.rejects(() => oversized("https://public.example.com/"), { code: "response_too_large" });
 });
 
+test("nonstandard HTTP statuses remain specific hardened failures", async () => {
+  const response = new Response("blocked", { headers: { "content-type": "text/html" } });
+  Object.defineProperty(response, "status", { value: 999 });
+  const hardenedFetch = createHardenedFetch({
+    allowedHostnames: ["public.example.com"],
+    fetch: async () => response,
+  });
+
+  await assert.rejects(() => hardenedFetch("https://public.example.com/profile"), {
+    name: "HardenedFetchError",
+    code: "nonstandard_http_status",
+    retryable: false,
+    status: 999,
+    requests: 1,
+  });
+});
+
 test("idempotent requests honor bounded Retry-After and report attempts", async () => {
   const sleeps = [];
   const budgetedRequests = [];

@@ -358,6 +358,26 @@ export function sourceLaneById(id: string): SourceLane | undefined {
   return SOURCE_HIERARCHY.find((lane) => lane.id === id);
 }
 
+/**
+ * Resolve the canonical fetch lane for a URL that has already been classified
+ * mechanically. This is intentionally separate from the search action's lane:
+ * discovery transport provenance must not mislabel the source that will later
+ * be fetched and admitted.
+ */
+export function classifiedFetchLaneId(
+  sourceType: EvidenceSourceType | null,
+  sourceTier: SourceTier | null,
+  candidateBound: boolean,
+): string | null {
+  if (!sourceType || sourceType === "search_result" || sourceTier === null) return null;
+  const compatible = SOURCE_HIERARCHY.filter((lane) =>
+    lane.tier === sourceTier
+    && lane.allowedTools.includes("fetch_public_source")
+    && lane.sourceTypes.includes(sourceType));
+  const exactScope = compatible.find((lane) => lane.requiresCandidate === candidateBound);
+  return exactScope?.id ?? compatible[0]?.id ?? null;
+}
+
 export function sourceLaneForFrontierEntry(entry: {
   sourceLaneId: string;
   sourceTier: SourceTier;

@@ -506,8 +506,8 @@ export function validateReferentialIntegrity(
         }
         const node = nodes[0];
         const allowedData = new Set([
-          "contentHash", "disposition", "entityKey", "sourceFamily", "sourceType", "sourceUrl",
-          "verificationMethod",
+          "classifiedSourceLaneId", "classifiedSourceTier", "classifiedSourceType", "contentHash",
+          "disposition", "entityKey", "sourceFamily", "sourceType", "sourceUrl", "verificationMethod",
         ]);
         if (
           node.label !== evidence.claim
@@ -518,6 +518,9 @@ export function validateReferentialIntegrity(
           || node.data.sourceType !== evidence.sourceType
           || node.data.disposition !== evidence.disposition
           || node.data.contentHash !== evidence.contentHash
+          || node.data.classifiedSourceTier !== evidence.attributes.classifiedSourceTier
+          || node.data.classifiedSourceType !== evidence.attributes.classifiedSourceType
+          || node.data.classifiedSourceLaneId !== evidence.attributes.classifiedSourceLaneId
           || node.data.entityKey !== `evidence:${evidence.id}`
           || (node.data.verificationMethod !== undefined
             && node.data.verificationMethod !== evidence.verificationMethod)
@@ -539,7 +542,10 @@ export function validateReferentialIntegrity(
           });
         } else {
           const sourceNode = sourceNodes[0];
-          const allowedSourceData = new Set(["entityKey", "sourceFamily", "sourceType", "sourceUrl"]);
+          const allowedSourceData = new Set([
+            "classifiedSourceLaneId", "classifiedSourceTier", "classifiedSourceType",
+            "entityKey", "sourceFamily", "sourceType", "sourceUrl",
+          ]);
           if (
             sourceNode.label !== (evidence.title ?? evidence.sourceFamily)
             || sourceNode.candidateId !== evidence.candidateId
@@ -550,6 +556,9 @@ export function validateReferentialIntegrity(
             || sourceNode.data.sourceUrl !== evidence.sourceUrl
             || sourceNode.data.sourceFamily !== evidence.sourceFamily
             || sourceNode.data.sourceType !== evidence.sourceType
+            || sourceNode.data.classifiedSourceTier !== evidence.attributes.classifiedSourceTier
+            || sourceNode.data.classifiedSourceType !== evidence.attributes.classifiedSourceType
+            || sourceNode.data.classifiedSourceLaneId !== evidence.attributes.classifiedSourceLaneId
             || sourceNode.data.entityKey !== `source:${evidence.id}`
             || Object.keys(sourceNode.data).some((key) => !allowedSourceData.has(key))
           ) {

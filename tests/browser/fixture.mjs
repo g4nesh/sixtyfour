@@ -88,6 +88,10 @@ export function graphChromeCollisions(nodes, chrome, tolerance = 0.75) {
   return collisions;
 }
 
+export function chromeChromeCollisions(chrome, tolerance = 0.75) {
+  return intersectingRectangles(chrome, tolerance);
+}
+
 export const chromeSelectors = [
   ".scope-row",
   ".graph-toolbar",

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import ELK from "elkjs/lib/elk.bundled.js";
 import { createServer } from "vite";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -139,6 +140,71 @@ function canonicalFixture() {
   };
 }
 
+function capturedGaneshLiveTopology() {
+  const nodeOrdinals = [1, 2, 5, 8, 10, 12, 15, 18, 21, 24, 27, 30, 32, 35, 37, 40, 42, 44, 46, 48, 50, 53, 55, 58, 61, 63, 65, 67, 69, 71];
+  const edgeSpecs = [
+    [4, 1, 2], [7, 1, 5], [9, 2, 8], [11, 8, 10], [14, 2, 12], [17, 2, 15], [20, 2, 18],
+    [23, 2, 21], [26, 2, 24], [29, 2, 27], [31, 8, 30], [33, 30, 32], [34, 32, 10],
+    [36, 8, 35], [38, 35, 37], [39, 37, 10], [41, 12, 40], [43, 15, 42], [45, 40, 44],
+    [47, 42, 46], [49, 18, 48], [51, 10, 50], [52, 48, 50], [54, 48, 53], [56, 53, 55],
+    [57, 55, 50], [60, 18, 58], [62, 55, 61], [64, 21, 63], [66, 63, 65], [68, 24, 67],
+    [70, 67, 69], [72, 10, 71], [73, 44, 71], [74, 46, 71], [75, 50, 71], [76, 61, 71],
+    [77, 65, 71], [78, 69, 71],
+  ];
+  return {
+    runId: "captured-ganesh-live-topology",
+    nodes: nodeOrdinals.map((ordinal) => ({ id: `node-${ordinal}`, ordinal })),
+    edges: edgeSpecs.map(([ordinal, fromOrdinal, toOrdinal]) => ({
+      id: `edge-${ordinal}`,
+      fromNodeId: `node-${fromOrdinal}`,
+      toNodeId: `node-${toOrdinal}`,
+      ordinal,
+    })),
+  };
+}
+
+async function crossingMinimizedLayout(graph) {
+  const result = await new ELK().layout({
+    id: "captured-live-name-graph",
+    layoutOptions: {
+      "elk.algorithm": "layered",
+      "elk.direction": "RIGHT",
+      "elk.edgeRouting": "ORTHOGONAL",
+      "elk.padding": "[top=40,left=40,bottom=40,right=40]",
+      "elk.spacing.nodeNode": String(graphUi.GRAPH_NODE_GAP + 8),
+      "elk.spacing.edgeNode": String(graphUi.GRAPH_EDGE_NODE_GAP + 14),
+      "elk.spacing.edgeEdge": "18",
+      "elk.layered.spacing.nodeNodeBetweenLayers": String(graphUi.GRAPH_LAYER_GAP),
+      "elk.layered.spacing.edgeNodeBetweenLayers": String(graphUi.GRAPH_EDGE_NODE_GAP + 14),
+      "elk.layered.spacing.edgeEdgeBetweenLayers": "18",
+      "elk.layered.mergeEdges": "false",
+      "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
+      "elk.layered.crossingMinimization.forceNodeModelOrder": "false",
+      "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+      "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
+    },
+    children: graph.nodes.map((node) => ({
+      id: node.id,
+      width: graphUi.GRAPH_NODE_WIDTH,
+      height: graphUi.GRAPH_NODE_HEIGHT,
+    })),
+    edges: graph.edges.map((edge) => ({ id: edge.id, sources: [edge.fromNodeId], targets: [edge.toNodeId] })),
+  });
+  return {
+    topologyKey: graphUi.graphTopologyKey(graph),
+    positions: new Map(result.children.map((node) => [node.id, { x: node.x, y: node.y }])),
+    routes: new Map(result.edges.map((edge) => {
+      assert.equal(edge.sections?.length, 1, `${edge.id} did not receive one canonical route`);
+      const section = edge.sections[0];
+      return [edge.id, {
+        edgeId: edge.id,
+        points: [section.startPoint, ...(section.bendPoints ?? []), section.endPoint],
+      }];
+    })),
+    source: "elk",
+  };
+}
+
 test("UI accepts only the canonical v2 runtime graph and never derives one from dossier prose", () => {
   const graph = canonicalFixture();
   assert.equal(graphUi.canonicalGraph(graph), graph);
@@ -219,6 +285,57 @@ test("fixed graph geometry remains collision-free across every incremental topol
     assert.equal(graphUi.graphTopologyKey(statusOnly), layout.topologyKey);
     if (prefix > 0) assert.notEqual(layout.topologyKey, previousTopology);
     previousTopology = layout.topologyKey;
+  }
+});
+
+test("proper unrelated edge crossings are detected without rejecting junctions or bend touches", () => {
+  const independentEdges = {
+    edges: [
+      { id: "horizontal", fromNodeId: "left-a", toNodeId: "left-b" },
+      { id: "vertical", fromNodeId: "right-a", toNodeId: "right-b" },
+    ],
+  };
+  const crossingLayout = {
+    routes: new Map([
+      ["horizontal", { edgeId: "horizontal", points: [{ x: 0, y: 50 }, { x: 100, y: 50 }] }],
+      ["vertical", { edgeId: "vertical", points: [{ x: 50, y: 0 }, { x: 50, y: 100 }] }],
+    ]),
+  };
+  assert.deepEqual(graphUi.unrelatedEdgeCrossings(independentEdges, crossingLayout), [{
+    leftEdgeId: "horizontal",
+    rightEdgeId: "vertical",
+    leftSegmentIndex: 0,
+    rightSegmentIndex: 0,
+    point: { x: 50, y: 50 },
+  }]);
+
+  const sharedJunction = structuredClone(independentEdges);
+  sharedJunction.edges[1].fromNodeId = "left-b";
+  assert.deepEqual(graphUi.unrelatedEdgeCrossings(sharedJunction, crossingLayout), []);
+
+  const bendTouchLayout = structuredClone(crossingLayout);
+  bendTouchLayout.routes = new Map(crossingLayout.routes);
+  bendTouchLayout.routes.set("horizontal", {
+    edgeId: "horizontal",
+    points: [{ x: 0, y: 50 }, { x: 50, y: 50 }],
+  });
+  assert.deepEqual(graphUi.unrelatedEdgeCrossings(independentEdges, bendTouchLayout), []);
+});
+
+test("unforced layer sweep has no unrelated crossings across every captured live-name topology prefix", async () => {
+  const captured = capturedGaneshLiveTopology();
+  const prefixCounts = [3, 4, 15, 19, 20, 24, 25, 27, 29, 30];
+  for (const nodeCount of prefixCounts) {
+    const nodes = captured.nodes.slice(0, nodeCount);
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    const graph = {
+      ...captured,
+      nodes,
+      edges: captured.edges.filter((edge) => nodeIds.has(edge.fromNodeId) && nodeIds.has(edge.toNodeId)),
+    };
+    const layout = await crossingMinimizedLayout(graph);
+    assert.equal(graphUi.isCollisionFreeGraphLayout(graph, layout), true, `${nodeCount}-node prefix crossed a card`);
+    assert.deepEqual(graphUi.unrelatedEdgeCrossings(graph, layout), [], `${nodeCount}-node prefix crossed an unrelated edge`);
   }
 });
 

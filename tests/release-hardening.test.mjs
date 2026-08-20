@@ -235,6 +235,14 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
           { headers: { "content-type": "text/html" } },
         );
       }
+      if (url.hostname === "html.duckduckgo.com") {
+        return new Response("<html><body>No safe result links.</body></html>", {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (url.hostname === "api.github.com" && url.pathname === "/search/users") {
+        return jsonResponse({ total_count: 0, incomplete_results: false, items: [] });
+      }
       throw new Error(`unexpected outbound host ${url.hostname}`);
     },
   });
@@ -352,9 +360,13 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
     candidateId: primary.id,
     budgetClass: "search",
   }, contextFor(engine, modelAccounting().value));
-  assert.equal(contentOnly.status, "not_found");
+  assert.equal(contentOnly.status, "not_found", JSON.stringify(contentOnly));
   assert.equal(contentOnly.data.citationCount, 0);
   assert.deepEqual(contentOnly.evidence, []);
+  assert.equal(contentOnly.meta.requests, 2);
+  assert.ok(contentOnly.diagnostics.some((item) => item.code === "search_provider_sources_not_observed"));
+  assert.ok(contentOnly.diagnostics.some((item) => item.code === "duckduckgo_results_not_observed"));
+  assert.ok(contentOnly.diagnostics.some((item) => item.code === "github_exact_name_not_observed"));
 });
 
 test("extracted pages must name the candidate and satisfy every known organization constraint", () => {

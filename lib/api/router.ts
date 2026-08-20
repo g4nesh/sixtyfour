@@ -43,8 +43,8 @@ interface ResolvedLiveProvider {
  * Resolve the live model provider from the environment.
  *
  * Selection: an explicit LIVE_PROVIDER wins; otherwise Gemini is used when its
- * key is present (its generous free per-minute limits suit the many
- * planner/extraction calls), then OpenAI, then OpenRouter.
+ * key is present, then OpenAI, then OpenRouter. Health reports only whether a
+ * usable server-side configuration exists; it never discloses this selection.
  *
  * Gemini uses its native Google Search grounding path. Keeping reasoning and
  * discovery on the same configured provider avoids turning an unrelated
@@ -483,7 +483,6 @@ export async function handleApiRequest(
       replayReady: true,
       exampleCount: listReplayExamples().length,
       liveConfigured,
-      model: liveConfigured && provider ? provider.model : null,
     });
   }
 

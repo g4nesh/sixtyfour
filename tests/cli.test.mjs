@@ -6,7 +6,9 @@ const projectRoot = new URL("../", import.meta.url);
 
 function runAtlas(arguments_) {
   const environment = { ...process.env };
-  delete environment.OPENROUTER_API_KEY;
+  for (const key of ["LIVE_PROVIDER", "GEMINI_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"]) {
+    delete environment[key];
+  }
   return spawnSync(process.execPath, ["bin/run.mjs", ...arguments_], {
     cwd: projectRoot,
     env: environment,
@@ -14,6 +16,13 @@ function runAtlas(arguments_) {
     timeout: 15_000,
   });
 }
+
+test("CLI help documents every supported live provider", () => {
+  const result = runAtlas(["help"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Gemini, OpenAI, or OpenRouter/);
+  assert.match(result.stdout, /LIVE_PROVIDER=gemini\|openai\|openrouter/);
+});
 
 function ndjson(value) {
   return value.split("\n").filter(Boolean).map((line) => JSON.parse(line));

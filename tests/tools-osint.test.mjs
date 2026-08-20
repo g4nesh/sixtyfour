@@ -11,6 +11,10 @@ const vite = await createServer({
 after(async () => vite.close());
 
 const { investigateGithubEmailCodegraph } = await vite.ssrLoadModule("/lib/tools/github-codegraph.ts");
+const {
+  searchDuckDuckGoHtml,
+  unwrapDuckDuckGoResultUrl,
+} = await vite.ssrLoadModule("/lib/tools/duckduckgo-search.ts");
 const { searchGithubPublicUsersByExactName } = await vite.ssrLoadModule("/lib/tools/github-user-search.ts");
 const { lookupKeybaseGithub } = await vite.ssrLoadModule("/lib/tools/keybase.ts");
 const { inspectWaybackHistory } = await vite.ssrLoadModule("/lib/tools/wayback.ts");
@@ -33,6 +37,84 @@ function commitItem({ sha, email, login, accountId, repo, verified = false, comm
     repository: { full_name: repo, html_url: `https://github.com/${repo}` },
   };
 }
+
+test("DuckDuckGo HTML fallback retains only bounded safe titles and unwrapped HTTPS targets", async () => {
+  const html = `<!doctype html><html><body>
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fprofile.example%2Fganesh%3Fview%3Dpublic&amp;rut=opaque"><b>Ganesh Talluri</b> — Profile</a>
+    <a class="result__a extra" href="https://github.com/g4nesh#readme">Ganesh Talluri · GitHub</a>
+    <a class="result__a" href="https://github.com/g4nesh">Duplicate GitHub result</a>
+    <a class="result__a" href="http://insecure.example/person">Insecure result</a>
+    <a class="result__a" href="https://user:password@example.com/person">Credential result</a>
+    <a class="result__a" href="https://example.com/person?access_token=secret">Secret query result</a>
+    <a class="result__a" href="https://duckduckgo.com/settings">DuckDuckGo internal result</a>
+    <a class="result__a" href="https://www.whitepages.com/name/example">Denied people-finder result</a>
+    <div class="result__snippet">Private-looking snippet 602-555-0100 must never survive.</div>
+  </body></html>`;
+  const requests = [];
+  const result = await searchDuckDuckGoHtml("Ganesh Talluri public professional profile", {
+    resolveHostname: async (hostname) => {
+      assert.equal(hostname, "html.duckduckgo.com");
+      return ["52.149.246.39"];
+    },
+    fetch: async (input, init) => {
+      const url = new URL(String(input));
+      requests.push(url.href);
+      assert.equal(url.origin, "https://html.duckduckgo.com");
+      assert.equal(url.pathname, "/html/");
+      assert.equal(url.searchParams.get("q"), "Ganesh Talluri public professional profile");
+      assert.match(new Headers(init?.headers).get("user-agent"), /atlas-people-intelligence/);
+      return new Response(html, { headers: { "content-type": "text/html; charset=UTF-8" } });
+    },
+  });
+
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.data.results, [
+    { title: "Ganesh Talluri — Profile", url: "https://profile.example/ganesh?view=public" },
+    { title: "Ganesh Talluri · GitHub", url: "https://github.com/g4nesh" },
+  ]);
+  assert.equal(result.data.observedResultAnchors, 8);
+  assert.equal(result.data.excludedResultAnchors, 6);
+  assert.equal(result.meta.requests, 1);
+  assert.ok(result.meta.bytesRead > 0);
+  assert.equal(requests.length, 1);
+  assert.equal(JSON.stringify(result).includes("602-555-0100"), false, "result snippets never leave the adapter");
+  assert.ok(result.diagnostics.some((item) => item.code === "duckduckgo_result_rows_excluded"));
+});
+
+test("DuckDuckGo HTML fallback fails closed without DNS validation and rejects unsafe queries", async () => {
+  let fetchCalls = 0;
+  const noDns = await searchDuckDuckGoHtml("public project repository", {
+    fetch: async () => {
+      fetchCalls += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  assert.equal(noDns.status, "skipped");
+  assert.equal(noDns.diagnostics[0].code, "dns_validation_unavailable");
+
+  const unsafe = await searchDuckDuckGoHtml("find this person's private phone number", {
+    resolveHostname: async () => ["52.149.246.39"],
+    fetch: async () => {
+      fetchCalls += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  assert.equal(unsafe.status, "skipped");
+  assert.equal(unsafe.diagnostics[0].code, "unsafe_public_search_query");
+  assert.equal(fetchCalls, 0);
+});
+
+test("DuckDuckGo result unwrapping rejects malformed wrappers and internal targets", () => {
+  assert.equal(
+    unwrapDuckDuckGoResultUrl("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fperson&amp;rut=opaque"),
+    "https://example.com/person",
+  );
+  assert.equal(unwrapDuckDuckGoResultUrl("//duckduckgo.com/l/?rut=missing-target"), null);
+  assert.equal(unwrapDuckDuckGoResultUrl("//duckduckgo.com/l/?uddg=https%3A%2F%2Fduckduckgo.com%2Fabout"), null);
+  assert.equal(unwrapDuckDuckGoResultUrl("//duckduckgo.com/l/?uddg=http%3A%2F%2Fexample.com"), null);
+  assert.equal(unwrapDuckDuckGoResultUrl("https://127.0.0.1/private"), null);
+  assert.equal(unwrapDuckDuckGoResultUrl("https://example.com/profile?email=person%40example.com"), null);
+});
 
 test("GitHub public-user fallback admits only exact names from bounded canonical detail records", async () => {
   const calls = [];

@@ -16,6 +16,7 @@ import {
   formatDuration,
   formatUsage,
   humanize,
+  traceDiagnostics,
   traceDuration,
   traceUsage,
 } from "./atlas-types";
@@ -71,11 +72,33 @@ function terminalStatusFor(event: TraceEvent, report: Report | null): string | u
   return report?.status ?? event.status;
 }
 
-function runMessage(status: string | undefined): string {
-  if (status === "configuration_error") return "Live mode is not configured on this server. Set OPENAI_API_KEY and ATLAS_LIVE_ENABLED.";
+function runMessage(
+  status: string | undefined,
+  diagnosticCodes: ReadonlySet<string> = new Set(),
+  hasDirectEvidence = false,
+): string {
+  if (status === "configuration_error") return "Live mode is not configured on this server. Enable live mode and configure a server-side provider key.";
   if (status === "blocked") return "The request was refused by the public-professional safety policy.";
   if (status === "failed") return "The run ended early. Inspect the terminal trace for the recorded boundary.";
   if (status === "canceled") return "The run was canceled. Its partial graph and trace remain inspectable.";
+  const providerUnavailable = diagnosticCodes.has("search_provider_quota_exhausted")
+    || diagnosticCodes.has("search_provider_unavailable");
+  const providerUngrounded = diagnosticCodes.has("search_provider_sources_not_observed");
+  const retainedSourceMessage = hasDirectEvidence
+    ? "A directly fetched citation is in the report."
+    : "No directly fetched citation was admitted before the run stopped.";
+  const providerBoundary = providerUnavailable
+    ? "was unavailable"
+    : "returned no usable source annotations";
+  if ((providerUnavailable || providerUngrounded) && diagnosticCodes.has("public_web_fallback_used")) {
+    return `${status === "partial" ? "Partial coverage" : "Run complete"} — provider search ${providerBoundary}, so Atlas used its bounded public-web fallback. ${retainedSourceMessage}`;
+  }
+  if ((providerUnavailable || providerUngrounded) && diagnosticCodes.has("github_public_user_fallback_used")) {
+    return `${status === "partial" ? "Partial coverage" : "Run complete"} — provider search ${providerBoundary}, so Atlas used its exact-name GitHub fallback. ${retainedSourceMessage}`;
+  }
+  if (providerUnavailable || providerUngrounded) {
+    return `Partial coverage — the configured web-search provider ${providerBoundary} and no fallback source was verified. Inspect the trace for the recorded boundary.`;
+  }
   if (status === "partial") return "Stopped with partial coverage — the cited sources gathered so far are in the report.";
   if (status === "ambiguous") return "Identity remained ambiguous; competing candidate branches were not merged.";
   return "Run complete. Every finding links to the public source it was drawn from.";
@@ -208,11 +231,18 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     setRunStatus("running");
     setMessage("Searching public professional sources…");
     let terminalStatus: string | undefined;
+    let completedReport: Report | null = null;
+    const diagnosticCodes = new Set<string>();
     try {
       const response = await fetch("/api/research", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/x-ndjson" },
-        body: JSON.stringify({ query: trimmed, mode: "live", requestedCategories: [...categories] }),
+        body: JSON.stringify({
+          query: trimmed,
+          mode: "live",
+          requestedDepth: "quick",
+          requestedCategories: [...categories],
+        }),
         signal: controller.signal,
       });
       if (abortRef.current !== controller || controller.signal.aborted) return;
@@ -231,14 +261,24 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         for (const line of lines) {
           if (!line.trim()) continue;
           if (abortRef.current !== controller || controller.signal.aborted) return;
-          terminalStatus = ingestEvent(JSON.parse(line) as TraceEvent) ?? terminalStatus;
+          const streamed = JSON.parse(line) as TraceEvent;
+          traceDiagnostics(streamed).forEach((diagnostic) => diagnosticCodes.add(diagnostic.code));
+          completedReport = terminalReport(streamed) ?? completedReport;
+          terminalStatus = ingestEvent(streamed) ?? terminalStatus;
         }
         if (done) break;
       }
-      if (buffered.trim()) terminalStatus = ingestEvent(JSON.parse(buffered) as TraceEvent) ?? terminalStatus;
+      if (buffered.trim()) {
+        const streamed = JSON.parse(buffered) as TraceEvent;
+        traceDiagnostics(streamed).forEach((diagnostic) => diagnosticCodes.add(diagnostic.code));
+        completedReport = terminalReport(streamed) ?? completedReport;
+        terminalStatus = ingestEvent(streamed) ?? terminalStatus;
+      }
       if (abortRef.current !== controller || controller.signal.aborted) return;
       setRunStatus((current) => current === "running" ? "complete" : current);
-      setMessage(runMessage(terminalStatus));
+      const hasDirectEvidence = completedReport?.evidence?.some((evidence) =>
+        evidence.verificationMethod === "direct_fetch") ?? false;
+      setMessage(runMessage(terminalStatus, diagnosticCodes, hasDirectEvidence));
     } catch (error) {
       if (abortRef.current !== controller) return;
       if (controller.signal.aborted) {
@@ -349,7 +389,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       {runStatus === "running"
         ? <button className="run-button is-stop" type="button" onClick={() => abortRef.current?.abort()}><StopIcon /><span>Stop</span></button>
         : <button className="run-button" type="button" onClick={() => document.querySelector<HTMLFormElement>(".command-search")?.requestSubmit()}><PlayIcon /><span>Research</span></button>}
-      <button className="report-button" type="button" onClick={() => setReportOpen(true)} disabled={!report} title="Open intelligence report (R)"><ReportIcon /><span>Report</span>{exporting ? <i role="status" aria-label={`Exporting ${exporting}`} /> : null}</button>
+      <button className="report-button" type="button" onClick={() => setReportOpen(true)} disabled={!report} aria-label="Report" title="Open intelligence report (R)"><ReportIcon /><span>Report</span>{exporting ? <i role="status" aria-label={`Exporting ${exporting}`} /> : null}</button>
     </header>
 
     <main id="graph-workspace" className="atlas-main">

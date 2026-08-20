@@ -890,7 +890,6 @@ test("health and example APIs expose replay readiness without leaking configurat
     replayReady: true,
     exampleCount: 3,
     liveConfigured: false,
-    model: null,
   });
   const keyOnlyHealth = await api.handleApiRequest(
     new Request("https://atlas.test/api/health"),
@@ -912,7 +911,6 @@ test("health and example APIs expose replay readiness without leaking configurat
     replayReady: true,
     exampleCount: 3,
     liveConfigured: true,
-    model: "test/model",
   });
   const response = await api.handleApiRequest(new Request("https://atlas.test/api/examples/python-creator"), {});
   const payload = await response.json();
