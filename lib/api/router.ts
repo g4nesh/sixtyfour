@@ -4,7 +4,7 @@ import { classifySafety } from "../domain/safety";
 import { evaluateStop } from "../domain/stopping";
 import { parseTarget } from "../domain/target";
 import { createDeterministicIdFactory, type Clock, type IdFactory } from "../domain/runtime";
-import { SCHEMA_VERSION, type FindingCategory, type InvestigationInput, type JsonObject, type ResearchDepth, type TerminalStatus } from "../domain/types";
+import { SCHEMA_VERSION, type FindingCategory, type InvestigationInput, type InvestigationReport, type JsonObject, type ResearchDepth, type TerminalStatus } from "../domain/types";
 import { isInvestigationReport, parseInvestigationInput } from "../domain/validation";
 import { streamLiveResearch } from "../live/orchestrator";
 import { createDohResolver } from "../tools/doh-resolver";
@@ -332,6 +332,58 @@ function fallbackTerminalEvents(
   return events;
 }
 
+function reportMatchesRequest(report: InvestigationReport, input: InvestigationInput): boolean {
+  if (report.status === "blocked" && classifySafety(input).level === "block") {
+    return report.input.query === "[redacted: restricted personal content]"
+      && report.target.rawInput === "[redacted: restricted personal content]";
+  }
+  const leftCategories = report.input.requestedCategories ?? [];
+  const rightCategories = input.requestedCategories ?? [];
+  return report.input.schemaVersion === input.schemaVersion
+    && report.input.query === input.query
+    && report.input.objective === input.objective
+    && report.input.requestedDepth === input.requestedDepth
+    && report.input.locale === input.locale
+    && leftCategories.length === rightCategories.length
+    && leftCategories.every((category, index) => category === rightCategories[index])
+    && JSON.stringify(report.target) === JSON.stringify(parseTarget(input));
+}
+
+function preservedTerminalEvents(
+  last: TraceEvent | null,
+  openSpans: readonly StreamSpan[],
+  terminal: TraceEvent,
+): TraceEvent[] {
+  const ids = runtimeIds();
+  const clock = runtimeClock();
+  let sequence = last?.seq ?? 0;
+  const elapsedMs = Math.max(last?.elapsedMs ?? 0, terminal.elapsedMs);
+  const events: TraceEvent[] = [...openSpans].reverse().map((span) => ({
+    schemaVersion: SCHEMA_VERSION,
+    seq: ++sequence,
+    eventId: ids.next("event"),
+    runId: terminal.runId,
+    timestamp: clock.now(),
+    elapsedMs,
+    kind: "span_end",
+    name: span.name,
+    phase: span.phase,
+    spanId: span.spanId,
+    parentSpanId: span.parentSpanId,
+    attempt: span.attempt,
+    status: "failed",
+    payload: { code: "stream_envelope_failure" },
+    usage: unavailableUsage("stream_envelope_failed_after_a_valid_terminal_report"),
+  }));
+  events.push({
+    ...terminal,
+    seq: ++sequence,
+    eventId: ids.next("event"),
+    elapsedMs,
+  });
+  return events;
+}
+
 export function traceNdjsonResponse(
   source: (signal: AbortSignal) => AsyncIterable<TraceEvent>,
   requestSignal: AbortSignal,
@@ -342,6 +394,7 @@ export function traceNdjsonResponse(
   const encoder = new TextEncoder();
   let last: TraceEvent | null = null;
   let terminalSeen = false;
+  let preservedTerminal: TraceEvent | null = null;
   const openSpans = new Map<string, StreamSpan>();
   const allowedEmails = new Set(parseTarget(input).identifiers
     .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
@@ -356,6 +409,16 @@ export function traceNdjsonResponse(
           if (!last && event.seq !== 1) throw new TypeError("trace source must begin at sequence one");
           if (last && (event.runId !== last.runId || event.seq !== last.seq + 1)) {
             throw new TypeError("trace source violated run or sequence ordering");
+          }
+          if (event.name === "result.terminal") {
+            const report = event.payload.report;
+            if (!isInvestigationReport(report) || report.runId !== event.runId) {
+              throw new TypeError("terminal event did not contain a valid report for its run");
+            }
+            if (!reportMatchesRequest(report, input)) {
+              throw new TypeError("terminal report did not match the requested investigation input");
+            }
+            preservedTerminal = event;
           }
           if (event.kind === "span_start" && event.spanId) {
             if (openSpans.has(event.spanId)) throw new TypeError("trace source started a duplicate span");
@@ -372,12 +435,6 @@ export function traceNdjsonResponse(
           if (event.name === "result.terminal" && openSpans.size > 0) {
             throw new TypeError("trace source reached terminal with open spans");
           }
-          if (event.name === "result.terminal") {
-            const report = event.payload.report;
-            if (!isInvestigationReport(report) || report.runId !== event.runId) {
-              throw new TypeError("terminal event did not contain a valid report for its run");
-            }
-          }
           last = event;
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
           if (event.name === "result.terminal") {
@@ -388,7 +445,10 @@ export function traceNdjsonResponse(
         if (!terminalSeen) throw new Error("trace source ended without a terminal event");
       } catch {
         if (!terminalSeen && !localAbort.signal.aborted) {
-          for (const event of fallbackTerminalEvents(last, [...openSpans.values()], input, combined.aborted)) {
+          const recovered = preservedTerminal && !combined.aborted
+            ? preservedTerminalEvents(last, [...openSpans.values()], preservedTerminal)
+            : fallbackTerminalEvents(last, [...openSpans.values()], input, combined.aborted);
+          for (const event of recovered) {
             controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
           }
         }
@@ -484,7 +544,7 @@ export async function handleApiRequest(
         examples: listReplayExamples(),
       }, 422);
     }
-    return traceNdjsonResponse(() => replayEvents(example.trace), request.signal, input);
+    return traceNdjsonResponse(() => replayEvents(example.trace), request.signal, example.input);
   }
 
   const liveEnabled = environment.ATLAS_LIVE_ENABLED?.trim() === "true";

@@ -178,3 +178,58 @@ test("one stable frontier/action identifier links trace focus to its canonical n
   assert.equal(graphUi.eventStableId(event), stableId);
   assert.equal(graphUi.stableNodeForEvent(graph, stableId), "candidate-decoy");
 });
+
+test("streamed graph snapshots advance monotonically and reject destructive fallbacks", () => {
+  const current = canonicalFixture();
+  const initial = {
+    ...structuredClone(current),
+    seed: "",
+    seedNodeId: null,
+    nodes: [],
+    edges: [],
+    frontier: [],
+    selectedFrontierEntryIds: [],
+    nextOrdinal: 1,
+    mutationStep: 0,
+    telemetry: Object.fromEntries(Object.keys(current.telemetry).map((key) => [key, 0])),
+  };
+  const next = structuredClone(current);
+  next.updatedAt = "2026-08-19T00:01:00.000Z";
+  next.nextOrdinal += 1;
+  next.telemetry.expanded += 1;
+  next.nodes.push({
+    ...structuredClone(next.nodes[0]),
+    id: "new-source",
+    kind: "source",
+    label: "New source",
+    ordinal: 5,
+  });
+
+  assert.equal(graphUi.mergeGraphSnapshot(initial, current), current);
+  assert.equal(graphUi.mergeGraphSnapshot(current, next), next);
+  assert.equal(graphUi.mergeGraphSnapshot(next, next), next);
+  assert.equal(graphUi.mergeGraphEvent(current, { payload: { searchGraph: next } }), next);
+
+  const stale = structuredClone(current);
+  stale.nextOrdinal -= 1;
+  assert.equal(graphUi.mergeGraphSnapshot(current, stale), current);
+
+  const missingNode = structuredClone(next);
+  missingNode.nodes = missingNode.nodes.filter((node) => node.id !== "candidate-decoy");
+  missingNode.edges = missingNode.edges.filter((edge) =>
+    edge.fromNodeId !== "candidate-decoy" && edge.toNodeId !== "candidate-decoy");
+  assert.equal(graphUi.mergeGraphSnapshot(next, missingNode), next);
+
+  const emptyFatal = {
+    ...structuredClone(current),
+    status: "failed",
+    seedNodeId: null,
+    nodes: [],
+    edges: [],
+    frontier: [],
+    selectedFrontierEntryIds: [],
+  };
+  assert.equal(graphUi.mergeGraphSnapshot(current, emptyFatal), current);
+  assert.equal(graphUi.mergeGraphSnapshot(current, { ...next, runId: "other-run" }), current);
+  assert.equal(graphUi.mergeGraphSnapshot(current, { ...next, telemetry: null }), current);
+});

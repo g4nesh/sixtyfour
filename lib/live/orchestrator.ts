@@ -61,6 +61,12 @@ import { investigateGithubEmailCodegraph } from "../tools/github-codegraph";
 import { fetchPublicSource, type PublicSourceData } from "../tools/public-source";
 import { lookupKeybaseGithub } from "../tools/keybase";
 import { inspectWaybackHistory } from "../tools/wayback";
+import {
+  deterministicSourceTypeForUrl,
+  sourceLaneById,
+  sourceTierContextForState,
+  sourceTierForUrl,
+} from "../search";
 
 export const LIVE_TOOL_NAMES = [
   "search_web",
@@ -1303,6 +1309,39 @@ export function createLiveDependencies(
       const url = leadUrl ?? proposedUrl;
       const allowedUrl = leadUrl ?? establishedUrl ?? exactInputUrl;
       if (!url || !allowedUrl) return { status: "skipped", diagnostics: [{ code: "source_url_not_linked", severity: "warning", message: "The URL was not returned by search or already linked to the candidate.", retryable: false }], meta: { requests: 0, llmCalls: 0 } };
+      const sourceLane = sourceLaneById(action.sourceLaneId);
+      const sourceTierContext = sourceTierContextForState(context.state, boundCandidateId);
+      const sourceType = deterministicSourceTypeForUrl(
+        url,
+        sourceTierContext,
+        action.sourceLaneId === "t1.candidate_company_page" ? "company_page" : "official_profile",
+      );
+      const derivedTier = sourceType
+        ? sourceTierForUrl(url, sourceType, action.sourceLaneId === "t0.explicit_url", sourceTierContext)
+        : null;
+      if (
+        !sourceLane
+        || !sourceType
+        || !sourceLane.sourceTypes.includes(sourceType)
+        || derivedTier !== action.sourceTier
+      ) {
+        return {
+          status: "skipped",
+          diagnostics: [{
+            code: "lead_lane_mismatch",
+            severity: "warning",
+            message: "The discovery lead does not qualify for the selected source lane.",
+            retryable: false,
+            details: {
+              sourceLaneId: action.sourceLaneId,
+              expectedTier: action.sourceTier,
+              derivedTier,
+              classifiedSourceType: sourceType,
+            },
+          }],
+          meta: { requests: 0, bytesRead: 0, incomplete: true, llmCalls: 0 },
+        };
+      }
       const fetched = await fetchPublicSource({ url, allowedUrl }, sharedContext);
       if (!fetched.data) return { status: fetched.status, diagnostics: diagnostics(fetched), meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: fetched.meta.incomplete, llmCalls: 0 } };
       const focus = stringValue(action.arguments.claimFocus, 500) ?? action.purpose;
@@ -1357,10 +1396,9 @@ export function createLiveDependencies(
         claim: extracted.excerpt,
         sourceUrl: fetched.data.finalUrl,
         queryUrl: null,
-        // Arbitrary-host fetches are deterministically classified as generic
-        // public documents. A model may describe the page type, but cannot
-        // upgrade its trust weight by calling itself "official".
-        sourceType: "public_document",
+        // Host and previously admitted context determine source type. The
+        // extractor's descriptive label cannot upgrade the source lane.
+        sourceType,
         title: fetched.data.title,
         publisher: extracted.publisher,
         sourceFamily: family,
@@ -1630,16 +1668,43 @@ export async function* streamLiveResearch(
 ): AsyncGenerator<TraceEvent, void, void> {
   const dependencies = createLiveDependencies(input, config);
   let lastEvent: TraceEvent | null = null;
+  let pendingTrace: TraceEvent[] = [];
+  const flushTraceWithGraph = (state: InvestigationState): TraceEvent[] => {
+    if (pendingTrace.length === 0) return [];
+    const allowedEmails = new Set(state.target.identifiers
+      .filter((identifier) =>
+        identifier.kind === "email" && identifier.provenance === "user_input")
+      .map((identifier) => identifier.normalizedValue));
+    const lastIndex = pendingTrace.length - 1;
+    const snapshotEvent = pendingTrace[lastIndex];
+    pendingTrace[lastIndex] = {
+      ...snapshotEvent,
+      payload: {
+        ...snapshotEvent.payload,
+        searchGraph: sanitizeTraceValue(
+          cloneJson(state.searchGraph) as unknown as JsonObject,
+          { allowedEmails },
+        ),
+      },
+    };
+    const flushed = pendingTrace;
+    pendingTrace = [];
+    return flushed;
+  };
   for await (const update of runResearch(input, dependencies, {
     availableTools: [...LIVE_TOOL_NAMES],
     signal: config.signal,
   })) {
     if (update.type === "trace") {
       lastEvent = update.event;
-      yield update.event;
+      pendingTrace.push(update.event);
       continue;
     }
-    if (update.type !== "completed") continue;
+    if (update.type === "state") {
+      for (const event of flushTraceWithGraph(update.state)) yield event;
+      continue;
+    }
+    for (const event of flushTraceWithGraph(update.state)) yield event;
     const availability = dependencies.usageAvailability();
     const unavailableCounters = [
       ...(!availability.inputTokens ? ["inputTokens"] : []),

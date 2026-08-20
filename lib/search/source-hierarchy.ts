@@ -1,6 +1,7 @@
 import { normalizeComparable, normalizeWhitespace } from "../domain/runtime";
 import type {
   EvidenceSourceType,
+  InvestigationState,
   ParsedTarget,
   SourceTier,
   TargetKind,
@@ -52,7 +53,7 @@ export const SOURCE_HIERARCHY: readonly SourceLane[] = [
     allowedTools: ["fetch_public_source"],
     targetKinds: ["url", "domain", "repository", "publication", "platform_handle"],
     identifierKinds: ["url", "profile_url"],
-    sourceTypes: ["official_profile", "company_page", "code_profile", "public_document"],
+    sourceTypes: ["official_profile", "company_page", "code_profile", "public_document", "other"],
     admission: "admissible_after_fetch",
     requiresCandidate: false,
     requiresExactCandidateUrl: false,
@@ -147,7 +148,9 @@ export const SOURCE_HIERARCHY: readonly SourceLane[] = [
     description: "Public repositories, publication indexes, patents, and organization-only official filings.",
     allowedTools: ["search_web", "fetch_public_source", "keybase_identity_proofs"],
     targetKinds: ALL_TARGET_KINDS,
-    identifierKinds: ["repository", "doi", "orcid", "package", "platform_handle"],
+    // Once a candidate exists, provider-attested repositories and professional
+    // profiles are eligible even when the initial query was name-only.
+    identifierKinds: [],
     sourceTypes: ["professional_profile", "code_profile", "code_commit", "keybase_proof", "public_document"],
     admission: "admissible_after_fetch",
     requiresCandidate: true,
@@ -203,6 +206,22 @@ export const SOURCE_HIERARCHY: readonly SourceLane[] = [
     trustPrior: 0.58,
     executionCost: 0.52,
     policyRisk: 0.12,
+  },
+  {
+    id: "t6.candidate_public_source",
+    tier: 6,
+    label: "Candidate-bound public source",
+    description: "Hardened fetch of a discovery lead that does not qualify for a higher-trust source lane.",
+    allowedTools: ["fetch_public_source"],
+    targetKinds: ALL_TARGET_KINDS,
+    identifierKinds: [],
+    sourceTypes: ["other"],
+    admission: "admissible_after_fetch",
+    requiresCandidate: true,
+    requiresExactCandidateUrl: false,
+    trustPrior: 0.3,
+    executionCost: 0.42,
+    policyRisk: 0.14,
   },
   {
     id: "t6.general_discovery",
@@ -375,6 +394,51 @@ export interface SourceTierContext {
   organizationNames?: readonly string[];
 }
 
+function publicHostname(value: string): string | null {
+  try {
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.protocol === "https:"
+      ? url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function sourceTierContextForState(
+  state: Pick<InvestigationState, "target" | "candidates" | "evidence">,
+  candidateId: string | undefined,
+): SourceTierContext {
+  const firstPartyHosts = new Set<string>();
+  for (const identifier of state.target.identifiers) {
+    if (identifier.provenance !== "user_input") continue;
+    const host = identifier.kind === "email"
+      ? identifier.normalizedValue.split("@")[1] ?? null
+      : publicHostname(identifier.value);
+    if (host) firstPartyHosts.add(host);
+  }
+  const candidate = candidateId
+    ? state.candidates.find((item) => item.id === candidateId)
+    : undefined;
+  for (const signal of candidate?.signals ?? []) {
+    if (
+      !["profile_url", "personal_domain"].includes(signal.kind)
+      || !["verified", "corroborated"].includes(signal.assurance)
+      || !signal.sourceEvidenceId
+      || !state.evidence.some((evidence) =>
+        evidence.id === signal.sourceEvidenceId
+        && evidence.candidateId === candidateId
+        && evidence.disposition === "supports")
+    ) continue;
+    const host = publicHostname(signal.value);
+    if (host) firstPartyHosts.add(host);
+  }
+  return {
+    firstPartyHosts: [...firstPartyHosts].sort(),
+    organizationNames: state.target.organizationHints.map((organization) => organization.name),
+  };
+}
+
 function hostMatchesFirstPartyContext(host: string, context: SourceTierContext): boolean {
   const normalizedHosts = (context.firstPartyHosts ?? [])
     .map((value) => value.toLocaleLowerCase("en-US").replace(/^www\./, ""));
@@ -384,6 +448,51 @@ function hostMatchesFirstPartyContext(host: string, context: SourceTierContext):
     const organization = normalizeComparable(name).replace(/[^a-z0-9]+/g, "");
     return organization.length >= 3 && labels.includes(organization);
   });
+}
+
+const PROFESSIONAL_PROFILE_HOSTS = ["linkedin.com", "crunchbase.com"] as const;
+const REPUTABLE_MEDIA_HOSTS = [
+  "apnews.com",
+  "bbc.com",
+  "bloomberg.com",
+  "forbes.com",
+  "nytimes.com",
+  "reuters.com",
+  "techcrunch.com",
+  "wsj.com",
+] as const;
+
+function hostMatches(host: string, suffixes: readonly string[]): boolean {
+  return suffixes.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+}
+
+/** Classify fetched URLs from host and admitted context, never model prose. */
+export function deterministicSourceTypeForUrl(
+  value: string,
+  context: SourceTierContext = {},
+  preferredFirstPartyType: Extract<EvidenceSourceType, "official_profile" | "company_page"> = "official_profile",
+): EvidenceSourceType | null {
+  if (isDeniedResearchSource(value)) return null;
+  const host = publicHostname(value);
+  if (!host) return null;
+  if (hostMatches(host, PROFESSIONAL_PROFILE_HOSTS)) return "professional_profile";
+  if (host === "github.com" || host.endsWith(".github.io")) return "code_profile";
+  if (hostMatches(host, REPUTABLE_MEDIA_HOSTS)) return "news";
+  if (hostMatchesFirstPartyContext(host, context)) return preferredFirstPartyType;
+  if (
+    host.endsWith(".edu")
+    || host.endsWith(".gov")
+    || host === "sec.gov"
+    || host === "companieshouse.gov.uk"
+    || host === "uspto.gov"
+    || host === "orcid.org"
+    || host === "doi.org"
+    || host === "openalex.org"
+    || host === "crossref.org"
+    || host === "patentsview.org"
+    || host === "npmjs.com"
+  ) return "public_document";
+  return "other";
 }
 
 export function sourceTierForUrl(

@@ -6,7 +6,7 @@ import {
   type ToolResult,
   type ToolStatus,
 } from "./contracts";
-import { createHardenedFetch, HardenedFetchError } from "./hardened-fetch";
+import { asHardenedFetchError, createHardenedFetch } from "./hardened-fetch";
 
 export interface FetchPublicSourceInput {
   url: string;
@@ -173,7 +173,7 @@ export async function fetchPublicSource(
   try {
     fetched = await fetchSource(requested, { signal: context.signal });
   } catch (error) {
-    const hardened = error instanceof HardenedFetchError ? error : null;
+    const hardened = asHardenedFetchError(error);
     return finish(startedAt, now, context.signal?.aborted ? "skipped" : "failed", null, [{
       code: hardened?.code ?? "public_source_unavailable",
       severity: hardened?.code === "aborted" ? "info" : "warning",
@@ -181,6 +181,13 @@ export async function fetchPublicSource(
         ? "Public-source fetch was canceled."
         : "The allowlisted public source could not be fetched safely.",
       retryable: hardened?.retryable ?? false,
+      ...(hardened ? {
+        details: {
+          attempt: hardened.attempt,
+          requests: hardened.requests,
+          httpStatus: hardened.status,
+        },
+      } : {}),
     }], hardened?.requests ?? 1, 0, true);
   }
 

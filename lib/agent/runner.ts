@@ -48,6 +48,7 @@ import {
   selectFrontierBatch,
   setFrontierStatus,
   sourceLaneForFrontierEntry,
+  sourceTierContextForState,
   sourceTierForUrl,
   type SearchKernelEvent,
 } from "../search";
@@ -697,51 +698,6 @@ function recordSearchEvents(
   }
 }
 
-function publicHostname(value: string): string | null {
-  try {
-    const url = new URL(value.includes("://") ? value : `https://${value}`);
-    return url.protocol === "https:"
-      ? url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "")
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function sourceTierContextForAction(
-  state: InvestigationState,
-  candidateId: string | undefined,
-): { firstPartyHosts: string[]; organizationNames: string[] } {
-  const firstPartyHosts = new Set<string>();
-  for (const identifier of state.target.identifiers) {
-    if (identifier.provenance !== "user_input") continue;
-    const host = identifier.kind === "email"
-      ? identifier.normalizedValue.split("@")[1] ?? null
-      : publicHostname(identifier.value);
-    if (host) firstPartyHosts.add(host);
-  }
-  const candidate = candidateId
-    ? state.candidates.find((item) => item.id === candidateId)
-    : undefined;
-  for (const signal of candidate?.signals ?? []) {
-    if (
-      !["profile_url", "personal_domain"].includes(signal.kind)
-      || !["verified", "corroborated"].includes(signal.assurance)
-      || !signal.sourceEvidenceId
-      || !state.evidence.some((evidence) =>
-        evidence.id === signal.sourceEvidenceId
-        && evidence.candidateId === candidateId
-        && evidence.disposition === "supports")
-    ) continue;
-    const host = publicHostname(signal.value);
-    if (host) firstPartyHosts.add(host);
-  }
-  return {
-    firstPartyHosts: [...firstPartyHosts].sort(),
-    organizationNames: state.target.organizationHints.map((organization) => organization.name),
-  };
-}
-
 async function executeActions(
   engine: InvestigationEngine,
   dependencies: ResearchDependencies,
@@ -963,6 +919,7 @@ async function executeActions(
     let actionMutations = 0;
     const localCandidateIds = new Map<string, string>();
     const pendingSignalUpdates: CandidateSignalUpdate[] = [];
+    const sourceLane = sourceLaneForFrontierEntry(entry);
     for (const draft of result.candidates ?? []) {
       if (action.candidateId) {
         engine.trace.record("candidate.rejected", {
@@ -1058,8 +1015,7 @@ async function executeActions(
         });
       }
     }
-    const sourceLane = sourceLaneForFrontierEntry(entry);
-    const sourceTierContext = sourceTierContextForAction(state, action.candidateId);
+    const sourceTierContext = sourceTierContextForState(state, action.candidateId);
     for (const draft of result.evidence ?? []) {
       const candidateFromRef = draft.candidateRef
         ? localCandidateIds.get(draft.candidateRef)
@@ -1443,6 +1399,7 @@ async function executeActions(
           severity: diagnostic.severity,
           message: diagnostic.message,
           retryable: diagnostic.retryable,
+          ...(diagnostic.details ? { details: diagnostic.details } : {}),
         })),
       },
       usage: {
@@ -2080,12 +2037,34 @@ export async function* runResearch(
           : snapshot.evidence.length > 0
             ? evaluateStop(snapshot, { noLegalActions: true })
             : null;
+        const gracefulStopOptions: StopEvaluationOptions = naturalStop.allowed
+          ? {}
+          : { noLegalActions: true };
         let gracefullyStopped = false;
         if (gracefulStop?.allowed && gracefulStop.reason !== "goal_satisfied") {
           try {
             // Finalize from the last committed (valid) graph, since the local
             // graph may be mid-mutation at the point the error surfaced.
             graph = engine.snapshot().searchGraph;
+            const interruptedEntryIds = graph.frontier
+              .filter((entry) => ["queued", "mutated", "selected", "running"].includes(entry.status))
+              .map((entry) => entry.id);
+            if (interruptedEntryIds.length > 0) {
+              graph = setFrontierStatus(
+                graph,
+                interruptedEntryIds,
+                "exhausted",
+                engine.clock.now(),
+              );
+              graph.telemetry.exhausted += interruptedEntryIds.length;
+              engine.trace.record("frontier.exhausted", {
+                phase: engine.phase,
+                payload: {
+                  reason: "upstream_failure_after_partial_results",
+                  entryCount: interruptedEntryIds.length,
+                },
+              });
+            }
             engine.replaceSearchGraph(graph);
             // A terminal report can only be committed from a report-eligible
             // phase. The error may have surfaced mid-plan/discover, so advance
@@ -2099,9 +2078,13 @@ export async function* runResearch(
             } catch {
               // Best-effort: fall through and finish from the current phase.
             }
-            finish(gracefulStop);
+            finish(gracefulStop, gracefulStopOptions);
             gracefullyStopped = true;
-          } catch {
+          } catch (terminalizationError) {
+            engine.trace.record("terminalization.rejected", {
+              phase: engine.phase,
+              payload: { error: safeError(terminalizationError) },
+            });
             gracefullyStopped = false;
           }
         }

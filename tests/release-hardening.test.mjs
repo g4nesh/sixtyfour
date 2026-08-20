@@ -281,11 +281,16 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   const variantResult = await dependencies.executeAction({
     schemaVersion: domain.SCHEMA_VERSION,
     id: "action-variant",
+    frontierEntryId: "action-variant",
     tool: "fetch_public_source",
     purpose: "Try a rewritten query variant without the opaque lead.",
     arguments: { url: "https://profile.example/chris?ref=rewritten" },
     candidateId: primary.id,
     budgetClass: "fetch",
+    sourceTier: 6,
+    sourceLaneId: "t6.candidate_public_source",
+    pathCost: 1,
+    mutated: false,
   }, contextFor(engine, modelAccounting().value));
   assert.equal(variantResult.status, "skipped");
   assert.equal(variantResult.diagnostics[0].code, "source_url_not_linked");
@@ -293,11 +298,16 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   const crossCandidate = await dependencies.executeAction({
     schemaVersion: domain.SCHEMA_VERSION,
     id: "action-cross-candidate",
+    frontierEntryId: "action-cross-candidate",
     tool: "fetch_public_source",
     purpose: "Try to reuse another candidate's discovery lead.",
     arguments: { leadId },
     candidateId: other.id,
     budgetClass: "fetch",
+    sourceTier: 6,
+    sourceLaneId: "t6.candidate_public_source",
+    pathCost: 1,
+    mutated: false,
   }, contextFor(engine, modelAccounting().value));
   assert.equal(crossCandidate.status, "skipped");
   assert.equal(crossCandidate.diagnostics[0].code, "source_url_not_linked");
@@ -307,6 +317,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   const fetched = await dependencies.executeAction({
     schemaVersion: domain.SCHEMA_VERSION,
     id: "action-fetch",
+    frontierEntryId: "action-fetch",
     tool: "fetch_public_source",
     purpose: "Fetch the exact provider-authorized lead.",
     arguments: {
@@ -316,6 +327,10 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
     },
     candidateId: primary.id,
     budgetClass: "fetch",
+    sourceTier: 6,
+    sourceLaneId: "t6.candidate_public_source",
+    pathCost: 1,
+    mutated: false,
   }, contextFor(engine, fetchAccounting.value));
 
   assert.equal(fetched.status, "succeeded");
@@ -323,7 +338,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.equal(fetched.evidence[0].candidateId, primary.id);
   assert.equal(fetched.evidence[0].reliability, 0.55);
   assert.equal(fetched.evidence[0].spoofable, true);
-  assert.equal(fetched.evidence[0].sourceType, "public_document");
+  assert.equal(fetched.evidence[0].sourceType, "other");
   assert.equal(fetched.evidence[0].attributes.ownershipVerified, false);
   assert.ok(fetched.candidateSignals[0].signals.every((signal) => signal.assurance === "spoofable"));
   assert.deepEqual(fetchAccounting.counts(), { reservations: 1, settlements: 1 });
@@ -1607,11 +1622,16 @@ test("cancellation during model extraction returns canceled and admits no fetche
   const resultPromise = dependencies.executeAction({
     schemaVersion: domain.SCHEMA_VERSION,
     id: "action-cancel-extraction",
+    frontierEntryId: "action-cancel-extraction",
     tool: "fetch_public_source",
     purpose: "Extract one public professional fact.",
     arguments: { url: sourceUrl },
     candidateId: candidate.id,
     budgetClass: "fetch",
+    sourceTier: 6,
+    sourceLaneId: "t6.candidate_public_source",
+    pathCost: 1,
+    mutated: false,
   }, contextFor(engine, accounting.value, controller.signal));
   setTimeout(() => controller.abort("release regression cancellation"), 20);
   const result = await resultPromise;

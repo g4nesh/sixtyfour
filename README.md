@@ -108,11 +108,11 @@ The kernel searches the strongest legal public-professional tier before broader 
 | --- | --- | --- |
 | T0 | Exact user-supplied HTTPS URL, domain/repository/DOI/ORCID/package/handle, or exact email codegraph | Exact-input only; direct content still passes hardened evidence admission |
 | T1 | First-party organization pages, official biographies, explicit personal sites | Direct fetch required for evidence |
-| T2 | Code/publication indexes, patents, official organization filings, public proof systems | Candidate-bound where required; structured claims remain labeled |
+| T2 | Professional/code profiles, publication indexes, patents, official organization filings, public proof systems | Host-classified and candidate-bound where required; structured claims remain labeled |
 | T3 | Universities, conferences, and primary publishers | Direct source required |
 | T4 | Reputable reporting and named interviews | Corroboration and timeline context |
 | T5 | Candidate-linked Wayback history | Exact already-bound HTTPS URL only |
-| T6 | General web discovery | Discovery leads only; snippets have zero finding weight |
+| T6 | General web discovery and candidate-bound hardened fetches for otherwise unclassified leads | Snippets have zero finding weight; fetched pages still pass identity separation and evidence admission |
 
 People-search sites, reverse-phone services, data brokers, residential/property/tax-assessor surfaces, family mapping, credentials, and private contact enrichment are denied before frontier creation. Official organization filings are allowed only for public-professional organization context.
 
@@ -134,7 +134,7 @@ Raw Git author metadata is labeled spoofable. A verified signature helps only wh
 
 ## Trace semantics
 
-The API, UI, CLI, and examples share one append-only trace schema. Events carry a monotonic `seq`, stable run/event/span and parent IDs, phase, timestamp and cumulative elapsed time, attempt, status, sanitized payload, and normalized usage. The stream covers LangGraph node transitions, frontier seeding/selection/pruning/outcomes, source-tier advances, mutation proposals and decisions, LLM and tool spans, retries, candidate gates/scoring, evidence admission, budgets, and the terminal result.
+The API, UI, CLI, and examples share one append-only trace schema. Events carry a monotonic `seq`, stable run/event/span and parent IDs, phase, timestamp and cumulative elapsed time, attempt, status, sanitized payload, and normalized usage. Each live trace batch also attaches the latest sanitized canonical graph snapshot to its final existing event, so the UI can render admitted and status-updated nodes before the terminal report without inventing graph deltas. The stream covers LangGraph node transitions, frontier seeding/selection/pruning/outcomes, source-tier advances, mutation proposals and decisions, LLM and tool spans, retries, candidate gates/scoring, evidence admission, budgets, and the terminal result.
 
 Every started span has exactly one terminal span. Payload sanitation removes secrets, unnecessary contact information, fetched full bodies, and thought/reasoning prose. Provider attempts are reserved before dispatch and charged separately from tool transport; returned prompt, completion, reasoning, and cached-input token counts are normalized, while unavailable fields remain `null` with a reason. The UI can download the deterministic Markdown report, a browser-rendered PDF, the structured report JSON, and the exact trace NDJSON. Markdown and PDF are produced from the same JSON-safe report view model, with stable `E01…` evidence references and explicit labels for exact excerpts versus canonical structured API claims.
 

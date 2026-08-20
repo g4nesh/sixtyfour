@@ -250,6 +250,23 @@ test("source hierarchy is tiered and denies people-search, phonebook, property, 
   ]) assert.equal(search.isDeniedResearchSource(source), true, source);
   assert.equal(search.isDeniedResearchSource("https://www.sec.gov/edgar/search/"), false);
   assert.equal(search.sourceTierForUrl("https://www.sec.gov/edgar/search/", "public_document"), 2);
+  assert.equal(search.deterministicSourceTypeForUrl("https://www.linkedin.com/in/example"), "professional_profile");
+  assert.equal(search.sourceTierForUrl("https://www.linkedin.com/in/example", "professional_profile"), 2);
+  assert.equal(search.deterministicSourceTypeForUrl("https://profiles.example/person"), "other");
+  assert.equal(search.sourceTierForUrl("https://profiles.example/person", "other"), 6);
+  assert.equal(search.sourceTierForUrl("https://example.edu/person", "public_document"), 3);
+  assert.equal(search.deterministicSourceTypeForUrl(
+    "https://examplelabs.org/team/person",
+    { organizationNames: ["Example Labs"] },
+    "company_page",
+  ), "company_page");
+  assert.equal(search.sourceTierForUrl(
+    "https://examplelabs.org/team/person",
+    "company_page",
+    false,
+    { organizationNames: ["Example Labs"] },
+  ), 1);
+  assert.equal(search.sourceLaneById("t6.candidate_public_source").sourceTypes[0], "other");
   assert.equal(search.sourceTierForUrl("https://whitepages.com/person/example"), null);
   const encodedDenied = "https://example.org/%2570roperty-%2574ax-%2561ssessor";
   assert.equal(domain.classifySafety(encodedDenied).level, "block");

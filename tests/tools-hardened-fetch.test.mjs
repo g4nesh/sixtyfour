@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  asHardenedFetchError,
   createHardenedFetch,
   isBlockedIpAddress,
   parseRetryAfter,
@@ -44,6 +45,36 @@ test("every redirect is revalidated and sensitive destinations are blocked", asy
 
   await assert.rejects(() => hardenedFetch("https://public.example.com/start"), { code: "blocked_address" });
   assert.equal(calls, 1);
+});
+
+test("redirect cleanup failures retain a specific hardened transport diagnostic", async () => {
+  const response = {
+    status: 302,
+    headers: new Headers({ location: "https://public.example.com/next" }),
+    body: { cancel: async () => { throw new Error("cross-runtime stream cleanup failed"); } },
+  };
+  const hardenedFetch = createHardenedFetch({
+    allowedHostnames: ["public.example.com"],
+    fetch: async () => response,
+  });
+  await assert.rejects(() => hardenedFetch("https://public.example.com/start"), {
+    name: "HardenedFetchError",
+    code: "network_error",
+    status: 302,
+    requests: 1,
+  });
+
+  const rehydrated = asHardenedFetchError({
+    name: "HardenedFetchError",
+    code: "timeout",
+    retryable: true,
+    status: null,
+    attempt: 2,
+    requests: 2,
+  });
+  assert.equal(rehydrated.code, "timeout");
+  assert.equal(rehydrated.requests, 2);
+  assert.equal(asHardenedFetchError({ name: "Error", code: "timeout" }), null);
 });
 
 test("DNS answers are fail-closed when a resolver is supplied", async () => {

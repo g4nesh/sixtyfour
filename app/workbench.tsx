@@ -23,6 +23,7 @@ import {
   eventStableId,
   graphFromReport,
   mergeGraphEvent,
+  mergeGraphSnapshot,
   stableNodeForEvent,
   type CanonicalSearchGraph,
 } from "./graph-model";
@@ -152,8 +153,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
   const applyReport = useCallback((nextReport: Report | null) => {
     setReport(nextReport);
     const nextGraph = graphFromReport(nextReport);
-    setGraph(nextGraph);
-    setSelectedNodeId((current) => current && nextGraph?.nodes.some((node) => node.id === current) ? current : null);
+    setGraph((current) => mergeGraphSnapshot(current, nextGraph));
   }, []);
 
   const toggleModality = useCallback((id: FindingCategory) => {

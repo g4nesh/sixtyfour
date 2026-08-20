@@ -964,6 +964,75 @@ test("NDJSON wrapper closes open spans and emits a consumable failed report afte
   assert.doesNotMatch(JSON.stringify(events), /private upstream detail/);
 });
 
+test("FNV-backed partial terminals survive sanitation and preserve their graph through the NDJSON wrapper", async () => {
+  const example = replay.getReplayExample("python-creator");
+  const report = structuredClone(example.output);
+  report.status = "partial";
+  report.searchGraph.status = "exhausted";
+  report.stop = {
+    reason: "diminishing_returns",
+    detail: "No additional bounded source improved the report.",
+    at: report.generatedAt,
+  };
+  report.evidence[0].contentHash = "fnv1a32:deadbeef";
+  const sanitized = traceContract.sanitizeTraceValue({ report });
+  assert.equal(sanitized.report.evidence[0].contentHash, "fnv1a32:deadbeef");
+  assert.equal(validation.isInvestigationReport(sanitized.report), true);
+
+  const started = structuredClone(example.trace.find((event) => event.kind === "span_start"));
+  assert.ok(started);
+  started.seq = 1;
+  started.runId = report.runId;
+  started.eventId = "event_fnv_start";
+  const sourceTerminal = {
+    ...structuredClone(example.trace.at(-1)),
+    seq: 2,
+    runId: report.runId,
+    eventId: "event_fnv_terminal",
+    payload: traceContract.sanitizeTraceValue({
+      status: report.status,
+      stopReason: report.stop.reason,
+      report,
+    }),
+  };
+  async function* sourceWithOpenSpan() {
+    yield started;
+    yield sourceTerminal;
+  }
+  const response = api.traceNdjsonResponse(
+    () => sourceWithOpenSpan(),
+    new AbortController().signal,
+    example.input,
+  );
+  const events = parseNdjson(await response.text());
+  assert.deepEqual(events.map((event) => event.seq), [1, 2, 3]);
+  assert.equal(events[1].kind, "span_end");
+  assert.equal(events[2].name, "result.terminal");
+  assert.equal(events[2].payload.report.status, "partial");
+  assert.equal(events[2].payload.report.stop.reason, "diminishing_returns");
+  assert.equal(events[2].payload.report.searchGraph.nodes.length, report.searchGraph.nodes.length);
+  assert.equal(events[2].payload.report.evidence[0].contentHash, "fnv1a32:deadbeef");
+});
+
+test("NDJSON wrapper rejects a valid terminal report belonging to another input", async () => {
+  const example = replay.getReplayExample("python-creator");
+  const terminal = structuredClone(example.trace.at(-1));
+  terminal.seq = 1;
+  terminal.eventId = "event_wrong_input_terminal";
+  terminal.payload.report.input.query = "A different public subject";
+  async function* mismatchedSource() {
+    yield terminal;
+  }
+  const response = api.traceNdjsonResponse(
+    () => mismatchedSource(),
+    new AbortController().signal,
+    example.input,
+  );
+  const events = parseNdjson(await response.text());
+  assert.equal(events.at(-1).payload.report.status, "failed");
+  assert.equal(events.at(-1).payload.report.searchGraph.nodes.length, 0);
+});
+
 test("safety refusal precedes replay lookup and missing live key is an honest configuration terminal", async () => {
   const unsafe = await api.handleApiRequest(new Request("https://atlas.test/api/research", {
     method: "POST",

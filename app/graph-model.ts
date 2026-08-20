@@ -40,6 +40,13 @@ export function canonicalGraph(value: unknown): CanonicalSearchGraph | null {
   if (
     typeof value.runId !== "string"
     || typeof value.seed !== "string"
+    || typeof value.nextOrdinal !== "number"
+    || !Number.isInteger(value.nextOrdinal)
+    || value.nextOrdinal < 0
+    || typeof value.mutationStep !== "number"
+    || !Number.isInteger(value.mutationStep)
+    || value.mutationStep < 0
+    || !isRecord(value.telemetry)
     || !Array.isArray(value.nodes)
     || !Array.isArray(value.edges)
     || !Array.isArray(value.frontier)
@@ -47,9 +54,13 @@ export function canonicalGraph(value: unknown): CanonicalSearchGraph | null {
   ) return null;
   const graph = value as unknown as CanonicalSearchGraph;
   if (
-    graph.nodes.some((node) => node.schemaVersion !== 2 || !node.id || !node.label)
-    || graph.edges.some((edge) => edge.schemaVersion !== 2 || !edge.id || !edge.fromNodeId || !edge.toNodeId)
-    || graph.frontier.some((entry) => entry.schemaVersion !== 2 || entry.id !== entry.frontierEntryId || entry.id !== entry.actionId)
+    graph.nodes.some((node) => !isRecord(node) || node.schemaVersion !== 2 || !node.id || !node.label)
+    || graph.edges.some((edge) => !isRecord(edge) || edge.schemaVersion !== 2 || !edge.id || !edge.fromNodeId || !edge.toNodeId)
+    || graph.frontier.some((entry) => !isRecord(entry) || entry.schemaVersion !== 2 || entry.id !== entry.frontierEntryId || entry.id !== entry.actionId)
+    || TELEMETRY_KEYS.some((key) => {
+      const counter = graph.telemetry[key];
+      return typeof counter !== "number" || !Number.isInteger(counter) || counter < 0;
+    })
   ) return null;
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
   if (graph.edges.some((edge) => !nodeIds.has(edge.fromNodeId) || !nodeIds.has(edge.toNodeId))) return null;
@@ -68,11 +79,75 @@ export function fullGraphFromTrace(event: TraceEvent): CanonicalSearchGraph | nu
     ?? canonicalGraph((event as Record<string, unknown>).searchGraph);
 }
 
+const TELEMETRY_KEYS = [
+  "seeded",
+  "enqueued",
+  "selected",
+  "pruned",
+  "expanded",
+  "exhausted",
+  "toolCalls",
+  "mutationToolCalls",
+  "mutationsProposed",
+  "mutationsAccepted",
+  "mutationsRejected",
+] as const;
+
+function retainsIds(
+  previous: readonly { id: string }[],
+  next: readonly { id: string }[],
+): boolean {
+  const nextIds = new Set(next.map((item) => item.id));
+  return previous.every((item) => nextIds.has(item.id));
+}
+
+function isPristineBootstrapGraph(graph: CanonicalSearchGraph): boolean {
+  return graph.seed === ""
+    && graph.seedNodeId === null
+    && graph.nodes.length === 0
+    && graph.edges.length === 0
+    && graph.frontier.length === 0;
+}
+
+/**
+ * Runtime graphs are append-only identities with mutable statuses. Refuse a
+ * stale, cross-run, or empty fallback snapshot so a useful streamed graph can
+ * never disappear when a later transport envelope fails.
+ */
+export function mergeGraphSnapshot(
+  current: CanonicalSearchGraph | null,
+  value: unknown,
+): CanonicalSearchGraph | null {
+  const incoming = canonicalGraph(value);
+  if (!incoming) return current;
+  if (!current) return incoming;
+  if (incoming.runId !== current.runId) return current;
+  if (isPristineBootstrapGraph(current)) {
+    if (
+      incoming.nextOrdinal < current.nextOrdinal
+      || incoming.mutationStep < current.mutationStep
+      || TELEMETRY_KEYS.some((key) => incoming.telemetry[key] < current.telemetry[key])
+    ) return current;
+    return incoming;
+  }
+  if (
+    incoming.seed !== current.seed
+    || (current.seedNodeId !== null && incoming.seedNodeId !== current.seedNodeId)
+    || incoming.nextOrdinal < current.nextOrdinal
+    || incoming.mutationStep < current.mutationStep
+    || !retainsIds(current.nodes, incoming.nodes)
+    || !retainsIds(current.edges, incoming.edges)
+    || !retainsIds(current.frontier, incoming.frontier)
+    || TELEMETRY_KEYS.some((key) => incoming.telemetry[key] < current.telemetry[key])
+  ) return current;
+  return incoming;
+}
+
 export function mergeGraphEvent(
   current: CanonicalSearchGraph | null,
   event: TraceEvent,
 ): CanonicalSearchGraph | null {
-  return fullGraphFromTrace(event) ?? current;
+  return mergeGraphSnapshot(current, fullGraphFromTrace(event));
 }
 
 export function eventStableId(event: TraceEvent): string | null {

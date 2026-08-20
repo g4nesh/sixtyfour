@@ -32,11 +32,11 @@ The source policy is monotone from exact input to broad discovery:
 
 1. T0 exact user-supplied HTTPS URL or public identifier, including exact-email GitHub codegraph.
 2. T1 first-party organization pages, official biographies, and explicit personal sites.
-3. T2 structured professional records: repositories, publication indexes, patents, official organization filings, and public proof systems.
+3. T2 host-classified professional profiles and structured records: repositories, publication indexes, patents, official organization filings, and public proof systems.
 4. T3 universities, conferences, and primary publishers.
 5. T4 reputable reporting and named interviews.
 6. T5 bounded candidate-linked Wayback history.
-7. T6 general web discovery, whose annotations are discovery-only.
+7. T6 general web discovery plus candidate-bound hardened fetches for leads that do not deterministically qualify for a stronger lane; annotations remain discovery-only and fetched pages still pass candidate separation.
 
 A higher tier stays queued until lower-tier legal work is exhausted. The hierarchy never turns a source prior into claim confidence. People-search, phonebook, data-broker, residential/property/tax-assessor, family, credential, and private-contact surfaces are denied before graph admission.
 
@@ -98,11 +98,11 @@ Confidence uses transparent bands and a rationale-bearing set of caps. Multiple 
 
 Live mode calls OpenRouter Chat Completions directly from LangGraph's `plan_expansion` and `synthesize` nodes. It uses custom function schemas, `tool_choice: "auto"`, one expected structured function submission per provider turn (`parallel_tool_calls: false`), and the current `openrouter:web_search` server tool. The planner receives a compact view of the selected frontier and must bind each action to one selected ID. The deterministic runner can execute an approved same-tier batch concurrently, up to four actions. Every provider attempt is reserved before dispatch and settled independently, so repair and concurrent extraction calls count against LLM, network, token, and cost budgets. Provider `reasoning_details`, when returned, are opaque continuation data and are passed back unchanged on the next provider turn. They are never logged or streamed. Only provider-reported prompt, completion, reasoning, and cached-input token counts are exposed; unavailable values remain `null` with a reason.
 
-Search annotations are provider-attested leads with zero final claim weight. A final finding must cite an admitted direct-source or specialist-tool evidence record. General-purpose `fetch_public_source` additionally requires a trusted injected hostname resolver or controlled egress proxy and fails closed without one; candidate linkage alone is not presented as DNS-rebinding protection.
+Search annotations are provider-attested leads with zero final claim weight. Before egress, Atlas classifies the exact authorized URL from its hostname and already-admitted first-party context; a lead that does not match the selected source lane returns `lead_lane_mismatch` with zero page requests. LinkedIn, for example, is a T2 professional profile rather than a T1 official biography. A final finding must cite an admitted direct-source or specialist-tool evidence record. General-purpose `fetch_public_source` additionally requires a trusted injected hostname resolver or controlled egress proxy and fails closed without one; candidate linkage alone is not presented as DNS-rebinding protection. Hardened transport failures retain a bounded code, HTTP status, attempt, and request count without logging the URL, body, or underlying exception.
 
 ## Trace contract
 
-API streams, examples, the UI, and CLI use one append-only event schema. Each event contains a monotonic `seq`, stable run/event/span identifiers, phase, wall timestamp, cumulative elapsed time, attempt, status, sanitized payload, and normalized usage. Frontier seed/enqueue/select/prune/outcome, tier advance, graph admission, and mutation proposal/decision events make the traversal reconstructible. Span starts have exactly one terminal span event. Payload sanitation removes secret-like values, full response bodies, unnecessary contact information, and any reasoning/thought prose.
+API streams, examples, the UI, and CLI use one append-only event schema. Each event contains a monotonic `seq`, stable run/event/span identifiers, phase, wall timestamp, cumulative elapsed time, attempt, status, sanitized payload, and normalized usage. Live orchestration buffers each runner trace batch until its canonical state update, attaches the sanitized full `searchGraph` to the batch's last existing event, and preserves sequence numbers and event counts. The client accepts only same-run monotonic snapshots, so a stale or empty failure fallback cannot erase useful graph state. Frontier seed/enqueue/select/prune/outcome, tier advance, graph admission, and mutation proposal/decision events retain the audit trail. Span starts have exactly one terminal span event. Payload sanitation removes secret-like values, full response bodies, unnecessary contact information, and any reasoning/thought prose; both SHA hashes and Atlas's canonical `fnv1a32:` content hashes survive structural validation.
 
 ## Report rendering
 

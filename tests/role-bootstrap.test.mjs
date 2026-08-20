@@ -192,6 +192,7 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
   const direct = await dependencies.executeAction({
     schemaVersion: domain.SCHEMA_VERSION,
     id: "action-role-fetch",
+    frontierEntryId: "action-role-fetch",
     tool: "fetch_public_source",
     purpose: "Bind the attested candidate to the exact fetched source.",
     arguments: {
@@ -200,6 +201,10 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
     },
     candidateId: candidate.id,
     budgetClass: "fetch",
+    sourceTier: 6,
+    sourceLaneId: "t6.candidate_public_source",
+    pathCost: 1,
+    mutated: false,
   }, actionContext(engine));
 
   assert.equal(direct.status, "succeeded");
@@ -297,6 +302,7 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
   const direct = await dependencies.executeAction({
     schemaVersion: domain.SCHEMA_VERSION,
     id: "action-plain-fetch",
+    frontierEntryId: "action-plain-fetch",
     tool: "fetch_public_source",
     purpose: "Inspect the exact provider-attested lead without assuming identity.",
     arguments: {
@@ -305,6 +311,10 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
     },
     candidateId: primary.id,
     budgetClass: "fetch",
+    sourceTier: 6,
+    sourceLaneId: "t6.candidate_public_source",
+    pathCost: 1,
+    mutated: false,
   }, actionContext(engine));
 
   assert.equal(direct.status, "partial");

@@ -2,6 +2,7 @@
 
 ## [PLANS]
 
+- 2026-08-20T16:59:13Z [USER] Repair live-name research end to end: stream incremental graph state, retain valid partial graph/report state, diagnose hardened direct-fetch and API failures, add a `Ganesh Talluri` regression, and leave a verified localhost visualization running.
 - 2026-08-18T18:36:13Z [USER] Build the Sixtyfour People Intelligence take-home end to end: autonomous LLM-guided research, at least one differentiated OSINT tactic, complete traces, auditable structured JSON, a clean visualization, roughly three example runs, and concise setup documentation.
 - 2026-08-18T18:36:13Z [ASSUMPTION] Planned delivery sequence: architecture and threat model; agent/evidence/tool core; live interface; examples and replay; containerized tests and browser QA; independent review; documentation; commit and push.
 - 2026-08-18T21:54:31Z [USER] Supersedes the earlier delivery tail: implementation may be completed and verified locally, but this agent must not commit or push; the root agent will run the external Claude/Fable review and handle publication.
@@ -10,6 +11,8 @@
 
 ## [DECISIONS]
 
+- 2026-08-20T16:59:13Z [CODE] Live orchestration now attaches each canonical post-batch `searchGraph` state to the last existing trace event instead of synthesizing lossy node/edge admissions or new sequence numbers; client replacement is same-run, append-only, telemetry-monotonic, and permits only the pristine empty bootstrap to acquire its seed.
+- 2026-08-20T16:59:13Z [CODE] Source URLs receive deterministic type/tier classification before transport. Mismatched LinkedIn T1 official/company actions fail with `lead_lane_mismatch` and zero requests; unknown public documents use a low-trust T6 candidate-public-source lane without weakening candidate separation or first-party evidence rules.
 - 2026-08-18T18:36:13Z [USER] Requested Claude Code Opus 5 or Fable for planning/reasoning/review and Codex 5.6 Sol Ultra for implementation; quality has priority over token efficiency.
 - 2026-08-18T18:36:13Z [TOOL] Claude Code 2.1.220 exposes `fable` and `opus` aliases but is not authenticated; no other callable Fable/Claude surface and no OpenRouter key are currently available. Any temporary planning-model substitution must be disclosed and Claude review retried if credentials become available.
 - 2026-08-18T18:36:13Z [TOOL] The Sites capability-path starter is being used for the interface because the workspace was initially empty and the finished project needs a polished live investigation view.
@@ -32,6 +35,8 @@
 
 ## [PROGRESS]
 
+- 2026-08-20T16:59:13Z [CODE] Added FNV content-hash sanitation alignment, validated-terminal preservation in the NDJSON wrapper, graceful partial completion after later provider failure, structural hardened-fetch errors across Worker realms, bounded redirect/retry cleanup errors, deterministic source routing, monotonic graph merges, and focused documentation.
+- 2026-08-20T16:59:13Z [TOOL] Added regressions for exact live name streaming, provider failure after discovery, empty-bootstrap-to-populated graph progression, destructive fallback rejection, FNV partial terminals, mismatched inputs, redirect cancellation, and cross-realm hardened errors.
 - 2026-08-18T18:36:13Z [TOOL] Read the complete take-home brief and the required personal-application and Sites-building instructions. Started the Sites initializer and dependency installation.
 - 2026-08-18T18:36:13Z [TOOL] Brain context retrieval completed for the user request; it supplied voice guidance but no project-specific prior implementation.
 - 2026-08-18T18:59:17Z [CODE] The first product-specific interface slice replaced the starter skeleton with an editorial investigation workspace. Lint, production build, and 2/2 server-render tests passed; the host preview returned HTTP 200 and was opened in Codex.
@@ -52,6 +57,9 @@
 
 ## [DISCOVERIES]
 
+- 2026-08-20T16:59:13Z [CODE] The previously UNCONFIRMED suppressed exception is resolved: canonical discovery evidence uses `fnv1a32:<8 hex>`, but trace sanitation accepted only SHA-prefixed structural hashes and deleted `contentHash`; the terminal report then failed validation and the wrapper emitted a fresh empty fatal report.
+- 2026-08-20T16:59:13Z [TOOL] The original captured `Ganesh Talluri` run had 7/7 successful provider/model spans. Its two direct-fetch attempts each made one request, read zero bytes, and ran no extraction because the planner incorrectly put LinkedIn leads in T1 official/company lanes; this was not a model API outage. A later independent standard-depth retry did receive a genuine OpenRouter HTTP 429, now kept distinct from graph/fetch failures.
+- 2026-08-20T16:59:13Z [TOOL] Browser QA exposed a second client edge case after the server snapshots landed: the initial canonical graph has an empty seed and null seed node, so a strict seed-identity guard rejected its legitimate transition to the first populated snapshot. The same-run pristine-bootstrap transition is now regression-bound; populated-to-empty replacement remains rejected.
 - 2026-08-20T08:34:37-07:00 [TOOL] Exact live API reproduction for `Ganesh Talluri` emitted 128 events, including 61 graph-node/edge admissions, one candidate, five admitted discovery-only `search_result` records, two successful search spans, and two failed hardened public-source fetches; synthesis produced zero findings and the engine recorded `partial/diminishing_returns` before the stream wrapper replaced completion with an empty `failed/fatal_error` report.
 - 2026-08-20T08:34:37-07:00 [CODE] The zero-node UI has two independent causes: `mergeGraphEvent` only accepts a complete `searchGraph`, while live `graph.node_admitted`/`graph.edge_admitted` events contain only incremental IDs and fields; then `traceNdjsonResponse` suppresses the post-investigation exception and emits a fallback report whose canonical graph is empty, so no terminal graph can recover the UI. The exact suppressed exception remains UNCONFIRMED.
 - 2026-08-20T08:23:20-07:00 [TOOL] The nine-hour-old Vinext dev process on loopback port 3000 still answered API requests but returned homepage HTTP 500 because its Vite SSR optimize-deps cache referenced a missing `react_jsx-runtime.js`. Restart then exposed an incompatible generated Miniflare SQLite schema; moving only `.wrangler/state` to `/private/tmp/atlas-wrangler-state-20260820T0823` allowed a clean dev runtime to regenerate it.
@@ -73,6 +81,8 @@
 
 ## [OUTCOMES]
 
+- 2026-08-20T17:01:00Z [TOOL] [MILESTONE] Live graph repair passed `npm run verify`: typecheck, lint, five-stage Vinext production build, and 117/117 active tests with 3 intentional skips. A real quick-depth `Ganesh Talluri` run finished `partial/diminishing_returns` with 110 contiguous events, 13 nonempty preterminal snapshots, 27 nodes, 33 edges, and 5 retained evidence records instead of the prior empty fatal replacement.
+- 2026-08-20T17:01:00Z [TOOL] Clean in-app browser QA against the restarted localhost server observed the graph while still running (3 nodes, 2 edges, 2 frontier entries), retained 6 nodes and 5 edges after terminalization, and recorded no console warnings or errors. The verified dev server remains running at `http://localhost:3000/` with the graph preview left open.
 - 2026-08-20T16:15:16Z [CODE] [MILESTONE] Completed a visual-only Atlas redesign on `codex/minimalist-ui-redesign`: one tokenized dark system now governs the header, modalities, graph chrome, source ladder, trace, inspector, report sheet, and printable report without changing research, data, or API behavior.
 - 2026-08-20T16:15:16Z [TOOL] Exact browser QA at 1440x900 and 390x844 found no body overflow or collisions across the populated graph chrome; the report sheet stayed readable at both sizes. `npm run verify` passed 111 tests with 3 intentional skips, PDF smoke passed 6/6, and the regenerated six-page sample PDF passed raster inspection with no blank or clipped pages.
 - 2026-08-20T08:34:37-07:00 [TOOL] Live graph diagnosis is complete without product-source edits: provider planning/search executed, but no direct source was admitted, no finding was synthesized, the browser cannot construct the incremental graph, and the fallback terminal wipes the backend graph. Raw sanitized NDJSON is retained temporarily at `/private/tmp/atlas-ganesh-live.ndjson`; localhost port 3000 remains running.

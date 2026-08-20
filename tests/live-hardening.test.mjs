@@ -302,10 +302,265 @@ test("an abort during an in-flight planner request terminates as canceled", asyn
   assert.equal(plannerEnds[0].status, "canceled");
 });
 
+test("a provider failure after discovery preserves a legal partial graph instead of becoming fatal", async () => {
+  let plannerCalls = 0;
+  const updates = [];
+  for await (const update of agent.runResearch(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      query: "Ganesh Talluri",
+      requestedDepth: "standard",
+    },
+    {
+      clock: domain.createSequenceClock("2026-08-20T18:00:00.000Z", 2),
+      ids: domain.createDeterministicIdFactory("provider-partial"),
+      planner: async ({ selectedFrontierEntries }) => {
+        plannerCalls += 1;
+        if (plannerCalls > 1) throw new Error("provider rate limited the follow-up planner request");
+        return {
+          kind: "actions",
+          decisionSummary: "Discover one provider-attested public lead.",
+          actions: [{
+            frontierEntryId: selectedFrontierEntries[0].id,
+            tool: "search_web",
+            purpose: "Find a public professional source.",
+            arguments: { query: "Ganesh Talluri public professional profile" },
+          }],
+        };
+      },
+      executeAction: async () => ({
+        status: "succeeded",
+        candidates: [{
+          ref: "search-subject",
+          displayName: "Ganesh Talluri",
+          signals: [{
+            kind: "name",
+            value: "Ganesh Talluri",
+            normalizedValue: "ganesh talluri",
+            strength: "weak",
+            assurance: "self_asserted",
+          }],
+        }],
+        evidence: [{
+          candidateRef: "search-subject",
+          claim: "Web search surfaced a possible LinkedIn profile; it is a discovery lead only.",
+          disposition: "discovery_only",
+          sourceUrl: "https://www.linkedin.com/in/ganesh-talluri",
+          sourceType: "search_result",
+          title: "Public source at linkedin.com",
+          excerpt: "Provider search surfaced this URL as a discovery lead; its contents have not been fetched or quoted.",
+          verificationMethod: "search_discovery",
+          temporalStatus: "unknown",
+          reliability: 0,
+          spoofable: true,
+          attributes: { leadId: "lead_provider_partial" },
+        }],
+        meta: { requests: 0 },
+      }),
+    },
+    { availableTools: ["search_web", "fetch_public_source"] },
+  )) updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(completed.report.status, "partial");
+  assert.notEqual(completed.report.stop.reason, "fatal_error");
+  assert.equal(completed.report.evidence.length, 1);
+  assert.ok(completed.report.searchGraph.nodes.length > 0);
+  assert.deepEqual(completed.report.searchGraph.selectedFrontierEntryIds, []);
+  assert.ok(completed.trace.events.some((event) =>
+    event.name === "frontier.exhausted"
+    && event.payload.reason === "upstream_failure_after_partial_results"));
+});
+
 test("non-tool network accounting never increments tool calls", () => {
   const ledger = new domain.BudgetLedger(domain.resolveBudgetLimits("quick"), 0);
   ledger.recordNetworkRequests(2, 1);
   const usage = ledger.snapshot(2);
   assert.equal(usage.networkRequests, 2);
   assert.equal(usage.toolCalls, 0);
+});
+
+test("exact live name streams graph snapshots, classifies fetch lanes, and preserves its partial report", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Ganesh Talluri",
+    requestedDepth: "standard",
+  });
+  const linkedInUrl = "https://www.linkedin.com/in/ganesh-talluri";
+  let providerCalls = 0;
+  let pageFetchCalls = 0;
+  const fetch = async (request, init = {}) => {
+    const url = new URL(String(request));
+    if (url.hostname !== "openrouter.ai") {
+      pageFetchCalls += 1;
+      assert.equal(url.href, linkedInUrl);
+      return new Response(
+        "<html><title>Ganesh Talluri</title><p>Ganesh Talluri builds public machine learning projects at LuxenAI.</p></html>",
+        { headers: { "content-type": "text/html" } },
+      );
+    }
+
+    providerCalls += 1;
+    const body = JSON.parse(typeof init.body === "string"
+      ? init.body
+      : new TextDecoder().decode(init.body));
+    if (body.tools?.some((tool) => tool.type === "openrouter:web_search")) {
+      return jsonResponse({
+        id: `search-${providerCalls}`,
+        model: "test/model",
+        choices: [{
+          finish_reason: "stop",
+          message: {
+            role: "assistant",
+            content: null,
+            annotations: [{
+              type: "url_citation",
+              url_citation: {
+                url: linkedInUrl,
+                title: "Ganesh Talluri | LinkedIn",
+                content: "Ganesh Talluri public professional profile.",
+              },
+            }],
+          },
+        }],
+        usage: {
+          prompt_tokens: 2,
+          completion_tokens: 2,
+          reasoning_tokens: 1,
+          prompt_tokens_details: { cached_tokens: 1 },
+          cost: 0.001,
+        },
+      });
+    }
+    if (body.tools?.some((tool) => tool.function?.name === "submit_evidence_extraction")) {
+      return jsonResponse({
+        id: `extract-${providerCalls}`,
+        model: "test/model",
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call-extract-ganesh",
+              type: "function",
+              function: {
+                name: "submit_evidence_extraction",
+                arguments: JSON.stringify({
+                  claim: "Ganesh Talluri builds public machine learning projects at LuxenAI.",
+                  excerpt: "Ganesh Talluri builds public machine learning projects at LuxenAI.",
+                  publisher: "LinkedIn",
+                  sourceType: "professional_profile",
+                  temporalStatus: "current",
+                  subjectName: "Ganesh Talluri",
+                  organization: "LuxenAI",
+                }),
+              },
+            }],
+          },
+        }],
+        usage: {
+          prompt_tokens: 2,
+          completion_tokens: 2,
+          reasoning_tokens: 1,
+          prompt_tokens_details: { cached_tokens: 1 },
+          cost: 0.001,
+        },
+      });
+    }
+    if (body.tools?.some((tool) => tool.function?.name === "submit_findings")) {
+      return jsonResponse({
+        id: `findings-${providerCalls}`,
+        model: "test/model",
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call-findings-ganesh",
+              type: "function",
+              function: {
+                name: "submit_findings",
+                arguments: JSON.stringify({
+                  decisionSummary: "Keep the fetched page quarantined pending independent identity corroboration.",
+                  openQuestions: ["Which independently verified source binds this profile to the requested person?"],
+                  findings: [],
+                }),
+              },
+            }],
+          },
+        }],
+        usage: {
+          prompt_tokens: 2,
+          completion_tokens: 2,
+          reasoning_tokens: 1,
+          prompt_tokens_details: { cached_tokens: 1 },
+          cost: 0.001,
+        },
+      });
+    }
+
+    const plannerMessage = [...body.messages].reverse().find((message) =>
+      message.role === "user" && typeof message.content === "string"
+      && message.content.startsWith("Choose the next legal decision"));
+    assert.ok(plannerMessage);
+    const plannerState = JSON.parse(plannerMessage.content.split("\n").slice(1).join("\n"));
+    const selected = plannerState.selectedFrontier;
+    const leadId = plannerState.state.evidence.find((evidence) => evidence.leadId)?.leadId;
+    const hasFetchedEvidence = plannerState.state.evidence.some((evidence) =>
+      evidence.disposition !== "discovery_only");
+    const decision = hasFetchedEvidence
+      ? {
+          kind: "stop",
+          decisionSummary: "Preserve the valid partial graph while awaiting independent corroboration.",
+          nextPhase: null,
+          actions: [],
+        }
+      : {
+          kind: "actions",
+          decisionSummary: leadId
+            ? "Inspect the provider-attested lead only in its selected deterministic lane."
+            : "Discover provider-attested public sources first.",
+          nextPhase: null,
+          actions: selected.map((entry) => ({
+            frontierEntryId: entry.frontierEntryId,
+            tool: leadId ? "fetch_public_source" : "search_web",
+            purpose: leadId ? "Inspect the exact discovery lead." : "Find public professional sources.",
+            arguments: leadId
+              ? { leadId, claimFocus: "Public professional identity and organization" }
+              : { query: "Ganesh Talluri public professional profile" },
+            ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
+          })),
+        };
+    return completion(providerCalls, JSON.stringify(decision));
+  };
+
+  const events = [];
+  for await (const event of streamLiveResearch(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    fetch,
+    resolveHostname: async () => ["108.174.10.10"],
+  })) events.push(event);
+
+  assert.deepEqual(events.map((event) => event.seq), events.map((_, index) => index + 1));
+  assert.equal(events.every((event) => agent.isTraceEvent(event, { allowedEmails: new Set() })), true);
+  const preterminalGraphs = events.slice(0, -1)
+    .map((event) => event.payload?.searchGraph)
+    .filter((graph) => graph?.schemaVersion === 2);
+  assert.ok(preterminalGraphs.some((graph) => graph.nodes.length > 0));
+  assert.ok(JSON.stringify(events).includes("lead_lane_mismatch"));
+  assert.equal(pageFetchCalls, 1, "T1 LinkedIn leads must be rejected before network; only T2 may fetch");
+  assert.ok(providerCalls >= 5);
+
+  const terminal = events.at(-1);
+  assert.equal(terminal.name, "result.terminal");
+  assert.notEqual(terminal.payload.report.stop.reason, "fatal_error");
+  assert.ok(terminal.payload.report.searchGraph.nodes.length > 0);
+  assert.ok(terminal.payload.report.evidence.some((evidence) =>
+    evidence.verificationMethod === "search_discovery"
+    && evidence.contentHash.startsWith("fnv1a32:")));
+  assert.ok(JSON.stringify(events).includes("candidate_binding_strong_binding_missing"));
 });
