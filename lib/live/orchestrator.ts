@@ -75,12 +75,18 @@ export interface LiveResearchConfig {
   model: string;
   siteUrl?: string;
   appName?: string;
-  /** "openai" uses the OpenAI API directly with native web search. */
-  provider?: "openrouter" | "openai";
+  /** "openai" uses the OpenAI API directly with native web search; "gemini" uses Google's OpenAI-compat endpoint. */
+  provider?: "openrouter" | "openai" | "gemini";
   /** Override the chat-completions endpoint (defaults per provider). */
   endpoint?: string;
   /** Search-preview model used only for the web-discovery turn (OpenAI). */
   searchModel?: string;
+  /** Delegate the web-discovery turn to an OpenAI search provider (hybrid runs). */
+  searchProvider?: "openai";
+  /** API key for the delegated search provider. */
+  searchApiKey?: string;
+  /** Chat-completions endpoint for the delegated search provider. */
+  searchEndpoint?: string;
   fetch?: FetchLike;
   clock?: Clock;
   ids?: IdFactory;
@@ -978,6 +984,9 @@ export function createLiveDependencies(
     ...(config.provider ? { provider: config.provider } : {}),
     ...(config.endpoint ? { endpoint: config.endpoint } : {}),
     ...(config.searchModel ? { searchModel: config.searchModel } : {}),
+    ...(config.searchProvider ? { searchProvider: config.searchProvider } : {}),
+    ...(config.searchApiKey ? { searchApiKey: config.searchApiKey } : {}),
+    ...(config.searchEndpoint ? { searchEndpoint: config.searchEndpoint } : {}),
   } as const;
   // Validate configuration synchronously, before the generator starts work.
   createOpenRouterClient({ ...clientConfig, fetch: countedFetch });

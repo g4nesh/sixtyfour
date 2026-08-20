@@ -1,14 +1,28 @@
-# Copy to .dev.vars for local live mode (gitignored). Server-side only.
+# Server-side only. Copy to .env for local live mode (gitignored).
 # Never expose these through NEXT_PUBLIC_* variables.
 ATLAS_LIVE_ENABLED=true
 
-# OpenAI (preferred). A small, low-cost model drives the local tool-calling
-# harness; web discovery uses the OpenAI Responses web_search tool.
+# Provider selection: gemini | openai | openrouter. Auto-detects if unset
+# (gemini, then openai, then openrouter).
+# LIVE_PROVIDER=openai
+
+# OpenAI. A small, low-cost model drives the local tool-calling harness; web
+# discovery uses the OpenAI Responses web_search tool.
+# NOTE: free-tier keys allow only ~50 requests/day (RPD); one investigation
+# uses ~15-20, so add a small amount of billing for repeated runs.
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_SEARCH_MODEL=gpt-4o-mini
 # OPENAI_BASE_URL=https://api.openai.com/v1
 
-# OpenRouter (optional fallback if no OPENAI_API_KEY is set).
+# Google Gemini (reasoning via the OpenAI-compat endpoint). Gemini's own search
+# grounding needs billing, so in gemini mode web discovery is delegated to
+# OpenAI's web_search when OPENAI_API_KEY is also set (hybrid: Gemini reasoning
+# + OpenAI discovery). Gemini's free per-minute limits suit the many
+# planner/extraction calls.
+# GEMINI_API_KEY=
+# GEMINI_MODEL=gemini-3.6-flash
+
+# OpenRouter (optional fallback).
 # OPENROUTER_API_KEY=
 # OPENROUTER_MODEL=openai/gpt-5.4

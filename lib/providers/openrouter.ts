@@ -125,13 +125,28 @@ export interface OpenRouterClientConfig {
   logger?: (event: OpenRouterSafeLogEvent) => void;
   /**
    * "openai" targets the OpenAI chat-completions API directly: web discovery
-   * uses OpenAI's native `web_search_options` on a search-preview model (which
-   * returns url_citation annotations in the same shape) instead of the
-   * OpenRouter web_search tool, and OpenRouter-only fields are omitted.
+   * uses OpenAI's native `web_search` tool (which returns url_citation
+   * annotations in the same shape) instead of the OpenRouter web_search tool,
+   * and OpenRouter-only fields are omitted. "gemini" targets Google's
+   * OpenAI-compatibility endpoint for chat/tool-calling; because Gemini's own
+   * search grounding requires billing, its web-discovery turn is delegated to
+   * an OpenAI search provider (see searchProvider) when one is configured.
    */
-  provider?: "openrouter" | "openai";
+  provider?: "openrouter" | "openai" | "gemini";
   /** Search-preview model used only for the web-discovery turn (OpenAI). */
   searchModel?: string;
+  /**
+   * Route the web-discovery turn to a different provider than the reasoning
+   * turns. Only "openai" (Responses API web_search) is supported. This enables
+   * a hybrid run: a high-throughput reasoning model (e.g. Gemini) for the many
+   * planner/extraction calls, plus OpenAI's web_search for the few discovery
+   * calls.
+   */
+  searchProvider?: "openai";
+  /** API key for the search provider when it differs from the reasoning key. */
+  searchApiKey?: string;
+  /** Chat-completions endpoint for the search provider (its /responses sibling is derived). */
+  searchEndpoint?: string;
 }
 
 export class OpenRouterConfigurationError extends Error {
@@ -148,11 +163,19 @@ export class OpenRouterError extends Error {
   readonly status: number | null;
   readonly retryable: boolean;
   readonly requestId: string | null;
+  /** Server-advised wait before retrying (from a Retry-After header), if any. */
+  readonly retryAfterMs: number | null;
 
   constructor(
     code: string,
     message: string,
-    options: { status?: number | null; retryable?: boolean; requestId?: string | null; cause?: unknown } = {},
+    options: {
+      status?: number | null;
+      retryable?: boolean;
+      requestId?: string | null;
+      cause?: unknown;
+      retryAfterMs?: number | null;
+    } = {},
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "OpenRouterError";
@@ -160,6 +183,89 @@ export class OpenRouterError extends Error {
     this.status = options.status ?? null;
     this.retryable = options.retryable ?? false;
     this.requestId = options.requestId ?? null;
+    this.retryAfterMs = options.retryAfterMs ?? null;
+  }
+}
+
+/** Parse a Retry-After header (delta-seconds or HTTP-date) into milliseconds. */
+function parseRetryAfterMs(headers: Headers): number | null {
+  const raw = headers.get("retry-after");
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.min(600_000, Math.max(0, Math.trunc(seconds * 1_000)));
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) return Math.min(600_000, Math.max(0, dateMs - Date.now()));
+  return null;
+}
+
+// A rate limit advising a wait longer than this is a sustained quota (e.g. a
+// free-tier per-day cap), not a transient per-minute burst. Retrying it cannot
+// succeed within a reasonable window and only burns more of the daily quota, so
+// such errors are surfaced immediately instead of retried.
+const MAX_RETRY_WAIT_MS = 20_000;
+
+/** A delay that rejects promptly if the caller aborts mid-wait. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new OpenRouterError("aborted", "The request was canceled before retry."));
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new OpenRouterError("aborted", "The request was canceled before retry."));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, Math.max(0, ms));
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Retry provider-side rejections (HTTP 429 / 5xx) with capped exponential
+ * backoff, honoring a Retry-After header when present. Only errors that carry
+ * an HTTP status are retried: an ambiguous network error may already have been
+ * processed and billed, so it is surfaced immediately. Rate limits are almost
+ * always per-minute, so a short wait lets an otherwise-healthy run continue
+ * instead of discarding all the evidence gathered so far.
+ */
+async function withProviderRetry(
+  attempt: () => Promise<OpenRouterCompletion>,
+  options: {
+    maxAttempts: number;
+    signal?: AbortSignal;
+    onRetry?: (info: { attempt: number; delayMs: number; status: number | null }) => void;
+  },
+): Promise<OpenRouterCompletion> {
+  let tries = 0;
+  for (;;) {
+    try {
+      return await attempt();
+    } catch (error) {
+      tries += 1;
+      const advised = error instanceof OpenRouterError ? error.retryAfterMs : null;
+      const retryable =
+        error instanceof OpenRouterError &&
+        error.retryable &&
+        error.status !== null &&
+        // A long advised wait is a sustained/daily quota; failing fast avoids
+        // burning more of it on retries that cannot succeed soon.
+        (advised === null || advised <= MAX_RETRY_WAIT_MS);
+      if (!retryable || tries >= options.maxAttempts || options.signal?.aborted) {
+        throw error;
+      }
+      const backoff = advised ?? Math.min(8_000, 400 * 2 ** (tries - 1));
+      const jitter = Math.floor((backoff / 4) * ((Date.now() % 97) / 97));
+      const delayMs = backoff + jitter;
+      options.onRetry?.({
+        attempt: tries,
+        delayMs,
+        status: error instanceof OpenRouterError ? error.status : null,
+      });
+      await abortableDelay(delayMs, options.signal);
+    }
   }
 }
 
@@ -306,13 +412,29 @@ function parseToolCalls(value: unknown): OpenRouterToolCall[] | undefined {
   });
 }
 
+/**
+ * Coerce assistant `content` to `string | null`. OpenAI sends `content: null`
+ * on pure tool-call turns; Gemini's OpenAI-compat layer omits the key entirely
+ * (undefined); some providers return an array of `{type:"text",text}` parts.
+ * All three are normalized here so a tool-only turn is never rejected.
+ */
+function normalizeAssistantContent(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const text = value
+      .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
+      .join("");
+    return text.length > 0 ? text : null;
+  }
+  throw new OpenRouterError("invalid_response", "The model provider returned malformed assistant content.");
+}
+
 function parseMessage(value: unknown): OpenRouterMessage {
   if (!isRecord(value) || value.role !== "assistant") {
     throw new OpenRouterError("invalid_response", "OpenRouter returned no assistant message.");
   }
-  if (value.content !== null && typeof value.content !== "string") {
-    throw new OpenRouterError("invalid_response", "OpenRouter returned malformed assistant content.");
-  }
+  const content = normalizeAssistantContent(value.content);
   const reasoningDetails = value.reasoning_details;
   if (reasoningDetails !== undefined && !Array.isArray(reasoningDetails)) {
     throw new OpenRouterError("invalid_response", "OpenRouter returned malformed reasoning continuation data.");
@@ -321,7 +443,7 @@ function parseMessage(value: unknown): OpenRouterMessage {
   const toolCalls = parseToolCalls(value.tool_calls);
   return {
     role: "assistant",
-    content: value.content,
+    content,
     ...(toolCalls === undefined ? {} : { tool_calls: toolCalls }),
     ...(reasoningDetails === undefined ? {} : { reasoning_details: reasoningDetails }),
     ...(Array.isArray(annotations) ? { annotations: annotations.filter(isRecord) as OpenRouterAnnotation[] } : {}),
@@ -403,11 +525,18 @@ async function completeOpenAiWebSearch(args: OpenAiWebSearchArgs): Promise<OpenR
   const requestId = fetched.response.headers.get("x-request-id");
   if (!fetched.response.ok) {
     args.safeLog({ phase: "error", ...args.logBase, status: fetched.response.status, errorCode: "http_error" });
-    throw new OpenRouterError("http_error", `The web-search provider returned HTTP ${fetched.response.status}.`, {
-      status: fetched.response.status,
-      retryable: isRetryableStatus(fetched.response.status),
-      requestId,
-    });
+    throw new OpenRouterError(
+      "http_error",
+      fetched.response.status === 429
+        ? "The model provider rate-limited the web-search request (HTTP 429)."
+        : `The web-search provider returned HTTP ${fetched.response.status}.`,
+      {
+        status: fetched.response.status,
+        retryable: isRetryableStatus(fetched.response.status),
+        requestId,
+        retryAfterMs: parseRetryAfterMs(fetched.response.headers),
+      },
+    );
   }
   let payload: unknown;
   try {
@@ -482,9 +611,15 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
     throw new OpenRouterConfigurationError("A model identifier is required.");
   }
   const isOpenAi = config.provider === "openai";
+  const isGemini = config.provider === "gemini";
+  // Both OpenAI and Gemini speak the OpenAI chat-completions dialect (Bearer
+  // auth, strict-schema quirks, no OpenRouter attribution headers).
+  const isOpenAiCompat = isOpenAi || isGemini;
   const defaultEndpoint = isOpenAi
     ? "https://api.openai.com/v1/chat/completions"
-    : "https://openrouter.ai/api/v1/chat/completions";
+    : isGemini
+      ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+      : "https://openrouter.ai/api/v1/chat/completions";
   let endpoint: URL;
   try {
     endpoint = new URL(config.endpoint ?? defaultEndpoint);
@@ -494,6 +629,23 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
   if (endpoint.protocol !== "https:") {
     throw new OpenRouterConfigurationError("The OpenRouter endpoint must use HTTPS.");
   }
+  // Web discovery may be delegated to an OpenAI search provider even when the
+  // reasoning provider is Gemini/OpenRouter (Gemini's own grounding needs
+  // billing). Resolve its endpoint/key up front so the hardened fetch trusts
+  // both hosts.
+  const searchDelegated = config.searchProvider === "openai" && !isOpenAi;
+  let searchEndpoint = endpoint;
+  if (searchDelegated) {
+    try {
+      searchEndpoint = new URL(config.searchEndpoint ?? "https://api.openai.com/v1/chat/completions");
+    } catch {
+      throw new OpenRouterConfigurationError("The search provider endpoint is invalid.");
+    }
+    if (searchEndpoint.protocol !== "https:") {
+      throw new OpenRouterConfigurationError("The search provider endpoint must use HTTPS.");
+    }
+  }
+  const searchApiKey = (searchDelegated ? config.searchApiKey?.trim() : undefined) || apiKey;
   const clock = config.clock ?? Date.now;
   const safeLog = (event: OpenRouterSafeLogEvent): void => {
     try {
@@ -503,7 +655,7 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
     }
   };
   const hardenedFetch = createHardenedFetch({
-    allowedHostnames: [endpoint.hostname],
+    allowedHostnames: [...new Set([endpoint.hostname, searchEndpoint.hostname])],
     allowedMethods: ["POST"],
     allowedMimeTypes: ["application/json"],
     timeoutMs: boundedInteger(config.timeoutMs, 60_000, 1_000, 120_000),
@@ -521,15 +673,14 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
         throw new OpenRouterConfigurationError("At least one message is required.");
       }
       const webSearchRequested = options.webSearch !== false && options.webSearch !== undefined;
-      const useOpenAiSearch = isOpenAi && webSearchRequested;
+      // OpenAI discovery (native or delegated) uses the Responses web_search
+      // tool; the OpenRouter web_search tool is only for the OpenRouter provider.
+      const useOpenAiSearch = webSearchRequested && (isOpenAi || searchDelegated);
       const tools: OpenRouterTool[] = [...(options.tools ?? [])];
-      // OpenAI does discovery via native web_search_options (see below), so its
-      // web-search turn carries no function tools and never the OpenRouter tool.
-      if (!isOpenAi && options.webSearch !== false && options.webSearch !== undefined) {
+      if (!isOpenAiCompat && options.webSearch !== false && options.webSearch !== undefined) {
         tools.push(webSearchTool(options.webSearch));
       }
       validateTools(tools);
-      const startedAt = clock();
       const requestModel = useOpenAiSearch
         ? (config.searchModel?.trim() || "gpt-4o-mini")
         : config.model;
@@ -539,6 +690,12 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
         functionToolCount: tools.filter((tool) => tool.type === "function").length,
         webSearchEnabled: useOpenAiSearch || tools.some((tool) => tool.type === "openrouter:web_search"),
       };
+
+      // One provider round-trip. Transient rate limits (429) and 5xx are retried
+      // with backoff by withProviderRetry below so a healthy run is not thrown
+      // away over a per-minute limit.
+      const attempt = async (): Promise<OpenRouterCompletion> => {
+      const startedAt = clock();
       safeLog({ phase: "request", ...logBase });
 
       // OpenAI web discovery uses the Responses API `web_search` tool. Its
@@ -547,8 +704,8 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
       // the orchestrator already trusts as provider search results.
       if (useOpenAiSearch) {
         return await completeOpenAiWebSearch({
-          endpoint,
-          apiKey,
+          endpoint: searchEndpoint,
+          apiKey: searchApiKey,
           model: requestModel,
           messages: options.messages,
           maxOutputTokens: options.maxCompletionTokens,
@@ -565,11 +722,14 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
       // on every nested object; OpenRouter does not. Drop `strict` for OpenAI so
       // the existing lenient schemas are accepted (arguments are still JSON-parsed
       // and validated by the orchestrator).
-      const bodyTools: OpenRouterTool[] = isOpenAi
+      const bodyTools: OpenRouterTool[] = isOpenAiCompat
         ? tools.map((tool) => tool.type === "function"
           ? { ...tool, function: { ...tool.function, strict: false } }
           : tool)
         : tools;
+      const tokenCap = options.maxCompletionTokens === undefined
+        ? undefined
+        : boundedInteger(options.maxCompletionTokens, 4_096, 1, 200_000);
       const body: Record<string, unknown> = {
         model: requestModel,
         messages: options.messages,
@@ -580,11 +740,14 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
               parallel_tool_calls: options.parallelToolCalls ?? false,
             }
           : {}),
-        // `reasoning` is an OpenRouter extension; OpenAI chat models reject it.
-        ...(!isOpenAi && options.reasoning ? { reasoning: options.reasoning } : {}),
-        ...(options.maxCompletionTokens === undefined
+        // `reasoning` is an OpenRouter extension; OpenAI/Gemini chat reject it.
+        ...(!isOpenAiCompat && options.reasoning ? { reasoning: options.reasoning } : {}),
+        // Gemini's OpenAI-compat layer expects `max_tokens`; OpenAI uses `max_completion_tokens`.
+        ...(tokenCap === undefined
           ? {}
-          : { max_completion_tokens: boundedInteger(options.maxCompletionTokens, 4_096, 1, 200_000) }),
+          : isGemini
+            ? { max_tokens: tokenCap }
+            : { max_completion_tokens: tokenCap }),
         // gpt-5 and o-series reasoning models only accept the default temperature.
         ...(options.temperature === undefined || useOpenAiSearch
           || (isOpenAi && /^(?:gpt-5|o[134])/i.test(requestModel))
@@ -599,8 +762,8 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
             // Attribution headers are OpenRouter-specific.
-            ...(!isOpenAi && config.appUrl ? { "HTTP-Referer": config.appUrl } : {}),
-            ...(!isOpenAi && config.appTitle ? { "X-Title": config.appTitle } : {}),
+            ...(!isOpenAiCompat && config.appUrl ? { "HTTP-Referer": config.appUrl } : {}),
+            ...(!isOpenAiCompat && config.appTitle ? { "X-Title": config.appTitle } : {}),
           },
           body: JSON.stringify(body),
           signal: options.signal,
@@ -636,6 +799,7 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
             status: fetched.response.status,
             retryable: isRetryableStatus(fetched.response.status),
             requestId,
+            retryAfterMs: parseRetryAfterMs(fetched.response.headers),
           },
         );
       }
@@ -677,6 +841,19 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
         usage,
       });
       return completion;
+      };
+
+      return await withProviderRetry(attempt, {
+        maxAttempts: 4,
+        signal: options.signal,
+        onRetry: ({ attempt: retryNumber, delayMs, status }) =>
+          safeLog({
+            phase: "error",
+            ...logBase,
+            status: status ?? undefined,
+            errorCode: `retrying_${retryNumber}_in_${delayMs}ms`,
+          }),
+      });
     },
   };
 }

@@ -12,42 +12,84 @@ import { findReplayForQuery, getReplayExample, listReplayExamples } from "../rep
 
 export interface ApiEnvironment {
   ATLAS_LIVE_ENABLED?: string;
+  /** Force a provider: "gemini" | "openai" | "openrouter" (otherwise auto-detected). */
+  LIVE_PROVIDER?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
   OPENAI_SEARCH_MODEL?: string;
   OPENAI_BASE_URL?: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_MODEL?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODEL?: string;
   OPENROUTER_SITE_URL?: string;
   OPENROUTER_APP_NAME?: string;
 }
 
-/**
- * Resolve the live model provider from the environment. OpenAI is preferred
- * when its key is present; OpenRouter remains supported as a fallback.
- */
-function resolveLiveProvider(environment: ApiEnvironment): {
-  provider: "openai" | "openrouter";
+interface ResolvedLiveProvider {
+  provider: "openai" | "openrouter" | "gemini";
   apiKey: string;
   model: string;
   searchModel?: string;
   endpoint?: string;
   siteUrl?: string;
   appName?: string;
-} | null {
+  searchProvider?: "openai";
+  searchApiKey?: string;
+  searchEndpoint?: string;
+}
+
+/**
+ * Resolve the live model provider from the environment.
+ *
+ * Selection: an explicit LIVE_PROVIDER wins; otherwise Gemini is used when its
+ * key is present (its generous free per-minute limits suit the many
+ * planner/extraction calls), then OpenAI, then OpenRouter.
+ *
+ * Gemini has no free web-search grounding, so its web-discovery turn is
+ * delegated to OpenAI's web_search when an OpenAI key is also present (a hybrid
+ * run: Gemini reasoning + OpenAI discovery).
+ */
+function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider | null {
   const openaiKey = environment.OPENAI_API_KEY?.trim();
-  if (openaiKey) {
+  const geminiKey = environment.GEMINI_API_KEY?.trim();
+  const openrouterKey = environment.OPENROUTER_API_KEY?.trim();
+  const forced = environment.LIVE_PROVIDER?.trim().toLowerCase();
+  const openaiSearchModel = environment.OPENAI_SEARCH_MODEL?.trim() || "gpt-4o-mini";
+
+  const openaiConfig = (): ResolvedLiveProvider | null => {
+    if (!openaiKey) return null;
     const base = environment.OPENAI_BASE_URL?.trim();
     return {
       provider: "openai",
       apiKey: openaiKey,
       model: environment.OPENAI_MODEL?.trim() || "gpt-4o-mini",
-      searchModel: environment.OPENAI_SEARCH_MODEL?.trim() || "gpt-4o-mini",
+      searchModel: openaiSearchModel,
       ...(base ? { endpoint: `${base.replace(/\/+$/, "")}/chat/completions` } : {}),
     };
-  }
-  const openrouterKey = environment.OPENROUTER_API_KEY?.trim();
-  if (openrouterKey) {
+  };
+
+  const geminiConfig = (): ResolvedLiveProvider | null => {
+    if (!geminiKey) return null;
+    return {
+      provider: "gemini",
+      apiKey: geminiKey,
+      model: environment.GEMINI_MODEL?.trim() || "gemini-3.6-flash",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      // Gemini grounding needs billing; delegate discovery to OpenAI when available.
+      ...(openaiKey
+        ? {
+            searchProvider: "openai" as const,
+            searchApiKey: openaiKey,
+            searchModel: openaiSearchModel,
+            searchEndpoint: "https://api.openai.com/v1/chat/completions",
+          }
+        : {}),
+    };
+  };
+
+  const openrouterConfig = (): ResolvedLiveProvider | null => {
+    if (!openrouterKey) return null;
     return {
       provider: "openrouter",
       apiKey: openrouterKey,
@@ -55,8 +97,12 @@ function resolveLiveProvider(environment: ApiEnvironment): {
       siteUrl: environment.OPENROUTER_SITE_URL?.trim(),
       appName: environment.OPENROUTER_APP_NAME?.trim(),
     };
-  }
-  return null;
+  };
+
+  if (forced === "gemini") return geminiConfig() ?? openaiConfig() ?? openrouterConfig();
+  if (forced === "openai") return openaiConfig() ?? geminiConfig() ?? openrouterConfig();
+  if (forced === "openrouter") return openrouterConfig() ?? openaiConfig() ?? geminiConfig();
+  return geminiConfig() ?? openaiConfig() ?? openrouterConfig();
 }
 
 const FINDING_CATEGORIES: readonly FindingCategory[] = [
@@ -444,7 +490,7 @@ export async function handleApiRequest(
   const liveEnabled = environment.ATLAS_LIVE_ENABLED?.trim() === "true";
   const provider = resolveLiveProvider(environment);
   if (!liveEnabled || !provider) {
-    const events = immediateTerminalTrace(input, "configuration_error", "Live HTTP research requires ATLAS_LIVE_ENABLED=true and a server-side model key (OPENAI_API_KEY).");
+    const events = immediateTerminalTrace(input, "configuration_error", "Live HTTP research requires ATLAS_LIVE_ENABLED=true and a server-side model key (OPENAI_API_KEY or GEMINI_API_KEY).");
     return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
   }
   return traceNdjsonResponse(
@@ -456,6 +502,9 @@ export async function handleApiRequest(
       ...(provider.endpoint ? { endpoint: provider.endpoint } : {}),
       ...(provider.siteUrl ? { siteUrl: provider.siteUrl } : {}),
       ...(provider.appName ? { appName: provider.appName } : {}),
+      ...(provider.searchProvider ? { searchProvider: provider.searchProvider } : {}),
+      ...(provider.searchApiKey ? { searchApiKey: provider.searchApiKey } : {}),
+      ...(provider.searchEndpoint ? { searchEndpoint: provider.searchEndpoint } : {}),
       // Injected DNS validation lets public-source fetches resolve arbitrary
       // hosts while the hardened fetch still rejects private/loopback answers.
       resolveHostname: createDohResolver(),

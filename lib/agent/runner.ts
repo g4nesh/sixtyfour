@@ -1385,7 +1385,9 @@ async function executeActions(
           graph = findingNodeAdmission.graph;
           recordSearchEvents(engine, findingNodeAdmission.events, spanId);
           for (const evidenceId of [...admittedFinding.evidenceIds, ...admittedFinding.counterEvidenceIds]) {
-            const evidenceNode = graph.nodes.find((node) => node.evidenceId === evidenceId);
+            // Only the evidence node (not its same-evidenceId source node) may
+            // ground a finding: grounds edges must be evidence->finding.
+            const evidenceNode = graph.nodes.find((node) => node.kind === "evidence" && node.evidenceId === evidenceId);
             if (!evidenceNode) continue;
             const findingEdge = admitGraphEdge(graph, {
               fromNodeId: evidenceNode.id,
@@ -1686,7 +1688,11 @@ function admitMissingFindingNodes(
     graph = findingNode.graph;
     recordSearchEvents(engine, findingNode.events);
     for (const evidenceId of [...finding.evidenceIds, ...finding.counterEvidenceIds]) {
-      const evidenceNode = graph.nodes.find((node) => node.evidenceId === evidenceId);
+      // A source node and its evidence node share the same evidenceId; only the
+      // evidence node may ground a finding (grounds: evidence->finding). Matching
+      // by evidenceId alone can hit the source node first, yielding an illegal
+      // source->finding edge.
+      const evidenceNode = graph.nodes.find((node) => node.kind === "evidence" && node.evidenceId === evidenceId);
       if (!evidenceNode) continue;
       const edge = admitGraphEdge(graph, {
         fromNodeId: evidenceNode.id,
@@ -2080,6 +2086,19 @@ export async function* runResearch(
             // Finalize from the last committed (valid) graph, since the local
             // graph may be mid-mutation at the point the error surfaced.
             graph = engine.snapshot().searchGraph;
+            engine.replaceSearchGraph(graph);
+            // A terminal report can only be committed from a report-eligible
+            // phase. The error may have surfaced mid-plan/discover, so advance
+            // the phase the same way the normal completion paths do before
+            // finishing. Provider synthesis is unavailable here (the provider is
+            // what just failed), so the partial report preserves the admitted
+            // evidence without new findings.
+            try {
+              advanceToCalibrate();
+              if (engine.phase === "calibrate") engine.transition("report");
+            } catch {
+              // Best-effort: fall through and finish from the current phase.
+            }
             finish(gracefulStop);
             gracefullyStopped = true;
           } catch {
