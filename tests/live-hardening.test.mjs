@@ -171,6 +171,73 @@ test("GitHub codegraph accepts every exact email explicitly present in the reque
   assert.equal(observedQuery, "author-email:second@example.com is:public");
 });
 
+test("provider quota plus no exact GitHub public-user match returns an honest bounded not-found", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Ganesh Talluri",
+    requestedDepth: "quick",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T18:00:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("github-no-match"),
+  });
+  let providerSettlements = 0;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => ["140.82.112.5"],
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") return jsonResponse({
+        error: { message: "RESOURCE_EXHAUSTED" },
+      }, { status: 429, headers: { "retry-after": "0" } });
+      if (url.pathname === "/search/users") return jsonResponse({
+        total_count: 1,
+        incomplete_results: false,
+        items: [{
+          login: "different-person",
+          type: "User",
+          url: "https://api.github.com/users/different-person",
+        }],
+      });
+      if (url.pathname === "/users/different-person") return jsonResponse({
+        login: "different-person",
+        name: "Different Person",
+        type: "User",
+        html_url: "https://github.com/different-person",
+      });
+      throw new Error(`Unexpected fallback request ${url.href}`);
+    },
+  });
+  const result = await dependencies.executeAction({
+    schemaVersion: domain.SCHEMA_VERSION,
+    id: "action-search-no-match",
+    frontierEntryId: "action-search-no-match",
+    tool: "search_web",
+    purpose: "Find an exact public professional source.",
+    arguments: { query: "Ganesh Talluri public professional profile" },
+    budgetClass: "search",
+    sourceTier: 6,
+    sourceLaneId: "t6.general_web_discovery",
+    pathCost: 1,
+    mutated: false,
+  }, {
+    schemaVersion: domain.SCHEMA_VERSION,
+    state: engine.snapshot(),
+    modelAccounting: {
+      reserve: () => true,
+      settle: () => { providerSettlements += 1; },
+    },
+  });
+
+  assert.equal(result.status, "not_found");
+  assert.deepEqual(result.evidence, []);
+  assert.equal(result.meta.requests, 2, "GitHub search and one bounded detail are request-accounted");
+  assert.equal(providerSettlements, 1, "the failed provider attempt is settled separately from fallback requests");
+  assert.ok(result.diagnostics.some((item) => item.code === "search_provider_quota_exhausted"));
+  assert.ok(result.diagnostics.some((item) => item.code === "github_exact_name_not_observed"));
+});
+
 test("planner repairs charge every provider request, token class, and cached input token", async () => {
   let calls = 0;
   const events = await liveEvents(async () => {
@@ -387,87 +454,66 @@ test("exact live name streams graph snapshots, classifies fetch lanes, and prese
     query: "Ganesh Talluri",
     requestedDepth: "standard",
   });
-  const linkedInUrl = "https://www.linkedin.com/in/ganesh-talluri";
+  const githubUrl = "https://github.com/g4nesh";
   let providerCalls = 0;
+  let extractionProviderCalls = 0;
+  let githubApiCalls = 0;
   let pageFetchCalls = 0;
   const fetch = async (request, init = {}) => {
     const url = new URL(String(request));
-    if (url.hostname !== "openrouter.ai") {
+    if (url.hostname === "api.github.com") {
+      githubApiCalls += 1;
+      if (url.pathname === "/search/users") {
+        assert.equal(url.searchParams.get("q"), "Ganesh Talluri in:fullname");
+        assert.equal(url.searchParams.get("per_page"), "3");
+        return jsonResponse({
+          total_count: 2,
+          incomplete_results: false,
+          items: [
+            { login: "g4nesh", type: "User", url: "https://api.github.com/users/g4nesh" },
+            { login: "not-ganesh", type: "User", url: "https://api.github.com/users/not-ganesh" },
+          ],
+        });
+      }
+      if (url.pathname === "/users/g4nesh") return jsonResponse({
+        login: "g4nesh",
+        name: "Ganesh Talluri",
+        type: "User",
+        html_url: githubUrl,
+      });
+      if (url.pathname === "/users/not-ganesh") return jsonResponse({
+        login: "not-ganesh",
+        name: "Another Person",
+        type: "User",
+        html_url: "https://github.com/not-ganesh",
+      });
+      throw new Error(`Unexpected GitHub API request ${url.href}`);
+    }
+    if (url.hostname === "github.com") {
       pageFetchCalls += 1;
-      assert.equal(url.href, linkedInUrl);
+      assert.equal(url.href, githubUrl);
       return new Response(
-        "<html><title>Ganesh Talluri</title><p>Ganesh Talluri builds public machine learning projects at LuxenAI.</p></html>",
+        "<html><title>g4nesh (Ganesh Talluri) · GitHub</title><p>Ganesh Talluri builds public machine learning projects at LuxenAI.</p></html>",
         { headers: { "content-type": "text/html" } },
       );
     }
+    assert.equal(url.hostname, "generativelanguage.googleapis.com");
 
     providerCalls += 1;
     const body = JSON.parse(typeof init.body === "string"
       ? init.body
       : new TextDecoder().decode(init.body));
-    if (body.tools?.some((tool) => tool.type === "openrouter:web_search")) {
-      return jsonResponse({
-        id: `search-${providerCalls}`,
-        model: "test/model",
-        choices: [{
-          finish_reason: "stop",
-          message: {
-            role: "assistant",
-            content: null,
-            annotations: [{
-              type: "url_citation",
-              url_citation: {
-                url: linkedInUrl,
-                title: "Ganesh Talluri | LinkedIn",
-                content: "Ganesh Talluri public professional profile.",
-              },
-            }],
-          },
-        }],
-        usage: {
-          prompt_tokens: 2,
-          completion_tokens: 2,
-          reasoning_tokens: 1,
-          prompt_tokens_details: { cached_tokens: 1 },
-          cost: 0.001,
-        },
+    if (url.pathname === "/v1beta/interactions") {
+      assert.ok(body.tools?.some((tool) => tool.type === "google_search"));
+      return jsonResponse({ error: { message: "RESOURCE_EXHAUSTED" } }, {
+        status: 429,
+        headers: { "retry-after": "0" },
       });
     }
+    assert.equal(url.pathname, "/v1beta/openai/chat/completions");
     if (body.tools?.some((tool) => tool.function?.name === "submit_evidence_extraction")) {
-      return jsonResponse({
-        id: `extract-${providerCalls}`,
-        model: "test/model",
-        choices: [{
-          finish_reason: "tool_calls",
-          message: {
-            role: "assistant",
-            content: null,
-            tool_calls: [{
-              id: "call-extract-ganesh",
-              type: "function",
-              function: {
-                name: "submit_evidence_extraction",
-                arguments: JSON.stringify({
-                  claim: "Ganesh Talluri builds public machine learning projects at LuxenAI.",
-                  excerpt: "Ganesh Talluri builds public machine learning projects at LuxenAI.",
-                  publisher: "LinkedIn",
-                  sourceType: "professional_profile",
-                  temporalStatus: "current",
-                  subjectName: "Ganesh Talluri",
-                  organization: "LuxenAI",
-                }),
-              },
-            }],
-          },
-        }],
-        usage: {
-          prompt_tokens: 2,
-          completion_tokens: 2,
-          reasoning_tokens: 1,
-          prompt_tokens_details: { cached_tokens: 1 },
-          cost: 0.001,
-        },
-      });
+      extractionProviderCalls += 1;
+      throw new Error("GitHub fallback must not call model extraction");
     }
     if (body.tools?.some((tool) => tool.function?.name === "submit_findings")) {
       return jsonResponse({
@@ -541,6 +587,7 @@ test("exact live name streams graph snapshots, classifies fetch lanes, and prese
   for await (const event of streamLiveResearch(input, {
     apiKey: "test-key",
     model: "test/model",
+    provider: "gemini",
     fetch,
     resolveHostname: async () => ["108.174.10.10"],
   })) events.push(event);
@@ -552,15 +599,58 @@ test("exact live name streams graph snapshots, classifies fetch lanes, and prese
     .filter((graph) => graph?.schemaVersion === 2);
   assert.ok(preterminalGraphs.some((graph) => graph.nodes.length > 0));
   assert.ok(JSON.stringify(events).includes("lead_lane_mismatch"));
-  assert.equal(pageFetchCalls, 1, "T1 LinkedIn leads must be rejected before network; only T2 may fetch");
-  assert.ok(providerCalls >= 5);
+  assert.ok(JSON.stringify(events).includes("search_provider_quota_exhausted"));
+  assert.ok(JSON.stringify(events).includes("deterministic_github_extraction"));
+  assert.equal(githubApiCalls, 3, "one bounded official search and two returned user details are checked");
+  assert.equal(pageFetchCalls, 1, "T1 GitHub leads must be rejected before network; only T2 may fetch the HTML page");
+  assert.equal(extractionProviderCalls, 0, "exact API-attested GitHub profiles require no model extraction call");
+  assert.ok(providerCalls >= 3, "planner, retryable search failure, and terminal planning remain provider-accounted");
 
   const terminal = events.at(-1);
   assert.equal(terminal.name, "result.terminal");
   assert.notEqual(terminal.payload.report.stop.reason, "fatal_error");
   assert.ok(terminal.payload.report.searchGraph.nodes.length > 0);
-  assert.ok(terminal.payload.report.evidence.some((evidence) =>
-    evidence.verificationMethod === "search_discovery"
-    && evidence.contentHash.startsWith("fnv1a32:")));
+  const discovery = terminal.payload.report.evidence.find((evidence) =>
+    evidence.verificationMethod === "search_discovery");
+  assert.ok(discovery);
+  assert.equal(discovery.title, "Ganesh Talluri (@g4nesh) — GitHub");
+  assert.equal(discovery.excerpt, null, "provider discovery metadata is not a source quote");
+  assert.equal(discovery.attributes.provider, "github:public_user_search");
+  assert.equal(discovery.attributes.upstreamProvider, null);
+  assert.equal(discovery.attributes.classifiedSourceType, "code_profile");
+  assert.equal(discovery.attributes.classifiedSourceTier, 2);
+  assert.ok(discovery.contentHash.startsWith("fnv1a32:"));
+  assert.notEqual(
+    terminal.payload.report.searchGraph.frontier.find((entry) =>
+      entry.actionId === discovery.toolCallId)?.status,
+    "verified",
+    "discovery metadata alone must not verify a source-ladder step",
+  );
+
+  const direct = terminal.payload.report.evidence.find((evidence) =>
+    evidence.verificationMethod === "direct_fetch");
+  assert.ok(direct, "a safely fetched name-only page must survive on an isolated candidate branch");
+  assert.equal(direct.title, "g4nesh (Ganesh Talluri) · GitHub");
+  assert.equal(direct.sourceUrl, githubUrl);
+  assert.equal(direct.excerpt, "g4nesh (Ganesh Talluri) · GitHub");
+  assert.equal(direct.claim, direct.excerpt);
+  assert.equal(direct.attributes.extractionMethod, "deterministic_github_profile_quote");
+  assert.equal(direct.attributes.extractedOrganization, null);
+  assert.equal(direct.attributes.extractedOrganizationLabel, null);
+  assert.equal(direct.attributes.quarantinedFromCandidateId, discovery.candidateId);
+  const matchingCandidates = terminal.payload.report.candidates.filter((candidate) =>
+    candidate.normalizedName === "ganesh talluri");
+  assert.equal(matchingCandidates.length, 2, "the fetched subject must remain separate from the name-only seed");
+  assert.notEqual(direct.candidateId, discovery.candidateId);
+  const candidateNodeById = new Map(terminal.payload.report.searchGraph.nodes
+    .filter((node) => node.kind === "candidate")
+    .map((node) => [node.candidateId, node.id]));
+  assert.ok(terminal.payload.report.searchGraph.edges.some((edge) =>
+    edge.kind === "separates"
+    && new Set([edge.fromNodeId, edge.toNodeId]).has(candidateNodeById.get(discovery.candidateId))
+    && new Set([edge.fromNodeId, edge.toNodeId]).has(candidateNodeById.get(direct.candidateId))));
+  assert.ok(terminal.payload.report.searchGraph.nodes
+    .filter((node) => node.evidenceId === discovery.id)
+    .every((node) => node.status !== "verified"));
   assert.ok(JSON.stringify(events).includes("candidate_binding_strong_binding_missing"));
 });

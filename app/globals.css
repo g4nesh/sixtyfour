@@ -557,7 +557,7 @@ kbd {
 
 .graph-canvas {
   position: absolute;
-  inset: 0;
+  inset: 5.75rem 20rem calc(var(--trace-height) + 4rem) 18.5rem;
   min-width: 0;
   min-height: 0;
   background: var(--atlas-bg);
@@ -566,12 +566,19 @@ kbd {
 .graph-canvas .react-flow { background: transparent; }
 .graph-canvas .react-flow__pane { cursor: grab; }
 .graph-canvas .react-flow__pane:active { cursor: grabbing; }
-.graph-canvas .react-flow__edge-path { stroke-linecap: round; }
+.graph-canvas .react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .graph-canvas .react-flow__edge.animated path { animation-duration: 1.6s; }
+.graph-canvas .react-flow__edges { z-index: 0 !important; }
+.graph-canvas .react-flow__nodes { z-index: 2 !important; }
 
 .atlas-flow-node {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   --state-color: var(--atlas-text-faint);
 }
 
@@ -625,6 +632,7 @@ kbd {
 .node-bottomline small,
 .node-bottomline code {
   overflow: hidden;
+  line-height: var(--leading-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -644,12 +652,15 @@ kbd {
 }
 
 .atlas-flow-node > button > strong {
+  display: -webkit-box;
   overflow: hidden;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
   letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .node-bottomline code {
@@ -664,11 +675,12 @@ kbd {
   height: 0.375rem !important;
   border: 1px solid var(--atlas-panel-strong) !important;
   background: var(--state-color) !important;
+  opacity: 0;
 }
 
 .atlas-flow-controls {
-  left: calc(17rem + var(--space-4)) !important;
-  bottom: calc(var(--trace-height) + var(--space-3)) !important;
+  left: var(--space-2) !important;
+  bottom: var(--space-2) !important;
   overflow: hidden;
   border: 1px solid var(--atlas-line) !important;
   border-radius: var(--radius-md) !important;
@@ -690,8 +702,8 @@ kbd {
 .atlas-flow-controls button svg { fill: currentColor !important; }
 
 .atlas-minimap {
-  right: calc(18rem + var(--space-8)) !important;
-  bottom: calc(var(--trace-height) + var(--control-sm) + var(--space-6)) !important;
+  right: var(--space-2) !important;
+  bottom: var(--space-2) !important;
   overflow: hidden;
   border: 1px solid var(--atlas-line) !important;
   border-radius: var(--radius-md) !important;
@@ -700,8 +712,8 @@ kbd {
 
 .react-flow__attribution {
   right: auto !important;
-  bottom: calc(var(--trace-height) + var(--space-1)) !important;
-  left: calc(17rem + var(--space-8)) !important;
+  bottom: var(--space-1) !important;
+  left: calc(var(--control-sm) + var(--space-4)) !important;
   border: 0 !important;
   background: transparent !important;
   opacity: 0.45;
@@ -1928,6 +1940,7 @@ kbd {
 @media (max-width: 1180px) {
   .scope-row { width: 34rem; min-width: 0; }
   .empty-hint { max-width: 28rem; }
+  .graph-canvas { right: var(--space-4); }
   .graph-list-view { right: var(--space-4); }
   .node-inspector {
     top: auto;
@@ -1967,6 +1980,10 @@ kbd {
   }
 
   .scope-note { max-width: calc(100% - 17rem); }
+  .graph-canvas {
+    top: 10rem;
+    left: 17rem;
+  }
   .source-ladder { top: 6.75rem; width: 15.5rem; }
   .graph-toolbar { top: 4.75rem; }
   .canonical-graph-empty,
@@ -2028,6 +2045,9 @@ kbd {
   }
 
   .graph-toolbar { top: 7.5rem; right: var(--space-2); }
+  .graph-canvas {
+    inset: 22rem var(--space-2) calc(var(--trace-height) + 4rem);
+  }
   .source-ladder {
     top: 10rem;
     right: var(--space-2);
@@ -2096,21 +2116,16 @@ kbd {
 
   .atlas-flow-controls {
     right: auto !important;
-    bottom: calc(var(--trace-height) + var(--space-2)) !important;
+    bottom: var(--space-2) !important;
     left: var(--space-2) !important;
   }
 
   .atlas-minimap {
-    right: var(--space-2) !important;
-    bottom: calc(var(--trace-height) + var(--space-2)) !important;
-    width: 8rem !important;
-    height: 6rem !important;
+    display: none;
   }
 
   .react-flow__attribution {
-    right: auto !important;
-    bottom: calc(var(--trace-height) + var(--space-2)) !important;
-    left: 11rem !important;
+    display: none;
   }
 
   .workspace-status > span:not(.run-status-pip),

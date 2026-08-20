@@ -13,7 +13,7 @@ import {
   type SynthesisResult,
 } from "../agent";
 import { sanitizeTraceValue, type TraceEvent } from "../agent/trace";
-import { urlContainsRestrictedParameters } from "../domain/content-policy";
+import { containsRestrictedPublicContent, urlContainsRestrictedParameters } from "../domain/content-policy";
 import { BUDGET_PRESETS } from "../domain/budget";
 import { inferSourceFamily } from "../domain/evidence";
 import {
@@ -45,6 +45,7 @@ import {
   createOpenRouterClient,
   functionTool,
   toolResultMessage,
+  OpenRouterError,
   type NormalizedUsage,
   type CompleteOptions,
   type OpenRouterCompletion,
@@ -58,6 +59,7 @@ import type {
   ToolResult,
 } from "../tools/contracts";
 import { investigateGithubEmailCodegraph } from "../tools/github-codegraph";
+import { searchGithubPublicUsersByExactName } from "../tools/github-user-search";
 import { fetchPublicSource, type PublicSourceData } from "../tools/public-source";
 import { lookupKeybaseGithub } from "../tools/keybase";
 import { inspectWaybackHistory } from "../tools/wayback";
@@ -104,6 +106,9 @@ export interface LiveResearchConfig {
 interface Citation {
   url: string;
   title: string;
+  provider: string;
+  upstreamProvider: string | null;
+  attestedSubjectName?: string;
   roleBootstrap?: {
     displayName: string;
     signals: IdentitySignal[];
@@ -245,6 +250,12 @@ function compactState(state: InvestigationState): JsonObject {
       excerpt: evidence.excerpt,
       spoofable: evidence.spoofable,
       leadId: typeof evidence.attributes.leadId === "string" ? evidence.attributes.leadId : null,
+      classifiedSourceType: typeof evidence.attributes.classifiedSourceType === "string"
+        ? evidence.attributes.classifiedSourceType
+        : null,
+      classifiedSourceTier: typeof evidence.attributes.classifiedSourceTier === "number"
+        ? evidence.attributes.classifiedSourceTier
+        : null,
     })),
     findings: state.findings.map((finding) => ({
       id: finding.id,
@@ -462,6 +473,43 @@ function parseExtraction(value: unknown, sourceText: string): EvidenceExtraction
   };
 }
 
+function deterministicGithubProfileExtraction(
+  source: PublicSourceData,
+  subjectNameValue: string,
+): EvidenceExtraction | null {
+  const subjectName = stringValue(subjectNameValue, 120);
+  if (!subjectName) return null;
+  let excerpt: string | null = null;
+  if (
+    source.title
+    && source.title.length <= 240
+    && source.normalizedText.includes(source.title)
+    && labelOccursAsTokenPhrase(source.title, subjectName)
+  ) {
+    excerpt = source.title;
+  } else {
+    // `normalizedText` is already whitespace-normalized by the hardened fetch.
+    // Retain only the exact matched name slice: no bio, organization, location,
+    // email, or neighboring page fields are inferred or copied.
+    const pattern = subjectName
+      .split(/\s+/u)
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("\\s+");
+    const match = source.normalizedText.match(new RegExp(pattern, "iu"));
+    excerpt = match?.[0]?.slice(0, 240) ?? null;
+  }
+  if (!excerpt || !source.normalizedText.includes(excerpt)) return null;
+  return {
+    claim: excerpt,
+    excerpt,
+    publisher: "GitHub",
+    sourceType: "code_profile",
+    temporalStatus: "unknown",
+    subjectName,
+    organization: null,
+  };
+}
+
 function findingsTool(): OpenRouterFunctionTool {
   return functionTool({
     name: "submit_findings",
@@ -637,6 +685,7 @@ function roleBootstrapFromAnnotation(
 function citationsFromCompletion(
   completion: OpenRouterCompletion,
   target: InvestigationState["target"],
+  provider: string,
 ): Citation[] {
   const citations: Citation[] = [];
   for (const annotation of completion.message.annotations ?? []) {
@@ -654,11 +703,21 @@ function citationsFromCompletion(
       nested.title ?? nested.name,
       nested.content ?? nested.snippet ?? nested.text,
     );
+    const providerTitle = stringValue(nested.title ?? nested.name, 320);
+    const allowedEmails = new Set(target.identifiers
+      .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
+      .map((identifier) => identifier.normalizedValue));
+    const title = providerTitle && !containsRestrictedPublicContent(providerTitle, { allowedEmails })
+      ? providerTitle
+      : `Public source at ${new URL(url).hostname}`;
     citations.push({
       url,
-      // Provider annotation text can contain personal contact data. Keep only a
-      // generic title until the URL is directly fetched and locally quoted.
-      title: `Public source at ${new URL(url).hostname}`,
+      // Provider titles are useful discovery metadata, but only after the same
+      // public-content filter used by evidence admission accepts them. A title
+      // is never treated as a quote or finding authority.
+      title,
+      provider,
+      upstreamProvider: completion.provider,
       ...(roleBootstrap ? { roleBootstrap } : {}),
     });
   }
@@ -673,6 +732,47 @@ function citationsFromCompletion(
     }
   }
   return [...unique.values()].slice(0, 8);
+}
+
+function searchProviderForCompletion(
+  completion: OpenRouterCompletion,
+  fallback: "openai:web_search" | "openrouter:web_search" | "gemini:compatibility",
+): string {
+  // Only server-owned, bounded provenance labels may enter evidence metadata.
+  // An OpenRouter upstream name (or any other provider-supplied string) remains
+  // in `upstreamProvider`; it cannot impersonate a search transport.
+  if (completion.provider === "openai:web_search") return "openai:web_search";
+  if (completion.provider === "gemini:google_search") return "gemini:google_search";
+  return fallback;
+}
+
+function isRetryableSearchProviderFailure(error: unknown): error is OpenRouterError {
+  return error instanceof OpenRouterError
+    && error.retryable
+    && (error.status === null || error.status === 408 || error.status === 425
+      || error.status === 429 || error.status >= 500);
+}
+
+function searchProviderFailureDiagnostic(error: OpenRouterError): {
+  code: string;
+  severity: "warning";
+  message: string;
+  retryable: true;
+  details: JsonObject;
+} {
+  const quotaExhausted = error.status === 429;
+  return {
+    code: quotaExhausted ? "search_provider_quota_exhausted" : "search_provider_unavailable",
+    severity: "warning",
+    message: quotaExhausted
+      ? "The configured web-search provider exhausted its retryable quota; Atlas attempted the bounded official GitHub public-user fallback."
+      : "The configured web-search provider was retryably unavailable; Atlas attempted the bounded official GitHub public-user fallback.",
+    retryable: true,
+    details: {
+      providerErrorCode: error.code,
+      providerStatus: error.status,
+    },
+  };
 }
 
 function diagnostics(result: ToolResult<unknown>): Array<{ code: string; severity: "info" | "warning" | "error"; message: string; retryable: boolean; details?: JsonObject }> {
@@ -1058,10 +1158,64 @@ export function createLiveDependencies(
   };
   const plannerMessages: OpenRouterMessage[] = [{ role: "system", content: plannerSystemPrompt() }];
 
+  const mechanicalFetchDecision = (context: PlannerContextV1): PlannerDecision | null => {
+    // Once a search has yielded opaque candidate-scoped leads, choosing the
+    // lead that belongs to a deterministic source lane is policy bookkeeping,
+    // not a reasoning task. Avoid another billed provider turn (and a new 429
+    // failure point) for this mechanical hand-off.
+    if (context.state.evidence.some((evidence) =>
+      evidence.disposition !== "discovery_only" && evidence.sourceType !== "search_result")) return null;
+    const selected = context.selectedFrontierEntries ?? [];
+    const actions: Array<{
+      frontierEntryId: string;
+      tool: string;
+      purpose: string;
+      arguments: JsonObject;
+      candidateId?: string;
+    }> = [];
+    for (const entry of selected) {
+      if (!entry.candidateId || !entry.allowedTools.includes("fetch_public_source")) continue;
+      const leads = context.state.evidence.filter((evidence) =>
+        evidence.candidateId === entry.candidateId
+        && evidence.disposition === "discovery_only"
+        && evidence.sourceType === "search_result"
+        && typeof evidence.attributes.leadId === "string");
+      if (leads.length === 0) continue;
+      const lane = sourceLaneById(entry.sourceLaneId);
+      const compatible = lane
+        ? leads.find((evidence) =>
+          evidence.attributes.classifiedSourceTier === entry.sourceTier
+          && typeof evidence.attributes.classifiedSourceType === "string"
+          && lane.sourceTypes.includes(evidence.attributes.classifiedSourceType as EvidenceSourceType))
+        : undefined;
+      // A mismatched lead is still executed through the zero-request preflight
+      // so the lane closes honestly; the lead itself remains available for its
+      // later compatible lane.
+      const lead = compatible ?? leads[0];
+      actions.push({
+        frontierEntryId: entry.id,
+        tool: "fetch_public_source",
+        purpose: compatible
+          ? `Fetch the exact provider-attested lead in ${entry.sourceLaneId}.`
+          : `Validate whether the exact provider-attested lead qualifies for ${entry.sourceLaneId}.`,
+        arguments: {
+          leadId: lead.attributes.leadId as string,
+          claimFocus: "Public professional identity and organization",
+        },
+        candidateId: entry.candidateId,
+      });
+    }
+    return actions.length > 0
+      ? { kind: "actions", decisionSummary: "Applied deterministic candidate-scoped lead routing.", actions }
+      : null;
+  };
+
   const planner = async (context: PlannerContextV1): Promise<PlannerDecision> => {
     // Direct planner composition may omit the frontier for an advance/stop
     // decision. Action decisions still require a selected compatible entry.
     const selectedFrontierEntries = context.selectedFrontierEntries ?? [];
+    const mechanical = mechanicalFetchDecision(context);
+    if (mechanical) return mechanical;
     plannerMessages.push({
       role: "user",
       content: `Choose the next legal decision from this JSON state and selected frontier:\n${JSON.stringify({
@@ -1171,18 +1325,83 @@ export function createLiveDependencies(
     if (action.tool === "search_web") {
       const query = stringValue(action.arguments.query, 500);
       if (!query) return { status: "skipped", diagnostics: [{ code: "invalid_search_query", severity: "warning", message: "search_web requires a bounded query.", retryable: false }], meta: { requests: 0, llmCalls: 0 } };
-      const completion = await completeModel({
-        messages: [
-          { role: "system", content: "Use web search to identify direct public professional sources for the research query. Return concise source leads; do not infer private data." },
-          { role: "user", content: query },
-        ],
-        webSearch: { engine: "auto", max_results: 8, max_total_results: 12, max_characters: 8_000, search_context_size: "medium" },
-        maxCompletionTokens: 900,
-        temperature: 0,
-        parallelToolCalls: false,
-        signal,
-      }, context.modelAccounting, modelTracker);
-      const citations = citationsFromCompletion(completion, context.state.target);
+      const configuredSearchProvider = config.searchProvider === "openai" || config.provider === "openai"
+        ? "openai:web_search"
+        : config.provider === "gemini"
+          ? "gemini:compatibility"
+          : "openrouter:web_search";
+      let searchProvider = configuredSearchProvider;
+      let citations: Citation[] = [];
+      let fallbackRequests = 0;
+      let fallbackBytesRead = 0;
+      let fallbackIncomplete = false;
+      const searchDiagnostics: NonNullable<ResearchActionResult["diagnostics"]> = [];
+      try {
+        const completion = await completeModel({
+          messages: [
+            { role: "system", content: "Use web search to identify direct public professional sources for the research query. Return concise source leads; do not infer private data." },
+            { role: "user", content: query },
+          ],
+          webSearch: { engine: "auto", max_results: 8, max_total_results: 12, max_characters: 8_000, search_context_size: "medium" },
+          maxCompletionTokens: 900,
+          temperature: 0,
+          parallelToolCalls: false,
+          signal,
+        }, context.modelAccounting, modelTracker);
+        searchProvider = searchProviderForCompletion(completion, configuredSearchProvider);
+        citations = citationsFromCompletion(
+          completion,
+          context.state.target,
+          searchProvider,
+        );
+      } catch (error) {
+        const targetName = context.state.target.name;
+        const fallbackAllowed = context.state.target.kind === "named_person"
+          && Boolean(targetName)
+          && isRetryableSearchProviderFailure(error)
+          && !context.state.evidence.some((evidence) =>
+            evidence.attributes.provider === "github:public_user_search");
+        if (!fallbackAllowed || !targetName || !(error instanceof OpenRouterError)) throw error;
+        const fallback = await searchGithubPublicUsersByExactName(targetName, sharedContext);
+        fallbackRequests = fallback.meta.requests;
+        fallbackBytesRead = fallback.meta.bytesRead;
+        fallbackIncomplete = fallback.meta.incomplete;
+        searchDiagnostics.push(searchProviderFailureDiagnostic(error), ...diagnostics(fallback));
+        if (!fallback.data || fallback.data.matches.length === 0) {
+          return {
+            status: fallback.status === "rate_limited" || fallback.status === "failed"
+              ? fallback.status
+              : "not_found",
+            data: {
+              citationCount: 0,
+              observedCitationCount: 0,
+              provider: "github:public_user_search",
+            },
+            candidates: [],
+            evidence: [],
+            diagnostics: searchDiagnostics,
+            meta: {
+              requests: fallbackRequests,
+              bytesRead: fallbackBytesRead,
+              incomplete: fallbackIncomplete,
+            },
+          };
+        }
+        searchProvider = "github:public_user_search";
+        citations = fallback.data.matches.map((match) => ({
+          url: match.htmlUrl,
+          title: `${match.name} (@${match.login}) — GitHub`,
+          provider: searchProvider,
+          upstreamProvider: null,
+          attestedSubjectName: match.name,
+        }));
+        searchDiagnostics.push({
+          code: "github_public_user_fallback_used",
+          severity: "info",
+          message: "Atlas admitted exact-name GitHub public-user records as discovery leads after the search provider was unavailable.",
+          retryable: false,
+        });
+      }
       const candidates: CandidateDraft[] = [];
       const candidateRefs = new Map<string, string>();
       const namedCandidateRef = !action.candidateId && context.state.target.name
@@ -1233,6 +1452,11 @@ export function createLiveDependencies(
         // one when calling fetch_public_source.
         const leadId = ids.next("lead");
         discoveryAuthorizations.set(leadId, citation.url);
+        const tierContext = sourceTierContextForState(context.state, binding.candidateId);
+        const classifiedSourceType = deterministicSourceTypeForUrl(citation.url, tierContext);
+        const classifiedSourceTier = classifiedSourceType
+          ? sourceTierForUrl(citation.url, classifiedSourceType, false, tierContext)
+          : null;
         return {
           ...(binding.candidateId
             ? { candidateId: binding.candidateId }
@@ -1246,14 +1470,23 @@ export function createLiveDependencies(
           publisher: new URL(citation.url).hostname,
           observedAt: clock.now(),
           httpStatus: null,
-          excerpt: "Provider search surfaced this URL as a discovery lead; its contents have not been fetched or quoted.",
+          canonicalSubset: {
+            providerAttestedUrl: true,
+            providerResultTitle: citation.title,
+          },
           verificationMethod: "search_discovery",
           temporalStatus: "unknown",
           reliability: 0,
           spoofable: true,
           attributes: {
-            provider: "openrouter:web_search",
+            provider: citation.provider,
+            upstreamProvider: citation.upstreamProvider,
             leadId,
+            classifiedSourceType,
+            classifiedSourceTier,
+            ...(citation.attestedSubjectName
+              ? { attestedSubjectName: citation.attestedSubjectName }
+              : {}),
             ...(citation.roleBootstrap
               ? { roleCandidateBootstrap: true, attestedConstraintMatch: true }
               : {}),
@@ -1265,11 +1498,18 @@ export function createLiveDependencies(
         : 0;
       return {
         status: evidence.length > 0 ? "succeeded" : "not_found",
-        data: { citationCount: evidence.length, observedCitationCount: citations.length },
+        data: {
+          citationCount: evidence.length,
+          observedCitationCount: citations.length,
+          provider: citations[0]?.provider ?? searchProvider,
+        },
         candidates,
         evidence,
         diagnostics: evidence.length > 0
-          ? (unboundRoleCitations > 0 ? [{ code: "role_search_results_unbound", severity: "info", message: "Some search annotations did not structurally attest both the requested role and organization and were not authorized for fetch.", retryable: false }] : [])
+          ? [
+              ...searchDiagnostics,
+              ...(unboundRoleCitations > 0 ? [{ code: "role_search_results_unbound", severity: "info" as const, message: "Some search annotations did not structurally attest both the requested role and organization and were not authorized for fetch.", retryable: false }] : []),
+            ]
           : [{
               code: citations.length > 0 ? "role_candidate_not_attested" : "search_sources_not_observed",
               severity: "info",
@@ -1279,7 +1519,11 @@ export function createLiveDependencies(
               retryable: false,
             }],
         // Provider attempts are charged through context.modelAccounting.
-        meta: { requests: 0, incomplete: false },
+        meta: {
+          requests: fallbackRequests,
+          bytesRead: fallbackBytesRead,
+          incomplete: fallbackIncomplete,
+        },
       };
     }
 
@@ -1345,42 +1589,87 @@ export function createLiveDependencies(
       const fetched = await fetchPublicSource({ url, allowedUrl }, sharedContext);
       if (!fetched.data) return { status: fetched.status, diagnostics: diagnostics(fetched), meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: fetched.meta.incomplete, llmCalls: 0 } };
       const focus = stringValue(action.arguments.claimFocus, 500) ?? action.purpose;
-      let extracted;
-      try {
-        extracted = await callEvidenceExtractor(
-          fetched.data,
-          focus,
-          context.modelAccounting,
-          modelTracker,
-          signal,
-        );
-      } catch (error) {
-        if (signal?.aborted) {
+      const candidate = context.state.candidates.find((item) => item.id === boundCandidateId);
+      const attestedSubjectName = stringValue(leadEvidence?.attributes.attestedSubjectName, 120);
+      const targetName = context.state.target.kind === "named_person"
+        ? context.state.target.name
+        : null;
+      const deterministicGithubLead = Boolean(
+        leadEvidence
+        && leadEvidence.attributes.provider === "github:public_user_search"
+        && leadEvidence.attributes.classifiedSourceType === "code_profile"
+        && sourceType === "code_profile"
+        && leadUrl
+        && safeHttpsUrl(fetched.data.finalUrl) === safeHttpsUrl(leadUrl)
+        && attestedSubjectName
+        && targetName
+        && normalizeComparable(attestedSubjectName) === normalizeComparable(targetName)
+        && candidate?.normalizedName === normalizeComparable(targetName),
+      );
+      let extracted: EvidenceExtraction | null = deterministicGithubLead && targetName
+        ? deterministicGithubProfileExtraction(fetched.data, targetName)
+        : null;
+      const extractionMethod = deterministicGithubLead
+        ? "deterministic_github_profile_quote"
+        : "model_exact_quote";
+      const extractionDiagnostics: NonNullable<ResearchActionResult["diagnostics"]> = [];
+      if (deterministicGithubLead && !extracted) {
+        return {
+          status: "partial",
+          diagnostics: [...diagnostics(fetched), {
+            code: "deterministic_github_excerpt_missing",
+            severity: "warning",
+            message: "The exact API-attested GitHub name was not present in the hardened fetched page title or text.",
+            retryable: false,
+          }],
+          meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: true, llmCalls: 0 },
+        };
+      }
+      if (deterministicGithubLead) {
+        extractionDiagnostics.push({
+          code: "deterministic_github_extraction",
+          severity: "info",
+          message: "Atlas retained an exact GitHub page title/name quote for the API-attested public profile without model extraction.",
+          retryable: false,
+        });
+      } else {
+        try {
+          extracted = await callEvidenceExtractor(
+            fetched.data,
+            focus,
+            context.modelAccounting,
+            modelTracker,
+            signal,
+          );
+        } catch (error) {
+          if (signal?.aborted) {
+            return {
+              status: "canceled",
+              diagnostics: [...diagnostics(fetched), {
+                code: "evidence_extraction_canceled",
+                severity: "info",
+                message: "Evidence extraction was canceled before admission.",
+                retryable: false,
+              }],
+              meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: true },
+            };
+          }
+          const budget = nestedBudgetError(error);
           return {
-            status: "canceled",
+            status: "partial",
             diagnostics: [...diagnostics(fetched), {
-              code: "evidence_extraction_canceled",
-              severity: "info",
-              message: "Evidence extraction was canceled before admission.",
+              code: budget ? "model_budget_exhausted" : "evidence_extraction_invalid",
+              severity: "warning",
+              message: budget
+                ? "The source was fetched, but the model-attempt budget ended before extraction completed."
+                : "The source was fetched, but structured extraction failed local quote validation.",
               retryable: false,
             }],
             meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: true },
           };
         }
-        const budget = nestedBudgetError(error);
-        return {
-          status: "partial",
-          diagnostics: [...diagnostics(fetched), {
-            code: budget ? "model_budget_exhausted" : "evidence_extraction_invalid",
-            severity: "warning",
-            message: budget
-              ? "The source was fetched, but the model-attempt budget ended before extraction completed."
-              : "The source was fetched, but structured extraction failed local quote validation.",
-            retryable: false,
-          }],
-          meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: true },
-        };
       }
+      if (!extracted) throw new Error("evidence extraction did not produce a record");
       const family = inferSourceFamily(fetched.data.finalUrl);
       const gate = gateExtractedCandidate(
         context.state,
@@ -1409,16 +1698,14 @@ export function createLiveDependencies(
         canonicalSubset: { mimeType: fetched.data.mimeType, truncated: fetched.data.truncated },
         verificationMethod: "direct_fetch",
         temporalStatus: extracted.temporalStatus,
-        // The model's sourceType is descriptive. Arbitrary-host ownership is
-        // not verified by a fetch, so this record stays low-baseline and
-        // spoofable until a deterministic specialist/independent anchor helps.
+        // Arbitrary-host ownership is not verified by a fetch, so this record
+        // stays low-baseline and spoofable until independent evidence helps.
         reliability: 0.55,
         spoofable: true,
         attributes: {
           untrustedContent: true,
           fullBodyRetained: false,
           ownershipVerified: false,
-          modelDescriptiveSourceType: extracted.sourceType,
           extractedSubjectName: normalizeComparable(extracted.subjectName ?? ""),
           extractedSubjectLabel: extracted.subjectName,
           extractedOrganization: extracted.organization
@@ -1426,7 +1713,13 @@ export function createLiveDependencies(
             : null,
           extractedOrganizationLabel: extracted.organization,
           extractiveClaim: true,
-          modelClaimDiscarded: normalizeComparable(extracted.claim) !== normalizeComparable(extracted.excerpt),
+          extractionMethod,
+          ...(deterministicGithubLead
+            ? { apiAttestedSubjectName: attestedSubjectName }
+            : {
+                modelDescriptiveSourceType: extracted.sourceType,
+                modelClaimDiscarded: normalizeComparable(extracted.claim) !== normalizeComparable(extracted.excerpt),
+              }),
         },
       };
       if (!gate.allowed) {
@@ -1476,9 +1769,26 @@ export function createLiveDependencies(
         return {
           status: "partial",
           data: { sourceUrl: fetched.data.finalUrl, contentHash: fetched.data.contentHash, fullBodyRetained: false },
-          candidates,
-          evidence: candidateRef ? [{ ...evidenceBase, candidateRef }] : [],
-          diagnostics: [...diagnostics(fetched), {
+          ...(action.candidateId
+            ? {
+                candidateBranches: candidates.map((candidate) => ({
+                  parentCandidateId: action.candidateId!,
+                  reason: "fetched_subject_unverified" as const,
+                  candidate,
+                })),
+              }
+            : { candidates }),
+          evidence: candidateRef ? [{
+            ...evidenceBase,
+            candidateRef,
+            attributes: {
+              ...evidenceBase.attributes,
+              ...(action.candidateId
+                ? { quarantinedFromCandidateId: action.candidateId }
+                : {}),
+            },
+          }] : [],
+          diagnostics: [...diagnostics(fetched), ...extractionDiagnostics, {
             code: `candidate_binding_${gate.reason}`,
             severity: "warning",
             message: "The fetched page described a different or unverified subject, so it was not attached to the requested candidate.",
@@ -1502,7 +1812,7 @@ export function createLiveDependencies(
         candidates: [],
         candidateSignals,
         evidence,
-        diagnostics: diagnostics(fetched),
+        diagnostics: [...diagnostics(fetched), ...extractionDiagnostics],
         meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: fetched.meta.incomplete },
       };
     }

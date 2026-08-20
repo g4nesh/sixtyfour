@@ -165,6 +165,13 @@ export interface CandidateSignalUpdate {
   signals: IdentitySignal[];
 }
 
+export interface QuarantinedCandidateBranch {
+  /** The selected candidate whose fetched lead produced this isolated branch. */
+  parentCandidateId: string;
+  reason: "fetched_subject_unverified";
+  candidate: CandidateDraft;
+}
+
 export interface ActionResultMeta {
   durationMs?: number;
   requests?: number;
@@ -178,6 +185,8 @@ export interface ResearchActionResult {
   status: ActionStatus;
   data?: JsonValue | null;
   candidates?: CandidateDraft[];
+  /** Explicit, non-merging branch for fetched text that lacks a strong identity binding. */
+  candidateBranches?: QuarantinedCandidateBranch[];
   candidateSignals?: CandidateSignalUpdate[];
   evidence?: EvidenceDraft[];
   findings?: FindingDraft[];
@@ -917,16 +926,43 @@ async function executeActions(
   for (const { entry, action, actionNodeId, spanId, modelAccounting, result } of settled) {
     executedEntries.push(entry);
     let actionMutations = 0;
+    let actionTrustMutations = 0;
     const localCandidateIds = new Map<string, string>();
+    const isolatedCandidateIds = new Set<string>();
     const pendingSignalUpdates: CandidateSignalUpdate[] = [];
     const sourceLane = sourceLaneForFrontierEntry(entry);
-    for (const draft of result.candidates ?? []) {
-      if (action.candidateId) {
+    const proposedCandidates: Array<{
+      draft: CandidateDraft;
+      isolated: boolean;
+      parentCandidateId?: string;
+    }> = [
+      ...(result.candidates ?? []).map((draft) => ({ draft, isolated: false })),
+      ...(result.candidateBranches ?? []).map((branch) => ({
+        draft: branch.candidate,
+        isolated: true,
+        parentCandidateId: branch.parentCandidateId,
+      })),
+    ];
+    for (const proposal of proposedCandidates) {
+      const { draft } = proposal;
+      const isolatedBranchAllowed = proposal.isolated
+        && Boolean(action.candidateId)
+        && proposal.parentCandidateId === action.candidateId
+        && Boolean(draft.ref)
+        && graph.nodes.some((node) =>
+          node.kind === "candidate" && node.candidateId === proposal.parentCandidateId)
+        && (draft.signals ?? []).every((signal) =>
+          !signal.sourceEvidenceId
+          && signal.assurance !== "verified"
+          && signal.assurance !== "corroborated");
+      if (action.candidateId && !isolatedBranchAllowed) {
         engine.trace.record("candidate.rejected", {
           phase: engine.phase,
           parentSpanId: spanId,
           payload: {
-            reason: "candidate_bound_action_cannot_create_candidates",
+            reason: proposal.isolated
+              ? "invalid_quarantined_candidate_branch"
+              : "candidate_bound_action_cannot_create_candidates",
             expectedCandidateId: action.candidateId,
           },
         });
@@ -936,6 +972,7 @@ async function executeActions(
         const { signals: proposedSignals, ...identityDraft } = draft;
         const candidateMutation = engine.addCandidate(identityDraft);
         if (draft.ref) localCandidateIds.set(draft.ref, candidateMutation.candidate.id);
+        if (proposal.isolated) isolatedCandidateIds.add(candidateMutation.candidate.id);
         if (proposedSignals?.length) {
           pendingSignalUpdates.push({
             candidateId: candidateMutation.candidate.id,
@@ -953,18 +990,35 @@ async function executeActions(
         const candidateNodeAdmission = admitGraphNode(graph, {
           kind: "candidate",
           label: candidateMutation.candidate.displayName,
-          status: candidateMutation.created ? "verified" : "selected",
+          // Discovery-created and quarantined identities remain visibly
+          // provisional until evidence-backed scoring resolves them.
+          status: candidateMutation.candidate.status === "resolved" ? "verified" : "selected",
           candidateId: candidateMutation.candidate.id,
           data: {},
           dedupeEntityKey: `candidate:${candidateMutation.candidate.id}`,
         }, engine.ids, engine.clock.now());
         graph = candidateNodeAdmission.graph;
         recordSearchEvents(engine, candidateNodeAdmission.events, spanId);
+        if (proposal.isolated && proposal.parentCandidateId) {
+          const parentCandidateNode = graph.nodes.find((node) =>
+            node.kind === "candidate" && node.candidateId === proposal.parentCandidateId);
+          if (!parentCandidateNode) throw new Error("quarantined branch parent candidate node is missing");
+          const separation = admitGraphEdge(graph, {
+            fromNodeId: parentCandidateNode.id,
+            toNodeId: candidateNodeAdmission.value.id,
+            kind: "separates",
+            status: "verified",
+            edgeCost: 0.07,
+            pathCost: entry.pathCost + 0.1,
+          }, engine.ids, engine.clock.now());
+          graph = separation.graph;
+          recordSearchEvents(engine, separation.events, spanId);
+        }
         const candidateEdgeAdmission = admitGraphEdge(graph, {
           fromNodeId: actionNodeId,
           toNodeId: candidateNodeAdmission.value.id,
           kind: "expands",
-          status: "verified",
+          status: candidateNodeAdmission.value.status,
           frontierEntryId: entry.id,
           actionId: action.id,
           edgeCost: 0.06,
@@ -991,7 +1045,7 @@ async function executeActions(
           recordSearchEvents(engine, separation.events, spanId);
         }
 
-        if (candidateMutation.created) {
+        if (candidateMutation.created && !proposal.isolated) {
           const candidateFrontier = enqueueCandidateFrontier(
             graph,
             state.target,
@@ -1054,7 +1108,11 @@ async function executeActions(
         });
         continue;
       }
-      if (action.candidateId && candidateId !== action.candidateId) {
+      if (
+        action.candidateId
+        && candidateId !== action.candidateId
+        && !(candidateFromRef && isolatedCandidateIds.has(candidateFromRef))
+      ) {
         engine.trace.record("evidence.admission", {
           phase: engine.phase,
           parentSpanId: spanId,
@@ -1175,10 +1233,16 @@ async function executeActions(
       if (admission.admitted && admission.evidence) {
         mutations += 1;
         actionMutations += 1;
+        if (!discoveryOnly) actionTrustMutations += 1;
+        const evidenceStatus = discoveryOnly
+          ? "exhausted" as const
+          : admission.evidence.disposition === "contradicts"
+            ? "rejected" as const
+            : "verified" as const;
         const sourceNodeAdmission = admitGraphNode(graph, {
           kind: "source",
           label: admission.evidence.title ?? admission.evidence.sourceFamily,
-          status: "verified",
+          status: evidenceStatus,
           sourceTier: entry.sourceTier,
           sourceLaneId: entry.sourceLaneId,
           frontierEntryId: entry.id,
@@ -1198,7 +1262,7 @@ async function executeActions(
           fromNodeId: actionNodeId,
           toNodeId: sourceNodeAdmission.value.id,
           kind: "expands",
-          status: "verified",
+          status: evidenceStatus,
           frontierEntryId: entry.id,
           actionId: action.id,
           edgeCost: 0.04,
@@ -1209,7 +1273,7 @@ async function executeActions(
         const evidenceNodeAdmission = admitGraphNode(graph, {
           kind: "evidence",
           label: admission.evidence.claim,
-          status: admission.evidence.disposition === "contradicts" ? "rejected" : "verified",
+          status: evidenceStatus,
           sourceTier: entry.sourceTier,
           sourceLaneId: entry.sourceLaneId,
           frontierEntryId: entry.id,
@@ -1261,16 +1325,21 @@ async function executeActions(
     pendingSignalUpdates.push(...(result.candidateSignals ?? []));
     for (const update of pendingSignalUpdates) {
       if (action.candidateId && update.candidateId !== action.candidateId) {
-        engine.trace.record("candidate_signal.rejected", {
-          phase: engine.phase,
-          parentSpanId: spanId,
-          payload: {
-            candidateId: update.candidateId,
-            expectedCandidateId: action.candidateId,
-            reason: "foreign_candidate_id",
-          },
-        });
-        continue;
+        if (isolatedCandidateIds.has(update.candidateId)) {
+          // The update is grounded below against evidence admitted for the
+          // explicitly isolated branch from this same action.
+        } else {
+          engine.trace.record("candidate_signal.rejected", {
+            phase: engine.phase,
+            parentSpanId: spanId,
+            payload: {
+              candidateId: update.candidateId,
+              expectedCandidateId: action.candidateId,
+              reason: "foreign_candidate_id",
+            },
+          });
+          continue;
+        }
       }
       const evidence = engine.snapshot().evidence;
       const accepted: IdentitySignal[] = [];
@@ -1295,6 +1364,13 @@ async function executeActions(
         engine.addCandidateSignals(update.candidateId, accepted);
         mutations += 1;
         actionMutations += 1;
+        if (accepted.some((signal) => {
+          if (!signal.sourceEvidenceId) return false;
+          const source = evidence.find((record) => record.id === signal.sourceEvidenceId);
+          return source !== undefined
+            && source.sourceType !== "search_result"
+            && source.disposition !== "discovery_only";
+        })) actionTrustMutations += 1;
       } catch (error) {
         engine.trace.record("candidate_signal.rejected", {
           phase: engine.phase,
@@ -1322,6 +1398,7 @@ async function executeActions(
         if (engine.snapshot().findings.length > beforeFindingCount) {
           mutations += 1;
           actionMutations += 1;
+          actionTrustMutations += 1;
           const findingNodeAdmission = admitGraphNode(graph, {
             kind: "finding",
             label: admittedFinding.title,
@@ -1393,7 +1470,7 @@ async function executeActions(
         resultStatus: result.status,
         incomplete: result.meta?.incomplete ?? false,
         evidenceProposed: result.evidence?.length ?? 0,
-        candidateProposed: result.candidates?.length ?? 0,
+        candidateProposed: (result.candidates?.length ?? 0) + (result.candidateBranches?.length ?? 0),
         diagnostics: (result.diagnostics ?? []).map((diagnostic) => ({
           code: diagnostic.code,
           severity: diagnostic.severity,
@@ -1417,7 +1494,7 @@ async function executeActions(
       },
     });
     const frontierStatus: Extract<SearchGraphStatus, "verified" | "rejected" | "exhausted"> =
-      actionMutations > 0
+      actionTrustMutations > 0
         ? "verified"
         : result.status === "failed"
           ? "rejected"

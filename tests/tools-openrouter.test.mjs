@@ -144,6 +144,67 @@ test("provider errors never echo response bodies", async () => {
   assert.equal(JSON.stringify(logs).includes(secretEcho), false);
 });
 
+test("Gemini web discovery uses native Google Search and preserves server citations", async () => {
+  const requests = [];
+  const client = createOpenRouterClient({
+    provider: "gemini",
+    apiKey: "gemini-test-key-not-real",
+    model: "gemini-3.6-flash",
+    fetch: async (url, init) => {
+      requests.push({
+        url: String(url),
+        headers: new Headers(init.headers),
+        body: JSON.parse(new TextDecoder().decode(init.body)),
+      });
+      return new Response(JSON.stringify({
+        id: "interaction-1",
+        model: "gemini-3.6-flash",
+        steps: [{
+          type: "model_output",
+          content: [{
+            type: "text",
+            text: "A grounded result.",
+            annotations: [{
+              type: "url_citation",
+              url: "https://example.edu/people/ada?utm_source=search",
+              title: "Ada Lovelace — Example University",
+              start_index: 0,
+              end_index: 17,
+            }],
+          }],
+        }],
+        usage: { input_tokens: 12, output_tokens: 6, total_tokens: 18 },
+      }), {
+        headers: { "content-type": "application/json", "x-goog-request-id": "gemini-request-1" },
+      });
+    },
+  });
+
+  const completion = await client.complete({
+    messages: [
+      { role: "system", content: "Find direct public professional sources." },
+      { role: "user", content: "Ada Lovelace" },
+    ],
+    webSearch: { max_results: 4 },
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://generativelanguage.googleapis.com/v1beta/interactions");
+  assert.equal(requests[0].headers.get("x-goog-api-key"), "gemini-test-key-not-real");
+  assert.deepEqual(requests[0].body.tools, [{ type: "google_search" }]);
+  assert.match(requests[0].body.input, /Ada Lovelace/);
+  assert.equal(completion.provider, "gemini:google_search");
+  assert.equal(completion.requestId, "gemini-request-1");
+  assert.equal(completion.usage.totalTokens, 18);
+  assert.deepEqual(completion.message.annotations, [{
+    type: "url_citation",
+    url_citation: {
+      url: "https://example.edu/people/ada",
+      title: "Ada Lovelace — Example University",
+    },
+  }]);
+});
+
 test("usage normalization rejects negative and non-finite counters", () => {
   assert.deepEqual(normalizeOpenRouterUsage({
     input_tokens: -2,

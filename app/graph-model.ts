@@ -13,6 +13,37 @@ export type SearchGraphEdge = SearchGraphEdgeV2;
 export type GraphNodeStatus = SearchGraphStatus;
 export type GraphVisualStatus = "seed" | SearchGraphStatus;
 
+/**
+ * One geometry contract is shared by the synchronous safe layout, ELK, and
+ * React Flow. Keeping the renderer and layout engine on the same dimensions is
+ * what prevents long labels from silently expanding a node into an edge lane.
+ */
+export const GRAPH_NODE_WIDTH = 300;
+export const GRAPH_NODE_HEIGHT = 96;
+export const GRAPH_NODE_GAP = 48;
+export const GRAPH_LAYER_GAP = 156;
+export const GRAPH_EDGE_NODE_GAP = 18;
+const GRAPH_LAYOUT_PADDING = 48;
+const GRAPH_FALLBACK_EDGE_LANE_GAP = 18;
+const GRAPH_FALLBACK_EDGE_STUB = 36;
+
+export interface GraphPoint {
+  x: number;
+  y: number;
+}
+
+export interface GraphRoute {
+  edgeId: string;
+  points: GraphPoint[];
+}
+
+export interface GraphLayout {
+  topologyKey: string;
+  positions: Map<string, GraphPoint>;
+  routes: Map<string, GraphRoute>;
+  source: "deterministic" | "elk";
+}
+
 export function nodeVisualStatus(node: SearchGraphNode): GraphVisualStatus {
   return node.kind === "seed" ? "seed" : node.status;
 }
@@ -225,7 +256,17 @@ export function nodeUrl(node: SearchGraphNode): string | undefined {
   return undefined;
 }
 
-export function deterministicPositions(graph: CanonicalSearchGraph): Map<string, { x: number; y: number }> {
+export function graphTopologyKey(graph: CanonicalSearchGraph): string {
+  const nodes = [...graph.nodes]
+    .sort((left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id))
+    .map((node) => node.id);
+  const edges = [...graph.edges]
+    .sort((left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id))
+    .map((edge) => `${edge.id}:${edge.fromNodeId}>${edge.toNodeId}`);
+  return `${graph.runId}|n:${nodes.join(",")}|e:${edges.join(",")}`;
+}
+
+export function deterministicPositions(graph: CanonicalSearchGraph): Map<string, GraphPoint> {
   const incoming = new Map(graph.nodes.map((node) => [node.id, 0]));
   const outgoing = new Map(graph.nodes.map((node) => [node.id, [] as string[]]));
   for (const edge of graph.edges) {
@@ -256,13 +297,184 @@ export function deterministicPositions(graph: CanonicalSearchGraph): Map<string,
     const layer = depth.get(node.id) ?? 0;
     layers.set(layer, [...(layers.get(layer) ?? []), node]);
   }
-  const positions = new Map<string, { x: number; y: number }>();
+  const positions = new Map<string, GraphPoint>();
+  // Reserve deterministic lanes above the first node row for the safe
+  // fallback router. The asynchronous ELK layout replaces this compactly.
+  const nodeOriginY = GRAPH_LAYOUT_PADDING
+    + graph.edges.length * GRAPH_FALLBACK_EDGE_LANE_GAP
+    + GRAPH_NODE_GAP;
   for (const [layer, nodes] of [...layers.entries()].sort(([left], [right]) => left - right)) {
     nodes.sort((left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id));
     nodes.forEach((node, index) => positions.set(node.id, {
-      x: 96 + layer * 320,
-      y: 92 + index * 126 + (layer % 2 === 0 ? 0 : 36),
+      x: GRAPH_LAYOUT_PADDING + layer * (GRAPH_NODE_WIDTH + GRAPH_LAYER_GAP),
+      y: nodeOriginY + index * (GRAPH_NODE_HEIGHT + GRAPH_NODE_GAP),
     }));
   }
   return positions;
+}
+
+function fallbackRoute(
+  edge: SearchGraphEdge,
+  positions: Map<string, GraphPoint>,
+  edgeIndex: number,
+): GraphRoute | null {
+  const source = positions.get(edge.fromNodeId);
+  const target = positions.get(edge.toNodeId);
+  if (!source || !target) return null;
+  const sourcePoint = {
+    x: source.x + GRAPH_NODE_WIDTH,
+    y: source.y + GRAPH_NODE_HEIGHT / 2,
+  };
+  const targetPoint = {
+    x: target.x,
+    y: target.y + GRAPH_NODE_HEIGHT / 2,
+  };
+  const laneY = GRAPH_LAYOUT_PADDING + edgeIndex * GRAPH_FALLBACK_EDGE_LANE_GAP;
+  return {
+    edgeId: edge.id,
+    points: [
+      sourcePoint,
+      { x: sourcePoint.x + GRAPH_FALLBACK_EDGE_STUB, y: sourcePoint.y },
+      { x: sourcePoint.x + GRAPH_FALLBACK_EDGE_STUB, y: laneY },
+      { x: targetPoint.x - GRAPH_FALLBACK_EDGE_STUB, y: laneY },
+      { x: targetPoint.x - GRAPH_FALLBACK_EDGE_STUB, y: targetPoint.y },
+      targetPoint,
+    ],
+  };
+}
+
+/**
+ * A synchronous full-graph fallback. It deliberately routes each edge through
+ * a separate lane outside the node rows; this is less compact than ELK, but it
+ * is deterministic and cannot paint through an unrelated node while ELK is
+ * loading or a newer streamed topology is being coalesced.
+ */
+export function deterministicGraphLayout(graph: CanonicalSearchGraph): GraphLayout {
+  const positions = deterministicPositions(graph);
+  const routes = new Map<string, GraphRoute>();
+  [...graph.edges]
+    .sort((left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id))
+    .forEach((edge, index) => {
+      const route = fallbackRoute(edge, positions, index);
+      if (route) routes.set(edge.id, route);
+    });
+  return {
+    topologyKey: graphTopologyKey(graph),
+    positions,
+    routes,
+    source: "deterministic",
+  };
+}
+
+interface GraphRectangle {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function nodeRectangle(point: GraphPoint, padding = 0): GraphRectangle {
+  return {
+    left: point.x - padding,
+    top: point.y - padding,
+    right: point.x + GRAPH_NODE_WIDTH + padding,
+    bottom: point.y + GRAPH_NODE_HEIGHT + padding,
+  };
+}
+
+function rectanglesIntersect(left: GraphRectangle, right: GraphRectangle): boolean {
+  return left.left < right.right
+    && left.right > right.left
+    && left.top < right.bottom
+    && left.bottom > right.top;
+}
+
+function segmentIntersectsRectangle(
+  start: GraphPoint,
+  end: GraphPoint,
+  rectangle: GraphRectangle,
+): boolean {
+  const epsilon = 0.001;
+  if (Math.abs(start.x - end.x) <= epsilon) {
+    const minimumY = Math.min(start.y, end.y);
+    const maximumY = Math.max(start.y, end.y);
+    return start.x > rectangle.left
+      && start.x < rectangle.right
+      && maximumY > rectangle.top
+      && minimumY < rectangle.bottom;
+  }
+  if (Math.abs(start.y - end.y) <= epsilon) {
+    const minimumX = Math.min(start.x, end.x);
+    const maximumX = Math.max(start.x, end.x);
+    return start.y > rectangle.top
+      && start.y < rectangle.bottom
+      && maximumX > rectangle.left
+      && minimumX < rectangle.right;
+  }
+  return true;
+}
+
+function pointOnRectangleBoundary(point: GraphPoint, rectangle: GraphRectangle): boolean {
+  const epsilon = 0.01;
+  const withinHorizontal = point.x >= rectangle.left - epsilon && point.x <= rectangle.right + epsilon;
+  const withinVertical = point.y >= rectangle.top - epsilon && point.y <= rectangle.bottom + epsilon;
+  return (withinVertical && (Math.abs(point.x - rectangle.left) <= epsilon || Math.abs(point.x - rectangle.right) <= epsilon))
+    || (withinHorizontal && (Math.abs(point.y - rectangle.top) <= epsilon || Math.abs(point.y - rectangle.bottom) <= epsilon));
+}
+
+/**
+ * Refuse a renderer layout unless every fixed node box is separated and every
+ * orthogonal edge stays outside every non-endpoint node. Invalid async output
+ * can therefore never replace the known-safe deterministic layout.
+ */
+export function isCollisionFreeGraphLayout(
+  graph: CanonicalSearchGraph,
+  layout: GraphLayout,
+): boolean {
+  if (layout.topologyKey !== graphTopologyKey(graph)) return false;
+  for (const point of layout.positions.values()) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+  }
+  if (layout.positions.size !== graph.nodes.length || layout.routes.size !== graph.edges.length) return false;
+
+  for (let leftIndex = 0; leftIndex < graph.nodes.length; leftIndex += 1) {
+    const leftPoint = layout.positions.get(graph.nodes[leftIndex].id);
+    if (!leftPoint) return false;
+    const leftRectangle = nodeRectangle(leftPoint, GRAPH_NODE_GAP / 2);
+    for (let rightIndex = leftIndex + 1; rightIndex < graph.nodes.length; rightIndex += 1) {
+      const rightPoint = layout.positions.get(graph.nodes[rightIndex].id);
+      if (!rightPoint || rectanglesIntersect(leftRectangle, nodeRectangle(rightPoint, GRAPH_NODE_GAP / 2))) return false;
+    }
+  }
+
+  for (const edge of graph.edges) {
+    const route = layout.routes.get(edge.id);
+    if (!route || route.edgeId !== edge.id || route.points.length < 2) return false;
+    if (route.points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) return false;
+    const sourcePoint = layout.positions.get(edge.fromNodeId);
+    const targetPoint = layout.positions.get(edge.toNodeId);
+    if (
+      !sourcePoint
+      || !targetPoint
+      || !pointOnRectangleBoundary(route.points[0], nodeRectangle(sourcePoint))
+      || !pointOnRectangleBoundary(route.points.at(-1)!, nodeRectangle(targetPoint))
+    ) return false;
+    for (let pointIndex = 1; pointIndex < route.points.length; pointIndex += 1) {
+      const start = route.points[pointIndex - 1];
+      const end = route.points[pointIndex];
+      if (Math.abs(start.x - end.x) > 0.001 && Math.abs(start.y - end.y) > 0.001) return false;
+      for (const node of graph.nodes) {
+        if (node.id === edge.fromNodeId || node.id === edge.toNodeId) continue;
+        const point = layout.positions.get(node.id);
+        if (!point || segmentIntersectsRectangle(start, end, nodeRectangle(point, GRAPH_EDGE_NODE_GAP))) return false;
+      }
+    }
+  }
+  return true;
+}
+
+export function graphRoutePath(route: GraphRoute): string {
+  return route.points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+    .join(" ");
 }

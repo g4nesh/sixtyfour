@@ -168,6 +168,94 @@ test("graph presentation retains rejected same-name and mutation branches with d
   assert.ok(positions.get("mutation").x > positions.get("seed").x);
 });
 
+test("fixed graph geometry remains collision-free across every incremental topology prefix", () => {
+  const base = canonicalFixture();
+  const extraNodes = Array.from({ length: 12 }, (_, index) => ({
+    ...structuredClone(base.nodes[1]),
+    id: `dense-node-${String(index + 1).padStart(2, "0")}`,
+    label: `Dense branch ${index + 1} with a deliberately long label that must never resize its card`,
+    ordinal: 20 + index * 2,
+    frontierEntryId: null,
+    actionId: null,
+    candidateId: null,
+  }));
+  const extraEdges = extraNodes.map((node, index) => ({
+    ...structuredClone(base.edges[0]),
+    id: `dense-edge-${String(index + 1).padStart(2, "0")}`,
+    fromNodeId: index < 4 ? "seed" : extraNodes[index - 4].id,
+    toNodeId: node.id,
+    ordinal: 21 + index * 2,
+  }));
+
+  assert.equal(graphUi.GRAPH_NODE_WIDTH, 300);
+  assert.equal(graphUi.GRAPH_NODE_HEIGHT, 96);
+  let previousTopology = graphUi.graphTopologyKey(base);
+  for (let prefix = 0; prefix <= extraNodes.length; prefix += 1) {
+    const graph = {
+      ...structuredClone(base),
+      nodes: [...structuredClone(base.nodes), ...structuredClone(extraNodes.slice(0, prefix))],
+      edges: [...structuredClone(base.edges), ...structuredClone(extraEdges.slice(0, prefix))],
+      nextOrdinal: 100,
+    };
+    const normalized = graphUi.canonicalGraph(graph);
+    assert.ok(normalized);
+    const layout = graphUi.deterministicGraphLayout(normalized);
+    const rerun = graphUi.deterministicGraphLayout(normalized);
+    assert.equal(layout.positions.size, normalized.nodes.length);
+    assert.equal(layout.routes.size, normalized.edges.length);
+    assert.equal(graphUi.isCollisionFreeGraphLayout(normalized, layout), true);
+    assert.deepEqual([...layout.positions], [...rerun.positions]);
+    assert.deepEqual([...layout.routes], [...rerun.routes]);
+    for (const route of layout.routes.values()) {
+      assert.doesNotMatch(graphUi.graphRoutePath(route), /NaN|Infinity/);
+      for (let pointIndex = 1; pointIndex < route.points.length; pointIndex += 1) {
+        const start = route.points[pointIndex - 1];
+        const end = route.points[pointIndex];
+        assert.ok(start.x === end.x || start.y === end.y, `route ${route.edgeId} is orthogonal`);
+      }
+    }
+    const statusOnly = structuredClone(normalized);
+    statusOnly.nodes[0].status = statusOnly.nodes[0].status === "verified" ? "exhausted" : "verified";
+    assert.equal(graphUi.graphTopologyKey(statusOnly), layout.topologyKey);
+    if (prefix > 0) assert.notEqual(layout.topologyKey, previousTopology);
+    previousTopology = layout.topologyKey;
+  }
+});
+
+test("layout validation rejects node collisions, stale topology, and edge routes through cards", () => {
+  const graph = canonicalFixture();
+  const valid = graphUi.deterministicGraphLayout(graph);
+  assert.equal(graphUi.isCollisionFreeGraphLayout(graph, valid), true);
+
+  const colliding = {
+    ...valid,
+    positions: new Map(valid.positions),
+  };
+  colliding.positions.set("candidate-decoy", { ...colliding.positions.get("seed") });
+  assert.equal(graphUi.isCollisionFreeGraphLayout(graph, colliding), false);
+
+  assert.equal(graphUi.isCollisionFreeGraphLayout(graph, {
+    ...valid,
+    topologyKey: `${valid.topologyKey}-stale`,
+  }), false);
+
+  const crossing = {
+    ...valid,
+    routes: new Map(valid.routes),
+  };
+  const seed = valid.positions.get("seed");
+  const decoy = valid.positions.get("candidate-decoy");
+  crossing.routes.set("edge-ted", {
+    edgeId: "edge-ted",
+    points: [
+      { x: seed.x + graphUi.GRAPH_NODE_WIDTH, y: seed.y + graphUi.GRAPH_NODE_HEIGHT / 2 },
+      { x: decoy.x + graphUi.GRAPH_NODE_WIDTH / 2, y: decoy.y + graphUi.GRAPH_NODE_HEIGHT / 2 },
+      valid.routes.get("edge-ted").points.at(-1),
+    ],
+  });
+  assert.equal(graphUi.isCollisionFreeGraphLayout(graph, crossing), false);
+});
+
 test("one stable frontier/action identifier links trace focus to its canonical node", () => {
   const graph = canonicalFixture();
   const stableId = "frontier_same_name_decoy";

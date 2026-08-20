@@ -85,13 +85,16 @@ function evidenceViews(
     refsById.set(item.id, ref);
     const tier = evidenceTier(item, graph);
     const url = safePublicReportUrl(item.canonicalUrl) ?? safePublicReportUrl(item.sourceUrl) ?? "";
-    const exactExcerpt = item.excerpt === null ? null : cleanReportText(item.excerpt);
+    const discoveryOnly = item.disposition === "discovery_only" || item.sourceType === "search_result";
+    const exactExcerpt = discoveryOnly || item.excerpt === null ? null : cleanReportText(item.excerpt);
     return {
       ref,
       id: cleanInlineReportText(item.id),
       candidateId: cleanInlineReportText(item.candidateId),
       claim: cleanReportText(item.claim),
-      contentLabel: exactExcerpt !== null
+      contentLabel: discoveryOnly
+        ? "Unverified discovery lead"
+        : exactExcerpt !== null
         ? "Exact source excerpt"
         : item.canonicalSubset !== null
           ? "Structured API claim"

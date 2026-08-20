@@ -46,9 +46,9 @@ interface ResolvedLiveProvider {
  * key is present (its generous free per-minute limits suit the many
  * planner/extraction calls), then OpenAI, then OpenRouter.
  *
- * Gemini has no free web-search grounding, so its web-discovery turn is
- * delegated to OpenAI's web_search when an OpenAI key is also present (a hybrid
- * run: Gemini reasoning + OpenAI discovery).
+ * Gemini uses its native Google Search grounding path. Keeping reasoning and
+ * discovery on the same configured provider avoids turning an unrelated
+ * OpenAI quota failure into a fatal Gemini run.
  */
 function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider | null {
   const openaiKey = environment.OPENAI_API_KEY?.trim();
@@ -76,15 +76,6 @@ function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider 
       apiKey: geminiKey,
       model: environment.GEMINI_MODEL?.trim() || "gemini-3.6-flash",
       endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      // Gemini grounding needs billing; delegate discovery to OpenAI when available.
-      ...(openaiKey
-        ? {
-            searchProvider: "openai" as const,
-            searchApiKey: openaiKey,
-            searchModel: openaiSearchModel,
-            searchEndpoint: "https://api.openai.com/v1/chat/completions",
-          }
-        : {}),
     };
   };
 

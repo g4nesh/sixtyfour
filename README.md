@@ -74,7 +74,11 @@ curl --fail \
   http://localhost:3000/api/research
 ```
 
-Live mode calls OpenRouter Chat Completions directly with custom function schemas, `tool_choice: "auto"`, one expected structured function submission per provider turn, and the current `openrouter:web_search` server tool. The kernel may execute an approved action batch concurrently (maximum four); provider-side parallel function submission is deliberately disabled so every returned tool call is closed deterministically. Search annotations are provider-attested discovery leads only. A claim receives zero final weight until a direct source or specialist tool admits a bounded evidence record. General-purpose `fetch_public_source` fails closed unless the server injects a trusted hostname resolver or controlled egress proxy; the shipped API leaves that path disabled by default, while fixed-provider specialist tools remain available.
+Live mode supports OpenAI, Gemini, or OpenRouter. Structured reasoning uses each provider's chat/tool-calling endpoint; discovery uses OpenAI Responses `web_search`, Gemini Interactions with native Google Search, or OpenRouter's `openrouter:web_search`. Provider-side parallel function submission is deliberately disabled so every returned tool call is closed deterministically. Search annotations are provider-attested discovery leads only and remain visibly unverified until Atlas directly fetches and locally quotes the exact HTTPS source. A claim receives zero final weight until a direct source or specialist tool admits a bounded evidence record. General-purpose `fetch_public_source` requires the server-injected DNS resolver used by the shipped HTTP API and still enforces candidate scope, public-address validation, redirects, MIME, response size, and request budgets.
+
+`liveConfigured: true` in `/api/health` means a server-side provider is configured; it is not a provider quota probe. Credentialed live smoke tests separately verify a successful search, hardened fetch, admitted exact excerpt, and terminal citation. Rate-limit failures remain explicit and never fabricate a working report.
+
+For an exact named-person query only, a retryable provider-search outage may fall back to GitHub's official unauthenticated public APIs. Atlas searches `in:fullname`, checks at most three canonical public-user detail records, and keeps only exact normalized public-name matches. Those matches are still unverified T2 discovery leads: the profile must pass the same DNS-aware hardened HTML fetch and exact-excerpt admission path before it can support the report. The fallback never retains GitHub email, location, bio, or search snippets and does not run for role, organization, or general-topic queries.
 
 The included Sites configuration is replay-only: it contains no provider key and reports `liveConfigured: false`. Do not expose a key-backed live endpoint on unauthenticated public ingress. A production operator must add Cloudflare Access or equivalent authentication plus per-principal request, token, and cost limits before setting `ATLAS_LIVE_ENABLED=true`.
 
@@ -155,7 +159,12 @@ npm test          # production build, then all Node tests
 npm run verify    # typecheck + lint + production build + all tests
 npm run test:pdf  # opt-in React-PDF byte smoke
 npm run report:example  # write matching PDF and Markdown reports under output/
+npm run test:browser    # intercepted dense graph in Playwright, desktop + mobile
+npm run test:browser:live # opt-in credentialed search/fetch/citation contract
+npm run test:selenium   # independent headless Chrome geometry/console pass
 ```
+
+Set `ATLAS_SELENIUM_BROWSER=safari` to repeat the Selenium smoke in Safari after enabling Safari Developer → Allow Remote Automation. The test harness never changes that operating-system setting itself.
 
 The test suite covers all three target shapes, deterministic safety classes, general identifier parsing, same-name isolation, no cross-candidate evidence, spoofable-confidence caps, source-family deduplication, immutable cumulative costs, tier ordering, dominance pruning, deterministic MH math and mutation-share caps, graph/trace/action integrity, LangGraph control flow, snippet exclusion, CoT-field exclusion, budgets/cancellation, NDJSON ordering and terminal closure, replay zero-network stability, Markdown determinism, PDF smoke, and rendered accessibility foundations. Tool fixtures cover SSRF/redirect/size/timeout controls, `429`/`Retry-After`, malformed responses, GitHub incomplete results, `author: null`, multiple accounts, signature mismatch, stale Keybase proofs, and unavailable Wayback.
 

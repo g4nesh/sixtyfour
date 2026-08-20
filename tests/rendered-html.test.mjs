@@ -136,7 +136,12 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(workspace, /rejected same-name candidates remain visible/i);
   assert.match(canvas, /@xyflow\/react/);
   assert.match(canvas, /import\("elkjs\/lib\/elk\.bundled\.js"\)/);
-  assert.match(canvas, /deterministicPositions/);
+  assert.match(canvas, /deterministicGraphLayout/);
+  assert.match(canvas, /BaseEdge/);
+  assert.match(canvas, /ORTHOGONAL/);
+  assert.match(canvas, /isCollisionFreeGraphLayout/);
+  assert.match(canvas, /style: \{ width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT \}/);
+  assert.match(canvas, /nodesDraggable=\{false\}/);
   assert.match(canvas, /nodesFocusable=\{false\}/);
   assert.match(inspector, /nodeRelationships/);
   assert.match(report, /candidates\.map/);

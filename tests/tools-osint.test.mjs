@@ -11,6 +11,7 @@ const vite = await createServer({
 after(async () => vite.close());
 
 const { investigateGithubEmailCodegraph } = await vite.ssrLoadModule("/lib/tools/github-codegraph.ts");
+const { searchGithubPublicUsersByExactName } = await vite.ssrLoadModule("/lib/tools/github-user-search.ts");
 const { lookupKeybaseGithub } = await vite.ssrLoadModule("/lib/tools/keybase.ts");
 const { inspectWaybackHistory } = await vite.ssrLoadModule("/lib/tools/wayback.ts");
 
@@ -32,6 +33,93 @@ function commitItem({ sha, email, login, accountId, repo, verified = false, comm
     repository: { full_name: repo, html_url: `https://github.com/${repo}` },
   };
 }
+
+test("GitHub public-user fallback admits only exact names from bounded canonical detail records", async () => {
+  const calls = [];
+  const result = await searchGithubPublicUsersByExactName("Ganesh Talluri", {
+    resolveHostname: async (hostname) => {
+      assert.equal(hostname, "api.github.com");
+      return ["140.82.112.5"];
+    },
+    fetch: async (input) => {
+      const url = new URL(String(input));
+      calls.push(url.href);
+      if (url.pathname === "/search/users") {
+        assert.equal(url.searchParams.get("q"), "Ganesh Talluri in:fullname");
+        assert.equal(url.searchParams.get("per_page"), "3");
+        return jsonResponse({
+          total_count: 2,
+          incomplete_results: false,
+          items: [
+            { login: "g4nesh", type: "User", url: "https://api.github.com/users/g4nesh" },
+            { login: "ganesh-org", type: "Organization", url: "https://api.github.com/users/ganesh-org" },
+          ],
+        });
+      }
+      assert.equal(url.href, "https://api.github.com/users/g4nesh");
+      return jsonResponse({
+        login: "g4nesh",
+        name: "Ganesh Talluri",
+        type: "User",
+        html_url: "https://github.com/g4nesh",
+        email: "must-not-be-retained@example.com",
+        location: "must not be retained",
+      });
+    },
+  });
+
+  assert.equal(result.status, "succeeded");
+  assert.deepEqual(result.data.matches, [{
+    login: "g4nesh",
+    name: "Ganesh Talluri",
+    htmlUrl: "https://github.com/g4nesh",
+  }]);
+  assert.equal(result.meta.requests, 2);
+  assert.equal(result.evidence.length, 0, "API search/detail rows are discovery metadata, not evidence excerpts");
+  assert.equal(JSON.stringify(result).includes("must-not-be-retained"), false);
+  assert.equal(calls.length, 2);
+});
+
+test("GitHub public-user fallback honestly returns no match and ignores unsafe profile/detail URLs", async () => {
+  let unsafeFetchAttempted = false;
+  const result = await searchGithubPublicUsersByExactName("Ganesh Talluri", {
+    resolveHostname: async () => ["140.82.112.5"],
+    fetch: async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search/users") {
+        return jsonResponse({
+          total_count: 3,
+          incomplete_results: false,
+          items: [
+            { login: "unsafe", type: "User", url: "http://127.0.0.1/private" },
+            { login: "wrong-name", type: "User", url: "https://api.github.com/users/wrong-name" },
+            { login: "unsafe-profile", type: "User", url: "https://api.github.com/users/unsafe-profile" },
+          ],
+        });
+      }
+      if (url.hostname !== "api.github.com") unsafeFetchAttempted = true;
+      if (url.pathname === "/users/wrong-name") return jsonResponse({
+        login: "wrong-name",
+        name: "Another Person",
+        type: "User",
+        html_url: "https://github.com/wrong-name",
+      });
+      if (url.pathname === "/users/unsafe-profile") return jsonResponse({
+        login: "unsafe-profile",
+        name: "Ganesh Talluri",
+        type: "User",
+        html_url: "https://github.com/unsafe-profile?private=1",
+      });
+      throw new Error(`Unexpected request ${url.href}`);
+    },
+  });
+
+  assert.equal(result.status, "not_found");
+  assert.deepEqual(result.data.matches, []);
+  assert.equal(unsafeFetchAttempted, false);
+  assert.ok(result.diagnostics.some((item) => item.code === "github_exact_name_not_observed"));
+  assert.ok(result.diagnostics.some((item) => item.code === "github_public_user_rows_excluded"));
+});
 
 test("GitHub exact-email codegraph separates accounts, null authors, mismatches, and strongest signatures", async () => {
   const email = "person@example.com";

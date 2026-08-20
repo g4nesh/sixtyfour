@@ -399,6 +399,18 @@ export function validateReferentialIntegrity(
 
   if (state.searchGraph) {
     const graph = state.searchGraph;
+    const candidatesExplicitlySeparated = (leftCandidateId: string, rightCandidateId: string): boolean => {
+      if (leftCandidateId === rightCandidateId) return false;
+      const leftNode = graph.nodes.find((node) =>
+        node.kind === "candidate" && node.candidateId === leftCandidateId);
+      const rightNode = graph.nodes.find((node) =>
+        node.kind === "candidate" && node.candidateId === rightCandidateId);
+      if (!leftNode || !rightNode) return false;
+      return graph.edges.some((edge) =>
+        edge.kind === "separates"
+        && ((edge.fromNodeId === leftNode.id && edge.toNodeId === rightNode.id)
+          || (edge.fromNodeId === rightNode.id && edge.toNodeId === leftNode.id)));
+    };
     graph.nodes.forEach((node, nodeIndex) => {
       if (node.candidateId !== null && !candidateIds.has(node.candidateId)) {
         issues.push({
@@ -441,7 +453,12 @@ export function validateReferentialIntegrity(
           candidate.kind === "action" && candidate.actionId === node.actionId);
         const frontierEntry = graph.frontier.find((entry) => entry.actionId === node.actionId);
         const boundCandidateId = actionNode?.candidateId ?? frontierEntry?.candidateId ?? null;
-        if (evidence && boundCandidateId !== null && evidence.candidateId !== boundCandidateId) {
+        if (
+          evidence
+          && boundCandidateId !== null
+          && evidence.candidateId !== boundCandidateId
+          && !candidatesExplicitlySeparated(boundCandidateId, evidence.candidateId)
+        ) {
           issues.push({
             code: "action_evidence_candidate_mismatch",
             path: `searchGraph.nodes[${nodeIndex}].candidateId`,

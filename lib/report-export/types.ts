@@ -91,7 +91,8 @@ export interface ReportFindingView {
 export type EvidenceContentLabel =
   | "Exact source excerpt"
   | "Structured API claim"
-  | "Admitted source claim";
+  | "Admitted source claim"
+  | "Unverified discovery lead";
 
 export interface ReportEvidenceView {
   ref: string;

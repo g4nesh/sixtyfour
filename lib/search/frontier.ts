@@ -1714,6 +1714,19 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     });
   }
 
+  const candidatesExplicitlySeparated = (leftCandidateId: string, rightCandidateId: string): boolean => {
+    if (leftCandidateId === rightCandidateId) return false;
+    const leftNode = graph.nodes.find((node) =>
+      node.kind === "candidate" && node.candidateId === leftCandidateId);
+    const rightNode = graph.nodes.find((node) =>
+      node.kind === "candidate" && node.candidateId === rightCandidateId);
+    if (!leftNode || !rightNode) return false;
+    return graph.edges.some((edge) =>
+      edge.kind === "separates"
+      && ((edge.fromNodeId === leftNode.id && edge.toNodeId === rightNode.id)
+        || (edge.fromNodeId === rightNode.id && edge.toNodeId === leftNode.id)));
+  };
+
   graph.nodes.forEach((node, index) => {
     if (node.frontierEntryId === null && node.actionId === null) return;
     const entry = node.frontierEntryId ? frontierById.get(node.frontierEntryId) : undefined;
@@ -1736,7 +1749,15 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         message: `${node.id} disagrees with frontier ${entry.id}`,
       });
     }
-    if (entry.candidateId !== null && node.candidateId !== entry.candidateId) {
+    const quarantinedCandidateScope = entry.candidateId !== null
+      && node.candidateId !== null
+      && (node.kind === "source" || node.kind === "evidence")
+      && candidatesExplicitlySeparated(entry.candidateId, node.candidateId);
+    if (
+      entry.candidateId !== null
+      && node.candidateId !== entry.candidateId
+      && !quarantinedCandidateScope
+    ) {
       issues.push({
         code: "node_candidate_scope_mismatch",
         path: `nodes[${index}].candidateId`,
@@ -1762,6 +1783,8 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       actionNode?.candidateId !== null
       && actionNode?.candidateId !== undefined
       && node.candidateId !== actionNode.candidateId
+      && !(node.candidateId !== null
+        && candidatesExplicitlySeparated(actionNode.candidateId, node.candidateId))
     ) {
       issues.push({
         code: "action_evidence_candidate_mismatch",
@@ -1818,11 +1841,17 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         message: `${edge.id} joins action-bound endpoints without an action ID`,
       });
     }
+    const quarantinedCandidateEdge = from.candidateId !== null
+      && to.candidateId !== null
+      && candidatesExplicitlySeparated(from.candidateId, to.candidateId)
+      && from.kind === "action"
+      && (to.kind === "candidate" || to.kind === "source");
     if (
       edge.kind !== "separates"
       && from.candidateId !== null
       && to.candidateId !== null
       && from.candidateId !== to.candidateId
+      && !quarantinedCandidateEdge
     ) {
       issues.push({
         code: "edge_candidate_scope_mismatch",

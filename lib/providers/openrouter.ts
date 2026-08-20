@@ -128,9 +128,8 @@ export interface OpenRouterClientConfig {
    * uses OpenAI's native `web_search` tool (which returns url_citation
    * annotations in the same shape) instead of the OpenRouter web_search tool,
    * and OpenRouter-only fields are omitted. "gemini" targets Google's
-   * OpenAI-compatibility endpoint for chat/tool-calling; because Gemini's own
-   * search grounding requires billing, its web-discovery turn is delegated to
-   * an OpenAI search provider (see searchProvider) when one is configured.
+   * OpenAI-compatibility endpoint for chat/tool-calling and its native
+   * Interactions API for Google Search grounding.
    */
   provider?: "openrouter" | "openai" | "gemini";
   /** Search-preview model used only for the web-discovery turn (OpenAI). */
@@ -480,6 +479,133 @@ interface OpenAiWebSearchArgs {
   signal?: AbortSignal;
 }
 
+interface GeminiWebSearchArgs {
+  endpoint: URL;
+  apiKey: string;
+  model: string;
+  messages: readonly OpenRouterMessage[];
+  hardenedFetch: (input: URL, init: RequestInit) => Promise<{ response: Response }>;
+  clock: () => number;
+  startedAt: number;
+  safeLog: (event: OpenRouterSafeLogEvent) => void;
+  logBase: { model: string; messageCount: number; functionToolCount: number; webSearchEnabled: boolean };
+  signal?: AbortSignal;
+}
+
+/**
+ * Native Gemini Google Search grounding through the Interactions API. Gemini
+ * returns inline url_citation annotations on model_output blocks; normalize
+ * those into the same opaque annotation shape consumed by the orchestrator.
+ */
+async function completeGeminiWebSearch(args: GeminiWebSearchArgs): Promise<OpenRouterCompletion> {
+  const interactionsEndpoint = new URL(args.endpoint.toString());
+  interactionsEndpoint.pathname = "/v1beta/interactions";
+  interactionsEndpoint.search = "";
+  const input = args.messages
+    .map((message) => `${message.role.toUpperCase()}: ${typeof message.content === "string" ? message.content : ""}`)
+    .join("\n\n");
+  let fetched;
+  try {
+    fetched = await args.hardenedFetch(interactionsEndpoint, {
+      method: "POST",
+      headers: { "x-goog-api-key": args.apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: args.model,
+        input,
+        tools: [{ type: "google_search" }],
+      }),
+      signal: args.signal,
+    });
+  } catch (error) {
+    const code = error instanceof HardenedFetchError ? error.code : "network_error";
+    args.safeLog({ phase: "error", ...args.logBase, errorCode: code });
+    throw new OpenRouterError(code, "The Gemini Google Search request failed before a valid response was received.", {
+      retryable: error instanceof HardenedFetchError && error.retryable,
+      cause: error,
+    });
+  }
+  const requestId = fetched.response.headers.get("x-request-id")
+    ?? fetched.response.headers.get("x-goog-request-id");
+  if (!fetched.response.ok) {
+    args.safeLog({ phase: "error", ...args.logBase, status: fetched.response.status, errorCode: "http_error" });
+    throw new OpenRouterError(
+      "http_error",
+      fetched.response.status === 429
+        ? "Gemini rate-limited the Google Search request (HTTP 429)."
+        : `Gemini Google Search returned HTTP ${fetched.response.status}.`,
+      {
+        status: fetched.response.status,
+        retryable: isRetryableStatus(fetched.response.status),
+        requestId,
+        retryAfterMs: parseRetryAfterMs(fetched.response.headers),
+      },
+    );
+  }
+  let payload: unknown;
+  try {
+    payload = await fetched.response.json();
+  } catch (error) {
+    throw new OpenRouterError("invalid_response", "Gemini Google Search returned invalid JSON.", { requestId, cause: error });
+  }
+  if (!isRecord(payload)) {
+    throw new OpenRouterError("invalid_response", "Gemini Google Search returned no interaction payload.", { requestId });
+  }
+  const steps = Array.isArray(payload.steps) ? payload.steps : [];
+  const seen = new Set<string>();
+  const annotations: OpenRouterAnnotation[] = [];
+  for (const step of steps) {
+    if (!isRecord(step) || step.type !== "model_output" || !Array.isArray(step.content)) continue;
+    for (const block of step.content) {
+      if (!isRecord(block) || !Array.isArray(block.annotations)) continue;
+      for (const annotation of block.annotations) {
+        if (!isRecord(annotation) || annotation.type !== "url_citation") continue;
+        const rawUrl = typeof annotation.url === "string" ? annotation.url : "";
+        const url = stripTrackingParams(rawUrl);
+        if (!/^https:\/\//i.test(url) || seen.has(url)) continue;
+        seen.add(url);
+        annotations.push({
+          type: "url_citation",
+          url_citation: {
+            url,
+            ...(typeof annotation.title === "string" && annotation.title.trim()
+              ? { title: annotation.title.trim() }
+              : {}),
+          },
+        });
+      }
+    }
+  }
+  const usageRecord = isRecord(payload.usage)
+    ? payload.usage
+    : isRecord(payload.usageMetadata)
+      ? payload.usageMetadata
+      : {};
+  const inputTokens = safeNumber(usageRecord.input_tokens) ?? safeNumber(usageRecord.promptTokenCount);
+  const outputTokens = safeNumber(usageRecord.output_tokens) ?? safeNumber(usageRecord.candidatesTokenCount);
+  const explicitTotal = safeNumber(usageRecord.total_tokens) ?? safeNumber(usageRecord.totalTokenCount);
+  const usage: NormalizedUsage = {
+    inputTokens,
+    outputTokens,
+    totalTokens: explicitTotal ?? (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null),
+    reasoningTokens: safeNumber(usageRecord.thoughtsTokenCount),
+    cachedInputTokens: safeNumber(usageRecord.cachedContentTokenCount),
+    costUsd: null,
+  };
+  const latencyMs = Math.max(0, args.clock() - args.startedAt);
+  args.safeLog({ phase: "response", ...args.logBase, status: fetched.response.status, latencyMs, usage });
+  return {
+    id: typeof payload.id === "string" ? payload.id : null,
+    model: typeof payload.model === "string" ? payload.model : args.model,
+    created: null,
+    finishReason: "stop",
+    message: { role: "assistant", content: null, annotations },
+    usage,
+    provider: "gemini:google_search",
+    requestId,
+    latencyMs,
+  };
+}
+
 /**
  * Web discovery via the OpenAI Responses API. Returns a chat-shaped completion
  * whose `message.annotations` carry the server-attested search-result URLs
@@ -630,9 +756,8 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
     throw new OpenRouterConfigurationError("The OpenRouter endpoint must use HTTPS.");
   }
   // Web discovery may be delegated to an OpenAI search provider even when the
-  // reasoning provider is Gemini/OpenRouter (Gemini's own grounding needs
-  // billing). Resolve its endpoint/key up front so the hardened fetch trusts
-  // both hosts.
+  // reasoning provider is Gemini/OpenRouter. Resolve its endpoint/key up front
+  // so the hardened fetch trusts both hosts.
   const searchDelegated = config.searchProvider === "openai" && !isOpenAi;
   let searchEndpoint = endpoint;
   if (searchDelegated) {
@@ -676,6 +801,7 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
       // OpenAI discovery (native or delegated) uses the Responses web_search
       // tool; the OpenRouter web_search tool is only for the OpenRouter provider.
       const useOpenAiSearch = webSearchRequested && (isOpenAi || searchDelegated);
+      const useGeminiSearch = webSearchRequested && isGemini && !searchDelegated;
       const tools: OpenRouterTool[] = [...(options.tools ?? [])];
       if (!isOpenAiCompat && options.webSearch !== false && options.webSearch !== undefined) {
         tools.push(webSearchTool(options.webSearch));
@@ -688,7 +814,7 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
         model: requestModel,
         messageCount: options.messages.length,
         functionToolCount: tools.filter((tool) => tool.type === "function").length,
-        webSearchEnabled: useOpenAiSearch || tools.some((tool) => tool.type === "openrouter:web_search"),
+        webSearchEnabled: useOpenAiSearch || useGeminiSearch || tools.some((tool) => tool.type === "openrouter:web_search"),
       };
 
       // One provider round-trip. Transient rate limits (429) and 5xx are retried
@@ -709,6 +835,21 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
           model: requestModel,
           messages: options.messages,
           maxOutputTokens: options.maxCompletionTokens,
+          hardenedFetch,
+          clock,
+          startedAt,
+          safeLog,
+          logBase,
+          signal: options.signal,
+        });
+      }
+
+      if (useGeminiSearch) {
+        return await completeGeminiWebSearch({
+          endpoint,
+          apiKey,
+          model: requestModel,
+          messages: options.messages,
           hardenedFetch,
           clock,
           startedAt,
@@ -844,7 +985,10 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
       };
 
       return await withProviderRetry(attempt, {
-        maxAttempts: 4,
+        // Discovery has a deterministic structured-source fallback upstream.
+        // One retry covers short bursts without burning four paid search
+        // attempts when an account-level quota is exhausted.
+        maxAttempts: webSearchRequested ? 2 : 4,
         signal: options.signal,
         onRetry: ({ attempt: retryNumber, delayMs, status }) =>
           safeLog({

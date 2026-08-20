@@ -239,6 +239,28 @@ test("report view model and Markdown are deterministic and citation-complete", (
   assert.match(firstMarkdown, /Frontier entry states/);
 });
 
+test("discovery leads export as unverified metadata and never as exact excerpts", () => {
+  const report = terminalReport();
+  report.findings = [];
+  report.evidence = [{
+    ...report.evidence[0],
+    id: "discovery-lead",
+    claim: "Web search surfaced a possible direct source; it is a discovery lead only.",
+    normalizedClaim: "web search surfaced a possible direct source it is a discovery lead only",
+    disposition: "discovery_only",
+    sourceType: "search_result",
+    verificationMethod: "search_discovery",
+    excerpt: "Provider search surfaced this URL, but the page was not fetched.",
+  }];
+
+  const viewModel = reportExport.createReportViewModel(report);
+  const markdown = reportExport.reportViewModelToMarkdown(viewModel);
+  assert.equal(viewModel.evidence[0].contentLabel, "Unverified discovery lead");
+  assert.equal(viewModel.evidence[0].exactExcerpt, null);
+  assert.match(markdown, /Unverified discovery lead/);
+  assert.doesNotMatch(markdown, /Provider search surfaced this URL/);
+});
+
 test("sanitization escapes hostile Markdown and excludes unsafe URLs and raw payload-shaped fields", () => {
   const report = terminalReport();
   report.findings[0].title = "Hostile | [title] `tick`\u0007";
