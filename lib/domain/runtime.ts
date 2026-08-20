@@ -8,16 +8,7 @@ export interface Clock {
 }
 
 export type IdKind =
-  | "run"
-  | "candidate"
-  | "evidence"
-  | "finding"
-  | "action"
-  | "lead"
-  | "graph_node"
-  | "graph_edge"
-  | "event"
-  | "span";
+  "run" | "candidate" | "evidence" | "finding" | "action" | "lead" | "graph_node" | "graph_edge" | "event" | "span";
 
 export interface IdFactory {
   next(kind: IdKind): string;
@@ -40,10 +31,7 @@ export function createDeterministicIdFactory(prefix = "atlas"): IdFactory {
 }
 
 /** A deterministic clock useful for replay and behavior tests. */
-export function createSequenceClock(
-  start = "2026-01-01T00:00:00.000Z",
-  stepMs = 1,
-): Clock {
+export function createSequenceClock(start = "2026-01-01T00:00:00.000Z", stepMs = 1): Clock {
   const startMs = Date.parse(start);
   if (!Number.isFinite(startMs)) {
     throw new TypeError("start must be a valid ISO-8601 timestamp");
@@ -75,11 +63,7 @@ export function cloneJson<T>(value: T): T {
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
     return true;
   }
   if (typeof value === "number") {

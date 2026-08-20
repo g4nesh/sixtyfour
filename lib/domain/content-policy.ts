@@ -3,23 +3,107 @@ import type { JsonValue } from "./types";
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b/gi;
 
 const RESTRICTED_URL_QUERY_KEYS = new Set([
-  "accesskey", "accesstoken", "address", "apikey", "auth", "authorization", "bearer",
-  "authorizationcode", "authcode", "authtoken", "cell", "children", "clientsecret",
-  "code", "compensation", "contactnumber", "cookie", "coordinates", "credential", "credentials",
-  "daughter", "diagnosis", "disability", "disease", "email", "ethnicity", "faith",
-  "family", "father", "financial", "genderidentity", "gps", "health", "homeaddress",
-  "homelocation", "husband", "illness", "income", "jwt", "jwttoken", "key", "kids", "livelocation",
-  "mailingaddress", "medical", "medication", "mobile", "mother", "nationalorigin",
-  "mfacode", "nationality", "nextofkin", "oauthcode", "otp", "parent", "party", "passcode", "passwd", "password",
-  "phone", "phonenumber", "politicalaffiliation", "politics", "pregnancy", "privatekey",
-  "pronouns", "race", "recoverycode", "refreshtoken", "relative", "religion", "residence",
-  "residentialaddress", "salary", "secret", "secretkey", "session", "sessioncookie", "sessionid", "sessiontoken", "sig",
-  "signature", "sibling", "son", "spouse", "tel", "telephone", "token",
-  "xapikey", "xamzcredential", "xamzsecuritytoken", "xamzsignature", "wife", "sexualorientation",
+  "accesskey",
+  "accesstoken",
+  "address",
+  "apikey",
+  "auth",
+  "authorization",
+  "bearer",
+  "authorizationcode",
+  "authcode",
+  "authtoken",
+  "cell",
+  "children",
+  "clientsecret",
+  "code",
+  "compensation",
+  "contactnumber",
+  "cookie",
+  "coordinates",
+  "credential",
+  "credentials",
+  "daughter",
+  "diagnosis",
+  "disability",
+  "disease",
+  "email",
+  "ethnicity",
+  "faith",
+  "family",
+  "father",
+  "financial",
+  "genderidentity",
+  "gps",
+  "health",
+  "homeaddress",
+  "homelocation",
+  "husband",
+  "illness",
+  "income",
+  "jwt",
+  "jwttoken",
+  "key",
+  "kids",
+  "livelocation",
+  "mailingaddress",
+  "medical",
+  "medication",
+  "mobile",
+  "mother",
+  "nationalorigin",
+  "mfacode",
+  "nationality",
+  "nextofkin",
+  "oauthcode",
+  "otp",
+  "parent",
+  "party",
+  "passcode",
+  "passwd",
+  "password",
+  "phone",
+  "phonenumber",
+  "politicalaffiliation",
+  "politics",
+  "pregnancy",
+  "privatekey",
+  "pronouns",
+  "race",
+  "recoverycode",
+  "refreshtoken",
+  "relative",
+  "religion",
+  "residence",
+  "residentialaddress",
+  "salary",
+  "secret",
+  "secretkey",
+  "session",
+  "sessioncookie",
+  "sessionid",
+  "sessiontoken",
+  "sig",
+  "signature",
+  "sibling",
+  "son",
+  "spouse",
+  "tel",
+  "telephone",
+  "token",
+  "xapikey",
+  "xamzcredential",
+  "xamzsecuritytoken",
+  "xamzsignature",
+  "wife",
+  "sexualorientation",
 ]);
 
 export function normalizeRestrictedUrlQueryKey(value: string): string {
-  return value.normalize("NFKC").toLocaleLowerCase("en-US").replace(/[^a-z0-9]/g, "");
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^a-z0-9]/g, "");
 }
 
 export function isRestrictedUrlQueryKey(value: string): boolean {
@@ -27,16 +111,66 @@ export function isRestrictedUrlQueryKey(value: string): boolean {
 }
 
 const RESTRICTED_JSON_FIELD_KEYS = new Set([
-  "phone", "phonenumber", "telephone", "tel", "mobile", "mobilephone", "cell", "cellphone",
-  "personalphone", "contactnumber", "directnumber", "whatsapp",
-  "homeaddress", "residentialaddress", "streetaddress", "mailingaddress", "homelocation",
-  "livelocation", "realtimelocation", "preciselocation", "gps", "coordinates",
-  "password", "passcode", "privatekey", "secretkey", "credential", "credentials", "ssn",
-  "socialsecurity", "authtoken", "sessiontoken", "clientsecret", "oauthcode",
-  "spouse", "husband", "wife", "children", "kids", "parents", "siblings", "relatives", "nextofkin",
-  "religion", "faith", "race", "ethnicity", "politicalaffiliation", "politicalbeliefs",
-  "sexualorientation", "genderidentity", "diagnosis", "medicalhistory", "medication",
-  "salary", "income", "compensation", "networth", "debt", "creditrecord",
+  "phone",
+  "phonenumber",
+  "telephone",
+  "tel",
+  "mobile",
+  "mobilephone",
+  "cell",
+  "cellphone",
+  "personalphone",
+  "contactnumber",
+  "directnumber",
+  "whatsapp",
+  "homeaddress",
+  "residentialaddress",
+  "streetaddress",
+  "mailingaddress",
+  "homelocation",
+  "livelocation",
+  "realtimelocation",
+  "preciselocation",
+  "gps",
+  "coordinates",
+  "password",
+  "passcode",
+  "privatekey",
+  "secretkey",
+  "credential",
+  "credentials",
+  "ssn",
+  "socialsecurity",
+  "authtoken",
+  "sessiontoken",
+  "clientsecret",
+  "oauthcode",
+  "spouse",
+  "husband",
+  "wife",
+  "children",
+  "kids",
+  "parents",
+  "siblings",
+  "relatives",
+  "nextofkin",
+  "religion",
+  "faith",
+  "race",
+  "ethnicity",
+  "politicalaffiliation",
+  "politicalbeliefs",
+  "sexualorientation",
+  "genderidentity",
+  "diagnosis",
+  "medicalhistory",
+  "medication",
+  "salary",
+  "income",
+  "compensation",
+  "networth",
+  "debt",
+  "creditrecord",
 ]);
 
 /** Field-name gate for arbitrary provider/model JSON, including numeric leaves. */
@@ -49,8 +183,7 @@ export function isCompactPhoneNumberValue(value: unknown): boolean {
   if (typeof value === "number") {
     return Number.isSafeInteger(value) && /^\d{10,15}$/.test(String(value));
   }
-  return typeof value === "string"
-    && /^\p{Decimal_Number}{10,15}$/u.test(value.normalize("NFKC").trim());
+  return typeof value === "string" && /^\p{Decimal_Number}{10,15}$/u.test(value.normalize("NFKC").trim());
 }
 
 function boundedDecode(value: string): string {
@@ -88,11 +221,7 @@ export function urlContainsRestrictedParameters(value: string, depth = 0): boole
     if (isRestrictedUrlQueryKey(key)) return true;
     const decoded = boundedDecode(rawValue);
     if (containsRestrictedAssignment(decoded)) return true;
-    if (
-      depth < 2
-      && /^https?:\/\//i.test(decoded)
-      && urlContainsRestrictedParameters(decoded, depth + 1)
-    ) return true;
+    if (depth < 2 && /^https?:\/\//i.test(decoded) && urlContainsRestrictedParameters(decoded, depth + 1)) return true;
   }
   return false;
 }
@@ -200,35 +329,63 @@ export interface ContentPolicyOptions {
 }
 
 function phoneLike(value: string): boolean {
-  const withoutMachineIds = value.normalize("NFKC").replace(
-    /(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![0-9a-f])/gi,
-    " ",
-  );
+  const withoutMachineIds = value
+    .normalize("NFKC")
+    .replace(/(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![0-9a-f])/gi, " ");
   // JavaScript's `\d` is ASCII-only. Mapping every Unicode decimal digit to a
   // neutral ASCII digit makes full-width and Arabic-Indic phone strings pass
   // through the same boundary without attempting to interpret their value.
   const normalizedDigits = withoutMachineIds.replace(/\p{Decimal_Number}/gu, "0");
   const candidates = normalizedDigits.match(/\+?\d[\d(). -]{7,}\d/g) ?? [];
   if (isCompactPhoneNumberValue(withoutMachineIds)) return true;
-  if (candidates.some((candidate) => {
-    const digits = candidate.replace(/\D/g, "");
-    return digits.length >= 10
-      && digits.length <= 15
-      && (candidate.startsWith("+") || /[(). -]/.test(candidate));
-  })) return true;
-  return /\b(?:find|get|lookup|reveal|show|call|contact|reach|phone|mobile|cell|telephone|whatsapp)\b.{0,32}\b\d{10,15}\b/i
-    .test(normalizedDigits);
+  if (
+    candidates.some((candidate) => {
+      const digits = candidate.replace(/\D/g, "");
+      return digits.length >= 10 && digits.length <= 15 && (candidate.startsWith("+") || /[(). -]/.test(candidate));
+    })
+  )
+    return true;
+  return /\b(?:find|get|lookup|reveal|show|call|contact|reach|phone|mobile|cell|telephone|whatsapp)\b.{0,32}\b\d{10,15}\b/i.test(
+    normalizedDigits,
+  );
 }
 
 const NON_PERSON_AGE_SUBJECTS = new Set([
-  "company", "organization", "product", "project", "program", "business", "startup",
-  "language", "repository", "website", "system", "model", "paper", "conference",
+  "company",
+  "organization",
+  "product",
+  "project",
+  "program",
+  "business",
+  "startup",
+  "language",
+  "repository",
+  "website",
+  "system",
+  "model",
+  "paper",
+  "conference",
 ]);
 
 const WORD_AGES: Record<string, number> = {
-  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
-  eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
-  fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
 };
 
 /**
@@ -387,17 +544,18 @@ function minorAgeLike(value: string, currentYear: number): boolean {
   for (const match of normalizedAges.matchAll(
     /\b([A-Z][\p{L}'’-]*|he|she|they|this person)\s+(?:is|was|aged)\s+(\d{1,2})[- ]?years?[- ]?old\b/gu,
   )) {
-    if (
-      Number(match[2]) < 18
-      && !NON_PERSON_AGE_SUBJECTS.has(match[1].toLocaleLowerCase("en-US"))
-    ) return true;
+    if (Number(match[2]) < 18 && !NON_PERSON_AGE_SUBJECTS.has(match[1].toLocaleLowerCase("en-US"))) return true;
   }
   for (const match of normalizedAges.matchAll(
     /\b(?:[A-Z][\p{L}'’-]*(?:\s+[A-Z][\p{L}'’-]*)?|[Hh]e|[Ss]he|[Tt]hey|founder|developer|student|researcher|engineer|executive)\s*,?\s+(?:is\s+)?(?:age|aged)\s+(\d{1,2})\b/gu,
   )) {
     if (Number(match[1]) < 18) return true;
   }
-  if (/\b(?:under[- ]?18|under\s+eighteen)\s+(?:person|founder|developer|student|researcher|engineer|executive)\b/i.test(normalizedAges)) {
+  if (
+    /\b(?:under[- ]?18|under\s+eighteen)\s+(?:person|founder|developer|student|researcher|engineer|executive)\b/i.test(
+      normalizedAges,
+    )
+  ) {
     return true;
   }
   if (/\b(?:grade[- ]schooler|secondary[- ]school\s+pupil|school\s+pupil)\b/i.test(normalizedAges)) {
@@ -407,9 +565,7 @@ function minorAgeLike(value: string, currentYear: number): boolean {
     const year = Number(match[1]);
     if (year <= currentYear && currentYear - year < 18) return true;
   }
-  for (const match of normalizedAges.matchAll(
-    /\b(?:dob|date\s+of\s+birth)\s*(?::|=|-|is)?\s*((?:19|20)\d{2})\b/gi,
-  )) {
+  for (const match of normalizedAges.matchAll(/\b(?:dob|date\s+of\s+birth)\s*(?::|=|-|is)?\s*((?:19|20)\d{2})\b/gi)) {
     const year = Number(match[1]);
     if (year <= currentYear && currentYear - year < 18) return true;
   }
@@ -417,44 +573,33 @@ function minorAgeLike(value: string, currentYear: number): boolean {
 }
 
 /** Fail-closed final-output policy for content, independent of field names. */
-export function containsRestrictedPublicContent(
-  value: string,
-  options: ContentPolicyOptions = {},
-): boolean {
+export function containsRestrictedPublicContent(value: string, options: ContentPolicyOptions = {}): boolean {
   const normalizedValue = value.normalize("NFKC");
   const policyText = withoutClearlyProfessionalConceptContext(normalizedValue);
   if (
-    RESTRICTED_TEXT_PATTERNS.some((pattern) => pattern.test(policyText))
-    || STREET_ADDRESS_PATTERN.test(normalizedValue)
-    || CONTEXTUAL_STREET_ADDRESS_PATTERN.test(normalizedValue)
-    || POST_OFFICE_BOX_PATTERN.test(normalizedValue)
-    || phoneLike(normalizedValue)
-    || minorAgeLike(policyText, options.currentYear ?? new Date().getUTCFullYear())
-    || restrictedConceptLike(normalizedValue)
+    RESTRICTED_TEXT_PATTERNS.some((pattern) => pattern.test(policyText)) ||
+    STREET_ADDRESS_PATTERN.test(normalizedValue) ||
+    CONTEXTUAL_STREET_ADDRESS_PATTERN.test(normalizedValue) ||
+    POST_OFFICE_BOX_PATTERN.test(normalizedValue) ||
+    phoneLike(normalizedValue) ||
+    minorAgeLike(policyText, options.currentYear ?? new Date().getUTCFullYear()) ||
+    restrictedConceptLike(normalizedValue)
   ) {
     return true;
   }
   if (options.allowAnyEmail) return false;
   const allowed = options.allowedEmails ?? new Set<string>();
-  return [...normalizedValue.matchAll(EMAIL_PATTERN)]
-    .some((match) => !allowed.has(match[0].toLocaleLowerCase("en-US")));
+  return [...normalizedValue.matchAll(EMAIL_PATTERN)].some(
+    (match) => !allowed.has(match[0].toLocaleLowerCase("en-US")),
+  );
 }
 
-export function redactRestrictedPublicContent(
-  value: string,
-  options: ContentPolicyOptions = {},
-): string {
-  return containsRestrictedPublicContent(value, options)
-    ? "[redacted: restricted personal content]"
-    : value;
+export function redactRestrictedPublicContent(value: string, options: ContentPolicyOptions = {}): string {
+  return containsRestrictedPublicContent(value, options) ? "[redacted: restricted personal content]" : value;
 }
 
 /** Recursively locates restricted strings inside durable arbitrary JSON. */
-export function restrictedJsonContentPaths(
-  value: JsonValue,
-  options: ContentPolicyOptions = {},
-  root = "$",
-): string[] {
+export function restrictedJsonContentPaths(value: JsonValue, options: ContentPolicyOptions = {}, root = "$"): string[] {
   const paths: string[] = [];
   const visit = (entry: JsonValue, path: string): void => {
     if (isCompactPhoneNumberValue(entry)) {

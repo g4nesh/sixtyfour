@@ -82,9 +82,7 @@ export function toolEvidenceToDraft(
   context: ToolEvidenceBridgeContext,
 ): EvidenceDraft {
   const mapping = SOURCE_MAPPINGS[evidence.sourceType] ?? UNKNOWN_MAPPING;
-  const canonicalSubset = isJsonValue(evidence.attributes)
-    ? (evidence.attributes as JsonObject)
-    : null;
+  const canonicalSubset = isJsonValue(evidence.attributes) ? (evidence.attributes as JsonObject) : null;
   return {
     ...(context.candidateId ? { candidateId: context.candidateId } : {}),
     ...(context.candidateRef ? { candidateRef: context.candidateRef } : {}),

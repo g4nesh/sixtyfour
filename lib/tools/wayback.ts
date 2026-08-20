@@ -113,7 +113,10 @@ function normalizeTarget(value: string): URL | null {
     if (url.username || url.password) return null;
     const port = url.port ? Number(url.port) : 443;
     if (port !== 443) return null;
-    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+    const hostname = url.hostname
+      .toLowerCase()
+      .replace(/^\[|\]$/g, "")
+      .replace(/\.$/, "");
     if (
       !hostname ||
       !hostname.includes(".") ||
@@ -123,7 +126,8 @@ function normalizeTarget(value: string): URL | null {
       hostname.endsWith(".internal") ||
       hostname.endsWith(".home.arpa") ||
       isBlockedIpAddress(hostname)
-    ) return null;
+    )
+      return null;
     url.hash = "";
     return url;
   } catch {
@@ -157,7 +161,7 @@ function decodeHtmlEntities(value: string): string {
     gt: ">",
     lt: "<",
     nbsp: " ",
-    quot: "\"",
+    quot: '"',
   };
   return value.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, entity: string) => {
     if (entity.startsWith("#")) {
@@ -176,13 +180,15 @@ function decodeHtmlEntities(value: string): string {
 }
 
 function stripUnsafeControls(value: string): string {
-  return [...value].filter((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    const disallowedAscii = (codePoint < 32 && ![9, 10, 13].includes(codePoint)) || codePoint === 127;
-    const directionalOverride = (codePoint >= 0x202a && codePoint <= 0x202e)
-      || (codePoint >= 0x2066 && codePoint <= 0x2069);
-    return !disallowedAscii && !directionalOverride;
-  }).join("");
+  return [...value]
+    .filter((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      const disallowedAscii = (codePoint < 32 && ![9, 10, 13].includes(codePoint)) || codePoint === 127;
+      const directionalOverride =
+        (codePoint >= 0x202a && codePoint <= 0x202e) || (codePoint >= 0x2066 && codePoint <= 0x2069);
+      return !disallowedAscii && !directionalOverride;
+    })
+    .join("");
 }
 
 /** Small dependency-free extractor; output is corroborating context, never a full-page quote. */
@@ -216,9 +222,14 @@ function selectSnapshots(captures: readonly WaybackCaptureGroup[], maximum: numb
     { capture: oldest, timestamp: oldest.firstTimestamp },
     { capture: newest, timestamp: newest.lastTimestamp },
   ];
-  return selected.filter((item, index) => selected.findIndex((candidate) => (
-    candidate.capture.digest === item.capture.digest && candidate.timestamp === item.timestamp
-  )) === index).slice(0, maximum);
+  return selected
+    .filter(
+      (item, index) =>
+        selected.findIndex(
+          (candidate) => candidate.capture.digest === item.capture.digest && candidate.timestamp === item.timestamp,
+        ) === index,
+    )
+    .slice(0, maximum);
 }
 
 interface AcceptedRow {
@@ -301,35 +312,68 @@ export async function inspectWaybackHistory(
 ): Promise<ToolResult<WaybackHistoryData>> {
   const now = toolClock(context);
   const startedAt = now();
-  if (
-    !input.candidate?.candidateId?.trim() ||
-    !CANDIDATE_BASES.has(input.candidate.basis)
-  ) {
-    return finish(startedAt, now, "skipped", null, [], [{
-      code: "candidate_link_required",
-      severity: "warning",
-      message: "Wayback history may run only after the URL is linked to a resolved candidate.",
-      retryable: false,
-    }], 0, 0, false);
+  if (!input.candidate?.candidateId?.trim() || !CANDIDATE_BASES.has(input.candidate.basis)) {
+    return finish(
+      startedAt,
+      now,
+      "skipped",
+      null,
+      [],
+      [
+        {
+          code: "candidate_link_required",
+          severity: "warning",
+          message: "Wayback history may run only after the URL is linked to a resolved candidate.",
+          retryable: false,
+        },
+      ],
+      0,
+      0,
+      false,
+    );
   }
   const target = normalizeTarget(input.url);
   if (!target) {
-    return finish(startedAt, now, "skipped", null, [], [{
-      code: "invalid_candidate_url",
-      severity: "warning",
-      message: "Wayback history requires a public HTTPS candidate URL on port 443.",
-      retryable: false,
-    }], 0, 0, false);
+    return finish(
+      startedAt,
+      now,
+      "skipped",
+      null,
+      [],
+      [
+        {
+          code: "invalid_candidate_url",
+          severity: "warning",
+          message: "Wayback history requires a public HTTPS candidate URL on port 443.",
+          retryable: false,
+        },
+      ],
+      0,
+      0,
+      false,
+    );
   }
   const from = validCdxDate(options.from);
   const to = validCdxDate(options.to);
   if ((options.from !== undefined && from === null) || (options.to !== undefined && to === null)) {
-    return finish(startedAt, now, "skipped", null, [], [{
-      code: "invalid_wayback_range",
-      severity: "warning",
-      message: "Wayback date bounds must contain 1-14 digits in CDX timestamp format.",
-      retryable: false,
-    }], 0, 0, false);
+    return finish(
+      startedAt,
+      now,
+      "skipped",
+      null,
+      [],
+      [
+        {
+          code: "invalid_wayback_range",
+          severity: "warning",
+          message: "Wayback date bounds must contain 1-14 digits in CDX timestamp format.",
+          retryable: false,
+        },
+      ],
+      0,
+      0,
+      false,
+    );
   }
   const maxCaptures = bounded(options.maxCaptures, 6, 1, 12);
   const maxSnapshots = bounded(options.maxSnapshots, 2, 0, 2);
@@ -360,85 +404,150 @@ export async function inspectWaybackHistory(
     maxRetryAfterMs: 5_000,
     fetch: context.fetch,
     clock: now,
-    beforeRequest: () => reserveToolBudget(context, {
-      tool: "wayback_candidate_history",
-      networkRequests: 1,
-      expectedBytes: maxResponseBytes,
-    }),
+    beforeRequest: () =>
+      reserveToolBudget(context, {
+        tool: "wayback_candidate_history",
+        networkRequests: 1,
+        expectedBytes: maxResponseBytes,
+      }),
   });
   let response;
   try {
     response = await fetchWayback(query, { signal: context.signal });
   } catch (error) {
     const budgetExhausted = error instanceof HardenedFetchError && error.code === "budget_exhausted";
-    return finish(startedAt, now, budgetExhausted ? "skipped" : "failed", null, [], [{
-      code: error instanceof HardenedFetchError ? error.code : "wayback_unavailable",
-      severity: budgetExhausted ? "info" : "warning",
-      message: budgetExhausted
-        ? "Wayback lookup was skipped because the network budget was exhausted."
-        : "Wayback history was unavailable; the investigation can continue without temporal corroboration.",
-      retryable: error instanceof HardenedFetchError && error.retryable,
-    }], error instanceof HardenedFetchError ? error.requests : 0, 0, true);
+    return finish(
+      startedAt,
+      now,
+      budgetExhausted ? "skipped" : "failed",
+      null,
+      [],
+      [
+        {
+          code: error instanceof HardenedFetchError ? error.code : "wayback_unavailable",
+          severity: budgetExhausted ? "info" : "warning",
+          message: budgetExhausted
+            ? "Wayback lookup was skipped because the network budget was exhausted."
+            : "Wayback history was unavailable; the investigation can continue without temporal corroboration.",
+          retryable: error instanceof HardenedFetchError && error.retryable,
+        },
+      ],
+      error instanceof HardenedFetchError ? error.requests : 0,
+      0,
+      true,
+    );
   }
   if (response.response.status === 429) {
-    return finish(startedAt, now, "rate_limited", null, [], [{
-      code: "wayback_rate_limited",
-      severity: "warning",
-      message: "Wayback rate-limited temporal history; the investigation can continue without it.",
-      retryable: true,
-    }], response.requests, response.bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "rate_limited",
+      null,
+      [],
+      [
+        {
+          code: "wayback_rate_limited",
+          severity: "warning",
+          message: "Wayback rate-limited temporal history; the investigation can continue without it.",
+          retryable: true,
+        },
+      ],
+      response.requests,
+      response.bytesRead,
+      true,
+    );
   }
   if (!response.response.ok) {
-    return finish(startedAt, now, "failed", null, [], [{
-      code: "wayback_http_error",
-      severity: "warning",
-      message: `Wayback history returned HTTP ${response.response.status}; temporal corroboration is unavailable.`,
-      retryable: response.response.status >= 500,
-    }], response.requests, response.bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [],
+      [
+        {
+          code: "wayback_http_error",
+          severity: "warning",
+          message: `Wayback history returned HTTP ${response.response.status}; temporal corroboration is unavailable.`,
+          retryable: response.response.status >= 500,
+        },
+      ],
+      response.requests,
+      response.bytesRead,
+      true,
+    );
   }
   let payload: unknown;
   try {
     payload = await response.response.json();
   } catch {
-    return finish(startedAt, now, "failed", null, [], [{
-      code: "wayback_invalid_json",
-      severity: "warning",
-      message: "Wayback returned malformed history data; the investigation can continue without it.",
-      retryable: true,
-    }], response.requests, response.bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [],
+      [
+        {
+          code: "wayback_invalid_json",
+          severity: "warning",
+          message: "Wayback returned malformed history data; the investigation can continue without it.",
+          retryable: true,
+        },
+      ],
+      response.requests,
+      response.bytesRead,
+      true,
+    );
   }
   const parsed = parseRows(payload);
   if (!parsed) {
-    return finish(startedAt, now, "failed", null, [], [{
-      code: "wayback_invalid_response",
-      severity: "warning",
-      message: "Wayback returned an unexpected history schema.",
-      retryable: false,
-    }], response.requests, response.bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [],
+      [
+        {
+          code: "wayback_invalid_response",
+          severity: "warning",
+          message: "Wayback returned an unexpected history schema.",
+          retryable: false,
+        },
+      ],
+      response.requests,
+      response.bytesRead,
+      true,
+    );
   }
   const captures = collapseDigests(parsed.rows, maxCaptures);
   const boundedResult = parsed.rows.length >= queryLimit || captures.length >= maxCaptures;
   const diagnostics: ToolDiagnostic[] = [];
-  if (parsed.malformed) diagnostics.push({
-    code: "wayback_rows_discarded",
-    severity: "warning",
-    message: "Malformed or out-of-policy Wayback rows were discarded.",
-    retryable: false,
-    details: { count: parsed.malformed },
-  });
-  if (boundedResult) diagnostics.push({
-    code: "wayback_bounded_results",
-    severity: "info",
-    message: "Wayback history was intentionally bounded and may not include every archived version.",
-    retryable: false,
-    details: { returned: captures.length },
-  });
-  if (captures.length === 0) diagnostics.push({
-    code: "wayback_captures_not_observed",
-    severity: "info",
-    message: "No qualifying HTML captures were observed in this bounded query; this does not prove no archive history exists.",
-    retryable: false,
-  });
+  if (parsed.malformed)
+    diagnostics.push({
+      code: "wayback_rows_discarded",
+      severity: "warning",
+      message: "Malformed or out-of-policy Wayback rows were discarded.",
+      retryable: false,
+      details: { count: parsed.malformed },
+    });
+  if (boundedResult)
+    diagnostics.push({
+      code: "wayback_bounded_results",
+      severity: "info",
+      message: "Wayback history was intentionally bounded and may not include every archived version.",
+      retryable: false,
+      details: { returned: captures.length },
+    });
+  if (captures.length === 0)
+    diagnostics.push({
+      code: "wayback_captures_not_observed",
+      severity: "info",
+      message:
+        "No qualifying HTML captures were observed in this bounded query; this does not prove no archive history exists.",
+      retryable: false,
+    });
 
   let requests = response.requests;
   let bytesRead = response.bytesRead;
@@ -458,11 +567,12 @@ export async function inspectWaybackHistory(
     maxRetryAfterMs: 5_000,
     fetch: context.fetch,
     clock: now,
-    beforeRequest: () => reserveToolBudget(context, {
-      tool: "wayback_snapshot",
-      networkRequests: 1,
-      expectedBytes: maximumSnapshotBytes,
-    }),
+    beforeRequest: () =>
+      reserveToolBudget(context, {
+        tool: "wayback_snapshot",
+        networkRequests: 1,
+        expectedBytes: maximumSnapshotBytes,
+      }),
   });
   for (const { capture, timestamp } of selectedSnapshots) {
     const rawUrl = captureUrl(timestamp, capture.originalUrl, true);
@@ -516,10 +626,11 @@ export async function inspectWaybackHistory(
     }
   }
   snapshots.sort((left, right) => left.timestamp.localeCompare(right.timestamp));
-  const temporalChange = snapshots.length >= 2
-    && snapshots[0].textExcerpt !== null
-    && snapshots[snapshots.length - 1].textExcerpt !== null
-    && snapshots[0].contentHashSha256 !== snapshots[snapshots.length - 1].contentHashSha256
+  const temporalChange =
+    snapshots.length >= 2 &&
+    snapshots[0].textExcerpt !== null &&
+    snapshots[snapshots.length - 1].textExcerpt !== null &&
+    snapshots[0].contentHashSha256 !== snapshots[snapshots.length - 1].contentHashSha256
       ? { then: snapshots[0], now: snapshots[snapshots.length - 1] }
       : null;
 
@@ -569,11 +680,15 @@ export async function inspectWaybackHistory(
     snapshots,
     temporalChange,
     bounded: boundedResult,
-    scopeNote: "CDX metadata establishes archive presence. Snapshot excerpts can show page changes but do not establish who controlled the page.",
+    scopeNote:
+      "CDX metadata establishes archive presence. Snapshot excerpts can show page changes but do not establish who controlled the page.",
   };
-  const status: ToolStatus = captures.length === 0
-    ? "not_found"
-    : boundedResult || parsed.malformed > 0 || snapshotIncomplete ? "partial" : "succeeded";
+  const status: ToolStatus =
+    captures.length === 0
+      ? "not_found"
+      : boundedResult || parsed.malformed > 0 || snapshotIncomplete
+        ? "partial"
+        : "succeeded";
   return finish(
     startedAt,
     now,

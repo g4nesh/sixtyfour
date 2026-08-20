@@ -9,11 +9,7 @@ import {
   type InvestigationState,
 } from "./types";
 import { assessConfidence } from "./confidence";
-import {
-  candidateStatus,
-  identitySignalGroundedByEvidence,
-  scoreCandidate,
-} from "./candidates";
+import { candidateStatus, identitySignalGroundedByEvidence, scoreCandidate } from "./candidates";
 import { containsRestrictedPublicContent } from "./content-policy";
 import { sourceLaneForFrontierEntry, sourceTierForUrl } from "../search/source-hierarchy";
 
@@ -70,27 +66,26 @@ const FINDING_CATEGORY_LABEL: Record<FindingDraft["category"], string> = {
   other: "Public professional finding",
 };
 
-function materializedFindingTitle(
-  category: FindingDraft["category"],
-  candidate: Candidate,
-): string {
+function materializedFindingTitle(category: FindingDraft["category"], candidate: Candidate): string {
   return `${FINDING_CATEGORY_LABEL[category]} — ${candidate.displayName}`;
 }
 
 function materializedFindingDescription(evidence: readonly EvidenceRecord[]): string {
-  return [...new Set(evidence
-    .map((item) => normalizeWhitespace(item.excerpt ?? item.claim))
-    .filter(Boolean))]
+  return [...new Set(evidence.map((item) => normalizeWhitespace(item.excerpt ?? item.claim)).filter(Boolean))]
     .slice(0, 3)
     .join(" ");
 }
 
-const EMPLOYMENT_TEXT = /\b(?:works?|worked|employed|joined|serves?|served|leads?|led|leadership|chair(?:man|woman)?|chief|officer|director|executive|engineer|fellow|founder|partner|curator|role|position)\b/i;
+const EMPLOYMENT_TEXT =
+  /\b(?:works?|worked|employed|joined|serves?|served|leads?|led|leadership|chair(?:man|woman)?|chief|officer|director|executive|engineer|fellow|founder|partner|curator|role|position)\b/i;
 const EDUCATION_TEXT = /\b(?:university|college|school|degree|graduat(?:e|ed)|studied|education|alumn(?:us|a|i))\b/i;
-const PROJECT_TEXT = /\b(?:created?|creator|built|developed|maintains?|project|software|language|repository|framework|product|invented?)\b/i;
-const PUBLICATION_TEXT = /\b(?:published?|publication|paper|article|book|author(?:ed)?|wrote|writing|notes?|journal|proceedings)\b/i;
+const PROJECT_TEXT =
+  /\b(?:created?|creator|built|developed|maintains?|project|software|language|repository|framework|product|invented?)\b/i;
+const PUBLICATION_TEXT =
+  /\b(?:published?|publication|paper|article|book|author(?:ed)?|wrote|writing|notes?|journal|proceedings)\b/i;
 const ONLINE_TEXT = /\b(?:profile|account|website|homepage|github|repository|commit|domain|handle|online)\b/i;
-const TIMELINE_TEXT = /\b(?:19|20)\d{2}\b|\b(?:current|currently|former|formerly|joined|since|until|historical|previously)\b/i;
+const TIMELINE_TEXT =
+  /\b(?:19|20)\d{2}\b|\b(?:current|currently|former|formerly|joined|since|until|historical|previously)\b/i;
 
 /** Category admission uses quoted text plus deterministic source semantics, never model prose or metadata. */
 export function evidenceSupportsFindingCategory(
@@ -112,9 +107,10 @@ export function evidenceSupportsFindingCategory(
     case "publication":
       return PUBLICATION_TEXT.test(text);
     case "online_presence":
-      return ONLINE_TEXT.test(text)
-        || ["official_profile", "professional_profile", "code_profile", "code_commit"]
-          .includes(evidence.sourceType);
+      return (
+        ONLINE_TEXT.test(text) ||
+        ["official_profile", "professional_profile", "code_profile", "code_commit"].includes(evidence.sourceType)
+      );
     case "timeline":
       return TIMELINE_TEXT.test(text);
     case "other":
@@ -128,8 +124,10 @@ export function isFindingGrounded(
   candidate: Candidate,
   supportingEvidence: readonly EvidenceRecord[],
 ): boolean {
-  return normalizeWhitespace(draft.title) === materializedFindingTitle(draft.category, candidate)
-    && normalizeWhitespace(draft.description) === materializedFindingDescription(supportingEvidence);
+  return (
+    normalizeWhitespace(draft.title) === materializedFindingTitle(draft.category, candidate) &&
+    normalizeWhitespace(draft.description) === materializedFindingDescription(supportingEvidence)
+  );
 }
 
 export function validateReferentialIntegrity(
@@ -187,25 +185,27 @@ export function validateReferentialIntegrity(
     candidate.signals.forEach((signal, signalIndex) => {
       const path = `candidates[${candidateIndex}].signals[${signalIndex}]`;
       if (signal.kind === "cross_source_match") {
-        const source = signal.sourceEvidenceId
-          ? evidenceById.get(signal.sourceEvidenceId)
-          : undefined;
+        const source = signal.sourceEvidenceId ? evidenceById.get(signal.sourceEvidenceId) : undefined;
         const families = signal.sourceFamily?.startsWith("cross-source:")
           ? signal.sourceFamily.slice("cross-source:".length).split("+").filter(Boolean)
           : [];
-        const candidateFamilies = new Set(state.evidence
-          .filter((evidence) =>
-            evidence.candidateId === candidate.id
-            && evidence.disposition === "supports"
-            && evidence.verificationMethod === "direct_fetch")
-          .map((evidence) => evidence.sourceFamily));
+        const candidateFamilies = new Set(
+          state.evidence
+            .filter(
+              (evidence) =>
+                evidence.candidateId === candidate.id &&
+                evidence.disposition === "supports" &&
+                evidence.verificationMethod === "direct_fetch",
+            )
+            .map((evidence) => evidence.sourceFamily),
+        );
         if (
-          signal.assurance !== "corroborated"
-          || signal.strength !== "strong"
-          || !source
-          || source.candidateId !== candidate.id
-          || families.length < 2
-          || families.some((family) => !candidateFamilies.has(family))
+          signal.assurance !== "corroborated" ||
+          signal.strength !== "strong" ||
+          !source ||
+          source.candidateId !== candidate.id ||
+          families.length < 2 ||
+          families.some((family) => !candidateFamilies.has(family))
         ) {
           issues.push({
             code: "candidate_signal_provenance_mismatch",
@@ -215,18 +215,14 @@ export function validateReferentialIntegrity(
         }
         return;
       }
-      const source = signal.sourceEvidenceId
-        ? evidenceById.get(signal.sourceEvidenceId)
-        : undefined;
+      const source = signal.sourceEvidenceId ? evidenceById.get(signal.sourceEvidenceId) : undefined;
       if (
         signal.sourceEvidenceId
-          ? !source
-            || source.candidateId !== candidate.id
-            || !identitySignalGroundedByEvidence(signal, source)
-          : Boolean(signal.sourceFamily)
-            || signal.kind === "conflict"
-            || signal.assurance === "verified"
-            || signal.assurance === "corroborated"
+          ? !source || source.candidateId !== candidate.id || !identitySignalGroundedByEvidence(signal, source)
+          : Boolean(signal.sourceFamily) ||
+            signal.kind === "conflict" ||
+            signal.assurance === "verified" ||
+            signal.assurance === "corroborated"
       ) {
         issues.push({
           code: "candidate_signal_provenance_mismatch",
@@ -238,8 +234,8 @@ export function validateReferentialIntegrity(
     if (state.target) {
       const expectedScore = scoreCandidate(candidate, state.target);
       if (
-        JSON.stringify(candidate.score) !== JSON.stringify(expectedScore)
-        || candidate.status !== candidateStatus(candidate.signals, expectedScore)
+        JSON.stringify(candidate.score) !== JSON.stringify(expectedScore) ||
+        candidate.status !== candidateStatus(candidate.signals, expectedScore)
       ) {
         issues.push({
           code: "candidate_score_mismatch",
@@ -328,29 +324,25 @@ export function validateReferentialIntegrity(
       });
     }
 
-    if (
-      findingEvidence.length ===
-      finding.evidenceIds.length + finding.counterEvidenceIds.length
-    ) {
+    if (findingEvidence.length === finding.evidenceIds.length + finding.counterEvidenceIds.length) {
       const expected = assessConfidence(findingEvidence);
       if (
-        expected.score !== finding.confidence.score
-        || expected.label !== finding.confidence.label
-        || expected.independentSourceFamilies.length !==
-          finding.confidence.independentSourceFamilies.length
-        || !expected.independentSourceFamilies.every((family, index) =>
-          family === finding.confidence.independentSourceFamilies[index])
-        || expected.supportingEvidenceIds.length !==
-          finding.confidence.supportingEvidenceIds.length
-        || !expected.supportingEvidenceIds.every((evidenceId, index) =>
-          evidenceId === finding.confidence.supportingEvidenceIds[index])
-        || expected.contradictingEvidenceIds.length !==
-          finding.confidence.contradictingEvidenceIds.length
-        || !expected.contradictingEvidenceIds.every((evidenceId, index) =>
-          evidenceId === finding.confidence.contradictingEvidenceIds[index])
-        || expected.appliedCaps.length !== finding.confidence.appliedCaps.length
-        || !expected.appliedCaps.every((cap, index) =>
-          cap === finding.confidence.appliedCaps[index])
+        expected.score !== finding.confidence.score ||
+        expected.label !== finding.confidence.label ||
+        expected.independentSourceFamilies.length !== finding.confidence.independentSourceFamilies.length ||
+        !expected.independentSourceFamilies.every(
+          (family, index) => family === finding.confidence.independentSourceFamilies[index],
+        ) ||
+        expected.supportingEvidenceIds.length !== finding.confidence.supportingEvidenceIds.length ||
+        !expected.supportingEvidenceIds.every(
+          (evidenceId, index) => evidenceId === finding.confidence.supportingEvidenceIds[index],
+        ) ||
+        expected.contradictingEvidenceIds.length !== finding.confidence.contradictingEvidenceIds.length ||
+        !expected.contradictingEvidenceIds.every(
+          (evidenceId, index) => evidenceId === finding.confidence.contradictingEvidenceIds[index],
+        ) ||
+        expected.appliedCaps.length !== finding.confidence.appliedCaps.length ||
+        !expected.appliedCaps.every((cap, index) => cap === finding.confidence.appliedCaps[index])
       ) {
         issues.push({
           code: "confidence_mismatch",
@@ -360,18 +352,26 @@ export function validateReferentialIntegrity(
       }
     }
     const candidate = state.candidates.find((item) => item.id === finding.candidateId);
-    if (candidate && !findingEvidence
-      .filter((evidence) => evidence.disposition === "supports")
-      .some((evidence) => evidenceSupportsFindingCategory(evidence, candidate, finding.category))) {
+    if (
+      candidate &&
+      !findingEvidence
+        .filter((evidence) => evidence.disposition === "supports")
+        .some((evidence) => evidenceSupportsFindingCategory(evidence, candidate, finding.category))
+    ) {
       issues.push({
         code: "unsupported_finding_category",
         path: `findings[${findingIndex}].category`,
         message: `finding ${finding.id} has no quoted evidence supporting ${finding.category}`,
       });
     }
-    if (candidate && !isFindingGrounded(finding, candidate, findingEvidence.filter(
-      (evidence) => evidence.disposition === "supports",
-    ))) {
+    if (
+      candidate &&
+      !isFindingGrounded(
+        finding,
+        candidate,
+        findingEvidence.filter((evidence) => evidence.disposition === "supports"),
+      )
+    ) {
       issues.push({
         code: "ungrounded_finding",
         path: `findings[${findingIndex}]`,
@@ -437,8 +437,9 @@ export function validateReferentialIntegrity(
             message: `graph evidence candidate ${node.candidateId} does not match ${evidence.candidateId}`,
           });
         }
-        const actionNode = graph.nodes.find((candidate) =>
-          candidate.kind === "action" && candidate.actionId === node.actionId);
+        const actionNode = graph.nodes.find(
+          (candidate) => candidate.kind === "action" && candidate.actionId === node.actionId,
+        );
         const frontierEntry = graph.frontier.find((entry) => entry.actionId === node.actionId);
         const boundCandidateId = actionNode?.candidateId ?? frontierEntry?.candidateId ?? null;
         if (evidence && boundCandidateId !== null && evidence.candidateId !== boundCandidateId) {
@@ -452,8 +453,7 @@ export function validateReferentialIntegrity(
     });
     if (graph.seedNodeId !== null) {
       for (const candidate of state.candidates) {
-        const nodes = graph.nodes.filter((node) =>
-          node.kind === "candidate" && node.candidateId === candidate.id);
+        const nodes = graph.nodes.filter((node) => node.kind === "candidate" && node.candidateId === candidate.id);
         if (nodes.length !== 1) {
           issues.push({
             code: nodes.length === 0 ? "missing_graph_entity_node" : "duplicate_graph_entity_node",
@@ -465,9 +465,9 @@ export function validateReferentialIntegrity(
         const node = nodes[0];
         const allowedData = new Set(["entityKey"]);
         if (
-          node.label !== candidate.displayName
-          || node.data.entityKey !== `candidate:${candidate.id}`
-          || Object.keys(node.data).some((key) => !allowedData.has(key))
+          node.label !== candidate.displayName ||
+          node.data.entityKey !== `candidate:${candidate.id}` ||
+          Object.keys(node.data).some((key) => !allowedData.has(key))
         ) {
           issues.push({
             code: "graph_entity_projection_mismatch",
@@ -477,8 +477,7 @@ export function validateReferentialIntegrity(
         }
       }
       for (const evidence of state.evidence) {
-        const nodes = graph.nodes.filter((node) =>
-          node.kind === "evidence" && node.evidenceId === evidence.id);
+        const nodes = graph.nodes.filter((node) => node.kind === "evidence" && node.evidenceId === evidence.id);
         if (nodes.length !== 1) {
           issues.push({
             code: nodes.length === 0 ? "missing_graph_entity_node" : "duplicate_graph_entity_node",
@@ -489,22 +488,27 @@ export function validateReferentialIntegrity(
         }
         const node = nodes[0];
         const allowedData = new Set([
-          "contentHash", "disposition", "entityKey", "sourceFamily", "sourceType", "sourceUrl",
+          "contentHash",
+          "disposition",
+          "entityKey",
+          "sourceFamily",
+          "sourceType",
+          "sourceUrl",
           "verificationMethod",
         ]);
         if (
-          node.label !== evidence.claim
-          || node.candidateId !== evidence.candidateId
-          || node.actionId !== evidence.toolCallId
-          || node.data.sourceUrl !== evidence.sourceUrl
-          || node.data.sourceFamily !== evidence.sourceFamily
-          || node.data.sourceType !== evidence.sourceType
-          || node.data.disposition !== evidence.disposition
-          || node.data.contentHash !== evidence.contentHash
-          || node.data.entityKey !== `evidence:${evidence.id}`
-          || (node.data.verificationMethod !== undefined
-            && node.data.verificationMethod !== evidence.verificationMethod)
-          || Object.keys(node.data).some((key) => !allowedData.has(key))
+          node.label !== evidence.claim ||
+          node.candidateId !== evidence.candidateId ||
+          node.actionId !== evidence.toolCallId ||
+          node.data.sourceUrl !== evidence.sourceUrl ||
+          node.data.sourceFamily !== evidence.sourceFamily ||
+          node.data.sourceType !== evidence.sourceType ||
+          node.data.disposition !== evidence.disposition ||
+          node.data.contentHash !== evidence.contentHash ||
+          node.data.entityKey !== `evidence:${evidence.id}` ||
+          (node.data.verificationMethod !== undefined &&
+            node.data.verificationMethod !== evidence.verificationMethod) ||
+          Object.keys(node.data).some((key) => !allowedData.has(key))
         ) {
           issues.push({
             code: "graph_entity_projection_mismatch",
@@ -512,8 +516,9 @@ export function validateReferentialIntegrity(
             message: `evidence node ${node.id} is not a canonical projection`,
           });
         }
-        const sourceNodes = graph.nodes.filter((candidate) =>
-          candidate.kind === "source" && candidate.evidenceId === evidence.id);
+        const sourceNodes = graph.nodes.filter(
+          (candidate) => candidate.kind === "source" && candidate.evidenceId === evidence.id,
+        );
         if (sourceNodes.length !== 1) {
           issues.push({
             code: sourceNodes.length === 0 ? "missing_graph_entity_node" : "duplicate_graph_entity_node",
@@ -524,17 +529,17 @@ export function validateReferentialIntegrity(
           const sourceNode = sourceNodes[0];
           const allowedSourceData = new Set(["entityKey", "sourceFamily", "sourceType", "sourceUrl"]);
           if (
-            sourceNode.label !== (evidence.title ?? evidence.sourceFamily)
-            || sourceNode.candidateId !== evidence.candidateId
-            || sourceNode.actionId !== evidence.toolCallId
-            || sourceNode.frontierEntryId !== node.frontierEntryId
-            || sourceNode.sourceLaneId !== node.sourceLaneId
-            || sourceNode.sourceTier !== node.sourceTier
-            || sourceNode.data.sourceUrl !== evidence.sourceUrl
-            || sourceNode.data.sourceFamily !== evidence.sourceFamily
-            || sourceNode.data.sourceType !== evidence.sourceType
-            || sourceNode.data.entityKey !== `source:${evidence.id}`
-            || Object.keys(sourceNode.data).some((key) => !allowedSourceData.has(key))
+            sourceNode.label !== (evidence.title ?? evidence.sourceFamily) ||
+            sourceNode.candidateId !== evidence.candidateId ||
+            sourceNode.actionId !== evidence.toolCallId ||
+            sourceNode.frontierEntryId !== node.frontierEntryId ||
+            sourceNode.sourceLaneId !== node.sourceLaneId ||
+            sourceNode.sourceTier !== node.sourceTier ||
+            sourceNode.data.sourceUrl !== evidence.sourceUrl ||
+            sourceNode.data.sourceFamily !== evidence.sourceFamily ||
+            sourceNode.data.sourceType !== evidence.sourceType ||
+            sourceNode.data.entityKey !== `source:${evidence.id}` ||
+            Object.keys(sourceNode.data).some((key) => !allowedSourceData.has(key))
           ) {
             issues.push({
               code: "graph_entity_projection_mismatch",
@@ -551,15 +556,16 @@ export function validateReferentialIntegrity(
         const derivedTier = entry
           ? sourceTierForUrl(evidence.sourceUrl, evidence.sourceType, entry.sourceTier === 0)
           : null;
-        const tierMismatch = entry?.sourceTier === 1
-          ? false
-          : derivedTier !== null && entry !== undefined && derivedTier !== entry.sourceTier;
+        const tierMismatch =
+          entry?.sourceTier === 1
+            ? false
+            : derivedTier !== null && entry !== undefined && derivedTier !== entry.sourceTier;
         if (
-          !entry
-          || !lane
-          || (!discoveryOnly && lane.admission === "discovery_only")
-          || (!discoveryOnly && !lane.sourceTypes.includes(evidence.sourceType))
-          || (!discoveryOnly && tierMismatch)
+          !entry ||
+          !lane ||
+          (!discoveryOnly && lane.admission === "discovery_only") ||
+          (!discoveryOnly && !lane.sourceTypes.includes(evidence.sourceType)) ||
+          (!discoveryOnly && tierMismatch)
         ) {
           issues.push({
             code: "evidence_source_lane_mismatch",
@@ -569,8 +575,7 @@ export function validateReferentialIntegrity(
         }
       }
       for (const finding of state.findings) {
-        const nodes = graph.nodes.filter((node) =>
-          node.kind === "finding" && node.findingId === finding.id);
+        const nodes = graph.nodes.filter((node) => node.kind === "finding" && node.findingId === finding.id);
         if (nodes.length !== 1) {
           issues.push({
             code: nodes.length === 0 ? "missing_graph_entity_node" : "duplicate_graph_entity_node",
@@ -582,12 +587,12 @@ export function validateReferentialIntegrity(
         const node = nodes[0];
         const allowedData = new Set(["category", "confidence", "entityKey"]);
         if (
-          node.label !== finding.title
-          || node.candidateId !== finding.candidateId
-          || node.data.category !== finding.category
-          || node.data.confidence !== finding.confidence.score
-          || node.data.entityKey !== `finding:${finding.id}`
-          || Object.keys(node.data).some((key) => !allowedData.has(key))
+          node.label !== finding.title ||
+          node.candidateId !== finding.candidateId ||
+          node.data.category !== finding.category ||
+          node.data.confidence !== finding.confidence.score ||
+          node.data.entityKey !== `finding:${finding.id}` ||
+          Object.keys(node.data).some((key) => !allowedData.has(key))
         ) {
           issues.push({
             code: "graph_entity_projection_mismatch",
@@ -623,10 +628,12 @@ export function validateReferentialIntegrity(
         for (let rightIndex = leftIndex + 1; rightIndex < ids.length; rightIndex += 1) {
           const leftNodeId = candidateNodeById.get(ids[leftIndex]) as string;
           const rightNodeId = candidateNodeById.get(ids[rightIndex]) as string;
-          const separated = graph.edges.some((edge) =>
-            edge.kind === "separates"
-            && ((edge.fromNodeId === leftNodeId && edge.toNodeId === rightNodeId)
-              || (edge.fromNodeId === rightNodeId && edge.toNodeId === leftNodeId)));
+          const separated = graph.edges.some(
+            (edge) =>
+              edge.kind === "separates" &&
+              ((edge.fromNodeId === leftNodeId && edge.toNodeId === rightNodeId) ||
+                (edge.fromNodeId === rightNodeId && edge.toNodeId === leftNodeId)),
+          );
           if (!separated) {
             issues.push({
               code: "missing_candidate_separation_edge",
@@ -693,19 +700,21 @@ export function createFinding(
   const description = normalizeWhitespace(draft.description);
   if (!title || !description) throw new TypeError("finding title and description are required");
   if (
-    [title, description, ...(draft.caveats ?? [])]
-      .some((value) => containsRestrictedPublicContent(value, { allowedEmails }))
+    [title, description, ...(draft.caveats ?? [])].some((value) =>
+      containsRestrictedPublicContent(value, { allowedEmails }),
+    )
   ) {
     throw new TypeError("finding contains restricted personal content");
   }
-  if (!findingEvidence.some((record) =>
-    evidenceSupportsFindingCategory(record, candidate, draft.category))) {
+  if (!findingEvidence.some((record) => evidenceSupportsFindingCategory(record, candidate, draft.category))) {
     throw new Error(`supporting evidence does not establish finding category ${draft.category}`);
   }
-  const reusedAcrossCategory = existingFindings.find((finding) =>
-    finding.candidateId === candidate.id
-    && finding.category !== draft.category
-    && finding.evidenceIds.some((evidenceId) => uniqueEvidenceIds.includes(evidenceId)));
+  const reusedAcrossCategory = existingFindings.find(
+    (finding) =>
+      finding.candidateId === candidate.id &&
+      finding.category !== draft.category &&
+      finding.evidenceIds.some((evidenceId) => uniqueEvidenceIds.includes(evidenceId)),
+  );
   if (reusedAcrossCategory) {
     throw new Error(
       `evidence cannot be reused across finding categories (${reusedAcrossCategory.category} and ${draft.category})`,
@@ -717,9 +726,7 @@ export function createFinding(
     ...(findingEvidence.some((record) => record.spoofable)
       ? ["Supporting material includes spoofable or self-asserted source content."]
       : []),
-    ...(counterEvidence.length > 0
-      ? ["Contradicting evidence is recorded separately."]
-      : []),
+    ...(counterEvidence.length > 0 ? ["Contradicting evidence is recorded separately."] : []),
   ];
   return {
     schemaVersion: SCHEMA_VERSION,

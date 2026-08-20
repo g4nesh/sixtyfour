@@ -80,42 +80,54 @@ test("safety policy permits public professional research and blocks dangerous sc
   for (const [query, expectedCode] of blocked) {
     const decision = domain.classifySafety(query);
     assert.equal(decision.level, "block", query);
-    assert.ok(decision.reasons.some((reason) => reason.code === expectedCode), query);
+    assert.ok(
+      decision.reasons.some((reason) => reason.code === expectedCode),
+      query,
+    );
   }
-  assert.equal(agent.isActionPolicyCompliant({
-    tool: "search_web",
-    purpose: "Research a public professional profile",
-    arguments: { phone: 6025550199 },
-  }, ["search_web"]).allowed, false);
-  assert.equal(agent.isActionPolicyCompliant({
-    tool: "search_web",
-    purpose: "Research a public professional profile",
-    arguments: { query: 6025550199 },
-  }, ["search_web"]).allowed, false);
+  assert.equal(
+    agent.isActionPolicyCompliant(
+      {
+        tool: "search_web",
+        purpose: "Research a public professional profile",
+        arguments: { phone: 6025550199 },
+      },
+      ["search_web"],
+    ).allowed,
+    false,
+  );
+  assert.equal(
+    agent.isActionPolicyCompliant(
+      {
+        tool: "search_web",
+        purpose: "Research a public professional profile",
+        arguments: { query: 6025550199 },
+      },
+      ["search_web"],
+    ).allowed,
+    false,
+  );
   for (const query of ["６０２５５５０１９９", "٦٠٢٥٥٥٠١٩٩"]) {
-    assert.equal(agent.isActionPolicyCompliant({
-      tool: "search_web",
-      purpose: "Find the supplied number",
-      arguments: { query },
-    }, ["search_web"]).allowed, false, query);
+    assert.equal(
+      agent.isActionPolicyCompliant(
+        {
+          tool: "search_web",
+          purpose: "Find the supplied number",
+          arguments: { query },
+        },
+        ["search_web"],
+      ).allowed,
+      false,
+      query,
+    );
   }
 });
 
 test("same-name candidates stay separate until a strong verified identifier matches", () => {
   const target = domain.parseTarget("Alex Kim, Example Labs");
   const clock = domain.createSequenceClock();
-  const first = domain.createCandidate(
-    { displayName: "Alex Kim", signals: [] },
-    target,
-    "candidate_1",
-    clock.now(),
-  );
-  const second = domain.createCandidate(
-    { displayName: "Alex Kim", signals: [] },
-    target,
-    "candidate_2",
-    clock.now(),
-  );
+  const first = domain.createCandidate({ displayName: "Alex Kim", signals: [] }, target, "candidate_1", clock.now());
+  const second = domain.createCandidate({ displayName: "Alex Kim", signals: [] }, target, "candidate_2", clock.now());
   assert.deepEqual(domain.canMergeCandidates(first, second), {
     allowed: false,
     reason: "name_only",
@@ -138,12 +150,7 @@ test("evidence admission preserves complete audit metadata and deduplicates sour
   const clock = domain.createSequenceClock();
   const ids = domain.createDeterministicIdFactory("audit");
   const target = domain.parseTarget("Ada Lovelace, Analytical Engine");
-  const candidate = domain.createCandidate(
-    { displayName: "Ada Lovelace" },
-    target,
-    "candidate_ada",
-    clock.now(),
-  );
+  const candidate = domain.createCandidate({ displayName: "Ada Lovelace" }, target, "candidate_ada", clock.now());
   const context = {
     candidateIds: new Set([candidate.id]),
     existing: [],
@@ -207,11 +214,12 @@ test("search snippets cannot support findings and spoofable-only evidence is con
     reliability: 1,
     spoofable: true,
   };
-  const records = ["linkedin.com", "about.me", "example.dev"].map((host) =>
-    domain.admitEvidence(
-      { ...base, sourceUrl: `https://${host}/alex` },
-      { candidateIds: new Set([candidateId]), existing: [], ids, clock },
-    ).evidence,
+  const records = ["linkedin.com", "about.me", "example.dev"].map(
+    (host) =>
+      domain.admitEvidence(
+        { ...base, sourceUrl: `https://${host}/alex` },
+        { candidateIds: new Set([candidateId]), existing: [], ids, clock },
+      ).evidence,
   );
   const confidence = domain.assessConfidence(records);
   assert.equal(confidence.score, domain.SPOOFABLE_CONFIDENCE_CAP);
@@ -234,12 +242,7 @@ test("findings expose counter-evidence and preserve candidate/evidence referenti
   const clock = domain.createSequenceClock();
   const ids = domain.createDeterministicIdFactory("finding");
   const target = domain.parseTarget("Alex Kim, Example Labs");
-  let candidate = domain.createCandidate(
-    { displayName: "Alex Kim" },
-    target,
-    "candidate_alex",
-    clock.now(),
-  );
+  let candidate = domain.createCandidate({ displayName: "Alex Kim" }, target, "candidate_alex", clock.now());
   const context = { candidateIds: new Set([candidate.id]), existing: [], ids, clock };
   const supporting = domain.admitEvidence(
     {
@@ -280,7 +283,11 @@ test("findings expose counter-evidence and preserve candidate/evidence referenti
   );
   assert.deepEqual(finding.counterEvidenceIds, [counter.id]);
   assert.deepEqual(
-    domain.validateReferentialIntegrity({ candidates: [candidate], evidence: [supporting, counter], findings: [finding] }),
+    domain.validateReferentialIntegrity({
+      candidates: [candidate],
+      evidence: [supporting, counter],
+      findings: [finding],
+    }),
     [],
   );
 });
@@ -289,23 +296,13 @@ test("coverage never borrows evidence from a quarantined runner-up candidate", (
   const clock = domain.createSequenceClock();
   const ids = domain.createDeterministicIdFactory("coverage");
   const target = domain.parseTarget("Alex Kim, Example Labs");
-  const base = domain.createCandidate(
-    { displayName: "Alex Kim" },
-    target,
-    "selected",
-    clock.now(),
-  );
+  const base = domain.createCandidate({ displayName: "Alex Kim" }, target, "selected", clock.now());
   const selected = {
     ...base,
     status: "resolved",
     score: { ...base.score, total: 0.92 },
   };
-  const decoyBase = domain.createCandidate(
-    { displayName: "Alex Kim" },
-    target,
-    "decoy",
-    clock.now(),
-  );
+  const decoyBase = domain.createCandidate({ displayName: "Alex Kim" }, target, "decoy", clock.now());
   const decoy = {
     ...decoyBase,
     status: "plausible",
@@ -343,18 +340,8 @@ test("coverage never borrows evidence from a quarantined runner-up candidate", (
 test("identity resolution reports a quarantined same-name runner-up and its real margin", () => {
   const clock = domain.createSequenceClock();
   const target = domain.parseTarget("Alex Kim, Example Labs");
-  const selectedBase = domain.createCandidate(
-    { displayName: "Alex Kim" },
-    target,
-    "selected",
-    clock.now(),
-  );
-  const decoyBase = domain.createCandidate(
-    { displayName: "Alex Kim" },
-    target,
-    "decoy",
-    clock.now(),
-  );
+  const selectedBase = domain.createCandidate({ displayName: "Alex Kim" }, target, "selected", clock.now());
+  const decoyBase = domain.createCandidate({ displayName: "Alex Kim" }, target, "decoy", clock.now());
   const selected = {
     ...selectedBase,
     status: "resolved",
@@ -441,8 +428,14 @@ test("trace recorder is append-only, balanced, JSON-safe, and never persists cha
   });
   trace.assertBalanced();
   const events = trace.snapshot();
-  assert.equal(events.every((event) => event.schemaVersion === domain.SCHEMA_VERSION), true);
-  assert.deepEqual(events.map((event) => event.seq), [1, 2]);
+  assert.equal(
+    events.every((event) => event.schemaVersion === domain.SCHEMA_VERSION),
+    true,
+  );
+  assert.deepEqual(
+    events.map((event) => event.seq),
+    [1, 2],
+  );
   assert.ok(events[1].elapsedMs >= events[0].elapsedMs);
   assert.equal(events[0].spanId, span);
   assert.equal(events[0].parentSpanId, null);
@@ -493,10 +486,7 @@ test("tool bridge keeps CDX metadata discovery-only and admits quote-backed snap
     candidateId: "candidate_1",
     toolCallId: "action_1",
   };
-  const cdx = agent.toolEvidenceToDraft(
-    { ...shared, sourceType: "wayback_cdx_capture" },
-    context,
-  );
+  const cdx = agent.toolEvidenceToDraft({ ...shared, sourceType: "wayback_cdx_capture" }, context);
   const snapshot = agent.toolEvidenceToDraft(
     { ...shared, sourceType: "wayback_snapshot", excerpt: "Quote from the archived page." },
     context,

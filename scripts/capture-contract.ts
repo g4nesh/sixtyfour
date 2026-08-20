@@ -10,14 +10,12 @@ interface VerifiedCapture {
   requestFingerprint?: string;
 }
 
-export const VERIFIED_GITHUB_STRONGEST_SHA =
-  "3a0dd7ba4f44cdc116d83712f61e7c1a95be3588";
+export const VERIFIED_GITHUB_STRONGEST_SHA = "3a0dd7ba4f44cdc116d83712f61e7c1a95be3588";
 
 const VERIFIED_GITHUB_SEARCH_FINGERPRINT =
   "GET https://api.github.com/search/commits?q=repo%3Atorvalds%2Flinux+author-email%3Atorvalds%40linux-foundation.org+is%3Apublic&sort=committer-date&order=desc&per_page=3 accept:application/vnd.github+json";
 
-const VERIFIED_GITHUB_COMMIT_FINGERPRINT =
-  `GET https://api.github.com/repos/torvalds/linux/commits/${VERIFIED_GITHUB_STRONGEST_SHA} accept:application/vnd.github+json`;
+const VERIFIED_GITHUB_COMMIT_FINGERPRINT = `GET https://api.github.com/repos/torvalds/linux/commits/${VERIFIED_GITHUB_STRONGEST_SHA} accept:application/vnd.github+json`;
 
 /**
  * Manually verified public-response projections used by the deterministic
@@ -70,16 +68,11 @@ export const VERIFIED_PUBLIC_CAPTURES = {
   },
   "req-ted-selected": {
     bodySha256: "7649b3991c54edd2cae6a9f073d5fd6e25112b9100d9612de1ede665d0df124b",
-    directExcerpts: [
-      "Chris Anderson Chairman, TED",
-      "Chris Anderson became the curator of the TED Conference in 2002",
-    ],
+    directExcerpts: ["Chris Anderson Chairman, TED", "Chris Anderson became the curator of the TED Conference in 2002"],
   },
   "req-ted-decoy": {
     bodySha256: "75ee0b44d5acb892a647f0093d5d8ba7605f6b139cb4bf3b0d78868dd30668a1",
-    directExcerpts: [
-      "(He is not, however, to be confused with the curator of TED, who has the same name.)",
-    ],
+    directExcerpts: ["(He is not, however, to be confused with the curator of TED, who has the same name.)"],
   },
   "req-wired-decoy": {
     bodySha256: "bfae98bbe1b74d6963875a80ed9f394d12a5a8506f8ccfadf4c3235dd503c063",
@@ -99,10 +92,7 @@ export const VERIFIED_PUBLIC_CAPTURES = {
 
 export type VerifiedRequestId = keyof typeof VERIFIED_PUBLIC_CAPTURES;
 
-type DirectDraft = Omit<
-  EvidenceDraft,
-  "claim" | "excerpt" | "contentHash" | "toolCallId" | "verificationMethod"
->;
+type DirectDraft = Omit<EvidenceDraft, "claim" | "excerpt" | "contentHash" | "toolCallId" | "verificationMethod">;
 
 export function verifiedDirectEvidence(
   requestId: VerifiedRequestId,
@@ -129,11 +119,7 @@ type ApiDraft = Omit<
   "claim" | "excerpt" | "canonicalSubset" | "contentHash" | "toolCallId" | "verificationMethod"
 >;
 
-export function verifiedApiEvidence(
-  requestId: VerifiedRequestId,
-  actionId: string,
-  draft: ApiDraft,
-): EvidenceDraft {
+export function verifiedApiEvidence(requestId: VerifiedRequestId, actionId: string, draft: ApiDraft): EvidenceDraft {
   const capture = VERIFIED_PUBLIC_CAPTURES[requestId];
   if (!("apiClaim" in capture) || !capture.apiClaim || !("canonicalSubset" in capture)) {
     throw new Error(`capture ${requestId} has no canonical API projection`);
@@ -157,11 +143,7 @@ export function applyVerifiedCaptureMetadata(cassette: JsonObject): void {
     }
     const requestId = request.id;
     const captureId = request.captureId ?? requestId;
-    if (
-      typeof requestId !== "string"
-      || typeof captureId !== "string"
-      || !(captureId in VERIFIED_PUBLIC_CAPTURES)
-    ) {
+    if (typeof requestId !== "string" || typeof captureId !== "string" || !(captureId in VERIFIED_PUBLIC_CAPTURES)) {
       throw new Error(`cassette request ${String(requestId)} has no verified capture`);
     }
     const response = request.response;
@@ -192,10 +174,8 @@ export function assertVerifiedEvidenceContract(
 ): void {
   for (const record of evidence) {
     const captureId = record.toolCallId
-      ? actionCaptureIds[record.toolCallId]
-        ?? (record.toolCallId in VERIFIED_PUBLIC_CAPTURES
-          ? record.toolCallId as VerifiedRequestId
-          : undefined)
+      ? (actionCaptureIds[record.toolCallId] ??
+        (record.toolCallId in VERIFIED_PUBLIC_CAPTURES ? (record.toolCallId as VerifiedRequestId) : undefined))
       : undefined;
     if (!captureId) {
       throw new Error(`evidence ${record.id} has no verified capture request`);
@@ -207,9 +187,9 @@ export function assertVerifiedEvidenceContract(
     if (record.verificationMethod === "direct_fetch") {
       const excerpts = "directExcerpts" in capture ? capture.directExcerpts : undefined;
       if (
-        !record.excerpt
-        || !excerpts?.some((excerpt) => excerpt === record.excerpt)
-        || record.claim !== record.excerpt
+        !record.excerpt ||
+        !excerpts?.some((excerpt) => excerpt === record.excerpt) ||
+        record.claim !== record.excerpt
       ) {
         throw new Error(`evidence ${record.id} is not an exact verified source excerpt`);
       }
@@ -217,11 +197,11 @@ export function assertVerifiedEvidenceContract(
     }
     if (record.verificationMethod === "api_response") {
       if (
-        !("apiClaim" in capture)
-        || record.excerpt !== null
-        || record.claim !== capture.apiClaim
-        || !("canonicalSubset" in capture)
-        || !sameJson(record.canonicalSubset, capture.canonicalSubset)
+        !("apiClaim" in capture) ||
+        record.excerpt !== null ||
+        record.claim !== capture.apiClaim ||
+        !("canonicalSubset" in capture) ||
+        !sameJson(record.canonicalSubset, capture.canonicalSubset)
       ) {
         throw new Error(`evidence ${record.id} is not the verified canonical API projection`);
       }

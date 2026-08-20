@@ -22,8 +22,9 @@ Usage:
   npm run atlas -- research [--mode replay|live] [--example <id>] [--depth quick|standard|deep] [--ndjson] <query>
 
 Replay is the default and performs zero network requests. Live mode requires
-OPENROUTER_API_KEY in the server process environment. Ctrl-C propagates
-cancellation to the same engine used by the HTTP API.
+a configured provider key (OPENAI_API_KEY, GEMINI_API_KEY, or
+OPENROUTER_API_KEY) in the process environment. Ctrl-C propagates cancellation
+to the same engine used by the HTTP API.
 `;
 
 function parseArguments(arguments_: string[]): ParsedArguments {
@@ -97,10 +98,7 @@ async function writeStdout(value: string): Promise<void> {
   if (value && !process.stdout.write(value)) await once(process.stdout, "drain");
 }
 
-async function consumeTraceStream(
-  response: Response,
-  mirrorNdjson: boolean,
-): Promise<Record<string, unknown> | null> {
+async function consumeTraceStream(response: Response, mirrorNdjson: boolean): Promise<Record<string, unknown> | null> {
   if (!response.body) throw new Error("Research response did not include a trace stream.");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -109,7 +107,7 @@ async function consumeTraceStream(
 
   const consumeLines = (flush: boolean) => {
     const lines = buffer.split("\n");
-    buffer = flush ? "" : lines.pop() ?? "";
+    buffer = flush ? "" : (lines.pop() ?? "");
     for (const line of lines) {
       if (!line.trim()) continue;
       events.push(JSON.parse(line) as TraceEvent);
@@ -155,6 +153,14 @@ async function research(arguments_: ParsedArguments): Promise<number> {
         // An explicit CLI `--mode live` is the local operator opt-in. Public
         // HTTP ingress remains disabled unless its server binding is enabled.
         ATLAS_LIVE_ENABLED: arguments_.mode === "live" ? "true" : undefined,
+        ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+        LIVE_PROVIDER: process.env.LIVE_PROVIDER,
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+        OPENAI_MODEL: process.env.OPENAI_MODEL,
+        OPENAI_SEARCH_MODEL: process.env.OPENAI_SEARCH_MODEL,
+        OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+        GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+        GEMINI_MODEL: process.env.GEMINI_MODEL,
         OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
         OPENROUTER_MODEL: process.env.OPENROUTER_MODEL,
         OPENROUTER_SITE_URL: process.env.OPENROUTER_SITE_URL,

@@ -26,16 +26,10 @@ function browserHeavySsrStubs(): Plugin {
     applyToEnvironment: (environment) => environment.name === "ssr",
     resolveId(source, importer) {
       const normalizedImporter = importer?.replaceAll("\\", "/").split("?", 1)[0];
-      if (
-        source === "./graph-canvas"
-        && normalizedImporter?.endsWith("/app/components/graph-workspace.tsx")
-      ) {
+      if (source === "./graph-canvas" && normalizedImporter?.endsWith("/app/components/graph-workspace.tsx")) {
         return graphCanvasStub;
       }
-      if (
-        source === "./report/downloads.client"
-        && normalizedImporter?.endsWith("/app/workbench.tsx")
-      ) {
+      if (source === "./report/downloads.client" && normalizedImporter?.endsWith("/app/workbench.tsx")) {
         return reportDownloadsStub;
       }
       return null;
@@ -67,9 +61,7 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : undefined,
     plugins: [
       vinext(),
       browserHeavySsrStubs(),

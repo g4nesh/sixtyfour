@@ -49,11 +49,13 @@ export interface Candidate {
   headline?: string;
   affiliation?: string;
   confidenceBand?: string;
-  score?: number | {
-    total?: number;
-    matchedSignals?: string[];
-    conflictingSignals?: string[];
-  };
+  score?:
+    | number
+    | {
+        total?: number;
+        matchedSignals?: string[];
+        conflictingSignals?: string[];
+      };
   selected?: boolean;
   status?: string;
   conflicts?: string[];
@@ -186,13 +188,7 @@ export interface ExamplePayload {
   manifest?: { capturedAt?: string; title?: string; description?: string };
 }
 
-export type RunStatus =
-  | "idle"
-  | "loading"
-  | "running"
-  | "complete"
-  | "error"
-  | "canceled";
+export type RunStatus = "idle" | "loading" | "running" | "complete" | "error" | "canceled";
 
 export function eventType(event: TraceEvent): string {
   return event.name ?? event.type ?? event.eventType ?? "event";
@@ -212,8 +208,9 @@ export function reportQuery(report: Report | null): string {
 export function reportCandidates(report: Report | null): Candidate[] {
   const candidates = report?.identity?.candidates ?? report?.candidates;
   if (candidates?.length) return candidates;
-  return [report?.identity?.selectedCandidate, report?.identity?.runnerUpCandidate]
-    .filter((candidate): candidate is Candidate => Boolean(candidate));
+  return [report?.identity?.selectedCandidate, report?.identity?.runnerUpCandidate].filter(
+    (candidate): candidate is Candidate => Boolean(candidate),
+  );
 }
 
 export function candidateName(candidate: Candidate): string {
@@ -228,10 +225,12 @@ export function selectedCandidate(report: Report | null): Candidate | null {
   if (!report) return null;
   const candidates = reportCandidates(report);
   const selectedId = report.identity?.selectedCandidateId ?? report.selectedCandidateId;
-  return candidates.find((candidate) => (candidate.id ?? candidate.candidateId) === selectedId)
-    ?? report.identity?.selectedCandidate
-    ?? candidates.find((candidate) => candidate.selected)
-    ?? null;
+  return (
+    candidates.find((candidate) => (candidate.id ?? candidate.candidateId) === selectedId) ??
+    report.identity?.selectedCandidate ??
+    candidates.find((candidate) => candidate.selected) ??
+    null
+  );
 }
 
 export function limitationText(limitation: string | { code?: string; message?: string }): string {
@@ -254,10 +253,11 @@ export function formatDuration(milliseconds: number | null | undefined): string 
 }
 
 export function totalUsageTokens(usage: TraceUsage | null | undefined): number | null {
-  return usage?.totalTokens ?? (
-    typeof usage?.inputTokens === "number" && typeof usage.outputTokens === "number"
+  return (
+    usage?.totalTokens ??
+    (typeof usage?.inputTokens === "number" && typeof usage.outputTokens === "number"
       ? usage.inputTokens + usage.outputTokens
-      : null
+      : null)
   );
 }
 

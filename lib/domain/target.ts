@@ -16,7 +16,8 @@ const REPOSITORY_PATTERN = /\b(?:repo(?:sitory)?|github)\s*[:=]?\s*([A-Z0-9_.-]+
 const PACKAGE_PATTERN = /\b(?:npm|pypi|package)\s*[:=]\s*(@?[A-Z0-9_.-]+(?:\/[A-Z0-9_.-]+)?)\b/gi;
 const PLATFORM_HANDLE_PATTERN = /\b(github|gitlab|keybase|linkedin|twitter|x)\s*[:=]\s*@?([A-Z0-9_.-]{2,64})\b/gi;
 const DOMAIN_PATTERN = /\b(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,63}\b/gi;
-const ORGANIZATION_MARKER = /\b(?:ai|labs?|inc\.?|llc|ltd\.?|corp(?:oration)?|company|foundation|university|institute|studio|systems?|technologies|ventures?)\b/i;
+const ORGANIZATION_MARKER =
+  /\b(?:ai|labs?|inc\.?|llc|ltd\.?|corp(?:oration)?|company|foundation|university|institute|studio|systems?|technologies|ventures?)\b/i;
 
 const ROLE_PATTERNS: Array<{ canonical: string; pattern: RegExp }> = [
   { canonical: "Chief Technology Officer", pattern: /\b(?:cto|chief technology officer)\b/i },
@@ -31,7 +32,8 @@ const ROLE_PATTERNS: Array<{ canonical: string; pattern: RegExp }> = [
   { canonical: "Investor", pattern: /\b(?:investor|partner)\b/i },
 ];
 
-const LEADING_REQUEST_PATTERN = /^(?:(?:please\s+)?(?:do\s+)?(?:deep\s+)?research(?:\s+on)?|investigate|look\s+up|find)\s+/i;
+const LEADING_REQUEST_PATTERN =
+  /^(?:(?:please\s+)?(?:do\s+)?(?:deep\s+)?research(?:\s+on)?|investigate|look\s+up|find)\s+/i;
 const TRAILING_SCOPE_PATTERN =
   /\s+(?:public\s+professional\s+(?:background|profile|research)|professional\s+(?:background|profile|research)|public\s+(?:background|profile))\s*$/i;
 
@@ -102,9 +104,7 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
   const input = parseInvestigationInput(inputValue);
   const rawInput = input.query;
   const normalizedQuery = normalizeWhitespace(rawInput);
-  const query = normalizedQuery
-    .replace(LEADING_REQUEST_PATTERN, "")
-    .replace(TRAILING_SCOPE_PATTERN, "");
+  const query = normalizedQuery.replace(LEADING_REQUEST_PATTERN, "").replace(TRAILING_SCOPE_PATTERN, "");
   const emails = [...query.matchAll(EMAIL_PATTERN)].map((match) => match[0]);
   const identifiers: TargetIdentifier[] = [];
   const seenIdentifiers = new Set<string>();
@@ -114,8 +114,7 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
     addIdentifier(identifiers, seenIdentifiers, email, "email", normalizedValue);
   }
 
-  const urls = [...query.matchAll(HTTPS_URL_PATTERN)].map((match) =>
-    match[0].replace(/[),.;!?]+$/, ""));
+  const urls = [...query.matchAll(HTTPS_URL_PATTERN)].map((match) => match[0].replace(/[),.;!?]+$/, ""));
   for (const value of urls) {
     try {
       const url = new URL(value);
@@ -170,14 +169,16 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
     }
   }
 
-  const withoutEmails = normalizeWhitespace(query
-    .replace(EMAIL_PATTERN, " ")
-    .replace(HTTPS_URL_PATTERN, " ")
-    .replace(DOI_PATTERN, " ")
-    .replace(ORCID_PATTERN, " ")
-    .replace(REPOSITORY_PATTERN, " ")
-    .replace(PACKAGE_PATTERN, " ")
-    .replace(PLATFORM_HANDLE_PATTERN, " "));
+  const withoutEmails = normalizeWhitespace(
+    query
+      .replace(EMAIL_PATTERN, " ")
+      .replace(HTTPS_URL_PATTERN, " ")
+      .replace(DOI_PATTERN, " ")
+      .replace(ORCID_PATTERN, " ")
+      .replace(REPOSITORY_PATTERN, " ")
+      .replace(PACKAGE_PATTERN, " ")
+      .replace(PLATFORM_HANDLE_PATTERN, " "),
+  );
   const exactDomainText = normalizeWhitespace(withoutEmails);
   if (exactDomainText && DOMAIN_PATTERN.test(exactDomainText)) {
     DOMAIN_PATTERN.lastIndex = 0;
@@ -193,10 +194,7 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
     }
   }
   DOMAIN_PATTERN.lastIndex = 0;
-  const commaParts = withoutEmails
-    .split(",")
-    .map(normalizeWhitespace)
-    .filter(Boolean);
+  const commaParts = withoutEmails.split(",").map(normalizeWhitespace).filter(Boolean);
   const roleHints: string[] = [];
   const organizationHints: OrganizationHint[] = [];
   const locationHints: string[] = [];

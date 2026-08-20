@@ -34,15 +34,11 @@ function seededGraph(query = "Ada Lovelace, Analytical Engine", tools = ["search
 }
 
 test("frontier uses immutable positive Dijkstra costs and deterministic total ordering", () => {
-  const { graph } = seededGraph(
-    "Ada Lovelace, Analytical Engine",
-    ["search_web", "fetch_public_source"],
-  );
+  const { graph } = seededGraph("Ada Lovelace, Analytical Engine", ["search_web", "fetch_public_source"]);
   assert.ok(graph.frontier.length >= 2);
   assert.ok(graph.frontier.every((entry) => entry.edgeCost > 0 && entry.pathCost > 0));
   assert.ok(graph.frontier.every((entry) => entry.pathCost === entry.edgeCost));
-  assert.ok(graph.frontier.every((entry) =>
-    entry.id === entry.frontierEntryId && entry.id === entry.actionId));
+  assert.ok(graph.frontier.every((entry) => entry.id === entry.frontierEntryId && entry.id === entry.actionId));
   assert.deepEqual(search.validateSearchGraph(graph), []);
 
   const ordered = [...graph.frontier].sort(search.compareFrontierEntries);
@@ -57,13 +53,7 @@ test("InvestigationEngine rejects removal or mutation of admitted frontier costs
   const ids = domain.createDeterministicIdFactory("immutable-frontier");
   const engine = new agent.InvestigationEngine("Ada Lovelace", { clock, ids });
   const state = engine.snapshot();
-  const seeded = search.seedFrontier(
-    state.searchGraph,
-    state.target,
-    ["search_web"],
-    ids,
-    clock.now(),
-  );
+  const seeded = search.seedFrontier(state.searchGraph, state.target, ["search_web"], ids, clock.now());
   engine.replaceSearchGraph(seeded.graph);
 
   const tampered = structuredClone(seeded.graph);
@@ -106,30 +96,29 @@ test("frontier batches stay on the minimum executable tier until lower tiers exh
     "2026-08-19T17:00:01.500Z",
   );
   for (const entry of first.value) {
-    exhaustedLower = search.recordFrontierOutcome(
-      exhaustedLower,
-      entry,
-      "exhausted",
-      "2026-08-19T17:00:02.000Z",
-    ).graph;
+    exhaustedLower = search.recordFrontierOutcome(exhaustedLower, entry, "exhausted", "2026-08-19T17:00:02.000Z").graph;
   }
   const second = search.selectFrontierBatch(exhaustedLower, 8, "2026-08-19T17:00:03.000Z");
   assert.ok(second.value.length > 0);
   assert.deepEqual([...new Set(second.value.map((entry) => entry.sourceTier))], [6]);
-  assert.ok(second.events.some((event) =>
-    event.name === "source.tier_advanced" && event.payload.sourceTier === 6));
+  assert.ok(second.events.some((event) => event.name === "source.tier_advanced" && event.payload.sourceTier === 6));
 });
 
 test("frontier dedupes dominated pivots and validates registered and canonical generic lanes", () => {
   const { graph, target, ids } = seededGraph("Ada Lovelace", ["search_web"]);
   const original = graph.frontier[0];
   const lane = search.sourceLaneById(original.sourceLaneId);
-  const duplicate = search.enqueueFrontier(graph, {
-    lane,
-    target,
-    parentNodeId: graph.seedNodeId,
-    queryHint: original.queryHint,
-  }, ids, "2026-08-19T17:00:04.000Z");
+  const duplicate = search.enqueueFrontier(
+    graph,
+    {
+      lane,
+      target,
+      parentNodeId: graph.seedNodeId,
+      queryHint: original.queryHint,
+    },
+    ids,
+    "2026-08-19T17:00:04.000Z",
+  );
   assert.equal(duplicate.value, null);
   assert.ok(duplicate.events.some((event) => event.name === "frontier.pruned"));
   assert.equal(duplicate.graph.frontier.length, graph.frontier.length);
@@ -147,53 +136,92 @@ test("frontier dedupes dominated pivots and validates registered and canonical g
   assert.match(genericGraph.frontier[0].sourceLaneId, /^t6\.tool\./);
 
   for (const mutate of [
-    (entry) => { entry.sourceLaneId = "t6.tool.forged_registry"; },
-    (entry) => { entry.sourceTier = 1; },
-    (entry) => { entry.allowedTools = ["professional_registry_search", "search_web"]; },
-    (entry) => { entry.candidateId = "candidate_forged"; },
+    (entry) => {
+      entry.sourceLaneId = "t6.tool.forged_registry";
+    },
+    (entry) => {
+      entry.sourceTier = 1;
+    },
+    (entry) => {
+      entry.allowedTools = ["professional_registry_search", "search_web"];
+    },
+    (entry) => {
+      entry.candidateId = "candidate_forged";
+    },
   ]) {
     const forgedGeneric = structuredClone(genericGraph);
     mutate(forgedGeneric.frontier[0]);
-    assert.ok(
-      search.validateSearchGraph(forgedGeneric).some((issue) => issue.code === "illegal_source_lane"),
-    );
+    assert.ok(search.validateSearchGraph(forgedGeneric).some((issue) => issue.code === "illegal_source_lane"));
   }
 });
 
 test("search graph validation rejects malformed shape and forged pivot, parent, edge, and candidate joins", () => {
-  const { graph, target, ids } = seededGraph(
-    "Alex Kim, Example Labs",
-    ["search_web", "fetch_public_source"],
-  );
+  const { graph, target, ids } = seededGraph("Alex Kim, Example Labs", ["search_web", "fetch_public_source"]);
   for (const [mutate, expectedCode] of [
-    [(value) => { delete value.telemetry.toolCalls; }, "invalid_graph_shape"],
-    [(value) => { value.runId = ""; }, "invalid_graph_shape"],
-    [(value) => { value.seed = ""; }, "invalid_graph_seed"],
-    [(value) => { value.frontier[0].nodeId = value.seedNodeId; }, "frontier_pivot_mismatch"],
-    [(value) => { value.frontier[0].parentFrontierEntryId = "ghost_action"; }, "missing_parent_frontier"],
-    [(value) => {
-      value.edges = value.edges.filter((edge) => edge.frontierEntryId !== value.frontier[0].id);
-    }, "frontier_expansion_edge_mismatch"],
+    [
+      (value) => {
+        delete value.telemetry.toolCalls;
+      },
+      "invalid_graph_shape",
+    ],
+    [
+      (value) => {
+        value.runId = "";
+      },
+      "invalid_graph_shape",
+    ],
+    [
+      (value) => {
+        value.seed = "";
+      },
+      "invalid_graph_seed",
+    ],
+    [
+      (value) => {
+        value.frontier[0].nodeId = value.seedNodeId;
+      },
+      "frontier_pivot_mismatch",
+    ],
+    [
+      (value) => {
+        value.frontier[0].parentFrontierEntryId = "ghost_action";
+      },
+      "missing_parent_frontier",
+    ],
+    [
+      (value) => {
+        value.edges = value.edges.filter((edge) => edge.frontierEntryId !== value.frontier[0].id);
+      },
+      "frontier_expansion_edge_mismatch",
+    ],
   ]) {
     const forged = structuredClone(graph);
     mutate(forged);
     const issues = search.validateSearchGraph(forged);
-    assert.ok(issues.some((issue) => issue.code === expectedCode), JSON.stringify(issues));
+    assert.ok(
+      issues.some((issue) => issue.code === expectedCode),
+      JSON.stringify(issues),
+    );
     assert.throws(() => search.assertSearchGraph(forged), /search graph invariant failed/);
   }
 
   const parent = graph.frontier.find((entry) => entry.sourceLaneId === "t1.first_party");
-  const candidateNode = search.admitGraphNode(graph, {
-    kind: "candidate",
-    label: "Alex Kim",
-    status: "verified",
-    sourceTier: parent.sourceTier,
-    sourceLaneId: parent.sourceLaneId,
-    frontierEntryId: parent.id,
-    actionId: parent.id,
-    candidateId: "candidate_a",
-    data: {},
-  }, ids, "2026-08-19T17:00:05.000Z");
+  const candidateNode = search.admitGraphNode(
+    graph,
+    {
+      kind: "candidate",
+      label: "Alex Kim",
+      status: "verified",
+      sourceTier: parent.sourceTier,
+      sourceLaneId: parent.sourceLaneId,
+      frontierEntryId: parent.id,
+      actionId: parent.id,
+      candidateId: "candidate_a",
+      data: {},
+    },
+    ids,
+    "2026-08-19T17:00:05.000Z",
+  );
   const candidateFrontier = search.enqueueCandidateFrontier(
     candidateNode.graph,
     target,
@@ -205,39 +233,46 @@ test("search graph validation rejects malformed shape and forged pivot, parent, 
     "2026-08-19T17:00:06.000Z",
   );
   const candidateEntry = candidateFrontier.value[0];
-  const actionNode = search.admitGraphNode(candidateFrontier.graph, {
-    kind: "action",
-    label: "fetch_public_source",
-    status: candidateEntry.status,
-    sourceTier: candidateEntry.sourceTier,
-    sourceLaneId: candidateEntry.sourceLaneId,
-    frontierEntryId: candidateEntry.id,
-    actionId: candidateEntry.id,
-    candidateId: "candidate_a",
-    data: { tool: "fetch_public_source" },
-  }, ids, "2026-08-19T17:00:07.000Z");
-  const foreignEvidence = search.admitGraphNode(actionNode.graph, {
-    kind: "evidence",
-    label: "Foreign candidate evidence",
-    status: candidateEntry.status,
-    sourceTier: candidateEntry.sourceTier,
-    sourceLaneId: candidateEntry.sourceLaneId,
-    frontierEntryId: candidateEntry.id,
-    actionId: candidateEntry.id,
-    candidateId: "candidate_b",
-    evidenceId: "evidence_b",
-    data: {},
-  }, ids, "2026-08-19T17:00:08.000Z");
+  const actionNode = search.admitGraphNode(
+    candidateFrontier.graph,
+    {
+      kind: "action",
+      label: "fetch_public_source",
+      status: candidateEntry.status,
+      sourceTier: candidateEntry.sourceTier,
+      sourceLaneId: candidateEntry.sourceLaneId,
+      frontierEntryId: candidateEntry.id,
+      actionId: candidateEntry.id,
+      candidateId: "candidate_a",
+      data: { tool: "fetch_public_source" },
+    },
+    ids,
+    "2026-08-19T17:00:07.000Z",
+  );
+  const foreignEvidence = search.admitGraphNode(
+    actionNode.graph,
+    {
+      kind: "evidence",
+      label: "Foreign candidate evidence",
+      status: candidateEntry.status,
+      sourceTier: candidateEntry.sourceTier,
+      sourceLaneId: candidateEntry.sourceLaneId,
+      frontierEntryId: candidateEntry.id,
+      actionId: candidateEntry.id,
+      candidateId: "candidate_b",
+      evidenceId: "evidence_b",
+      data: {},
+    },
+    ids,
+    "2026-08-19T17:00:08.000Z",
+  );
   const candidateIssues = search.validateSearchGraph(foreignEvidence.graph);
   assert.ok(candidateIssues.some((issue) => issue.code === "node_candidate_scope_mismatch"));
   assert.ok(candidateIssues.some((issue) => issue.code === "action_evidence_candidate_mismatch"));
 });
 
 test("source hierarchy is tiered and denies people-search, phonebook, property, tax, family, and credential surfaces", () => {
-  assert.deepEqual(
-    [...new Set(search.SOURCE_HIERARCHY.map((lane) => lane.tier))],
-    [0, 1, 2, 3, 4, 5, 6],
-  );
+  assert.deepEqual([...new Set(search.SOURCE_HIERARCHY.map((lane) => lane.tier))], [0, 1, 2, 3, 4, 5, 6]);
   for (const source of [
     "https://whitepages.com/person/example",
     "https://usphonebook.com/example",
@@ -247,39 +282,34 @@ test("source hierarchy is tiered and denies people-search, phonebook, property, 
     "https://example.org/%2570roperty-%2574ax-%2561ssessor",
     "https://example.org/%2566amily-%256dember-map",
     "https://example.org/%2563redential-%2564ump",
-  ]) assert.equal(search.isDeniedResearchSource(source), true, source);
+  ])
+    assert.equal(search.isDeniedResearchSource(source), true, source);
   assert.equal(search.isDeniedResearchSource("https://www.sec.gov/edgar/search/"), false);
   assert.equal(search.sourceTierForUrl("https://www.sec.gov/edgar/search/", "public_document"), 2);
   assert.equal(search.sourceTierForUrl("https://whitepages.com/person/example"), null);
   const encodedDenied = "https://example.org/%2570roperty-%2574ax-%2561ssessor";
   assert.equal(domain.classifySafety(encodedDenied).level, "block");
-  assert.deepEqual(
-    search.sourceLanesForTarget(domain.parseTarget(encodedDenied), ["fetch_public_source"]),
-    [],
+  assert.deepEqual(search.sourceLanesForTarget(domain.parseTarget(encodedDenied), ["fetch_public_source"]), []);
+  assert.equal(
+    agent.isActionPolicyCompliant(
+      {
+        tool: "search_web",
+        purpose: "Research a public professional source",
+        arguments: { query: encodedDenied },
+      },
+      ["search_web"],
+    ).allowed,
+    false,
   );
-  assert.equal(agent.isActionPolicyCompliant({
-    tool: "search_web",
-    purpose: "Research a public professional source",
-    arguments: { query: encodedDenied },
-  }, ["search_web"]).allowed, false);
   const exactDomain = domain.parseTarget("example.org");
-  assert.equal(
-    search.sourceLanesForTarget(exactDomain, ["search_web"])[0].id,
-    "t0.explicit_identifier",
-  );
+  assert.equal(search.sourceLanesForTarget(exactDomain, ["search_web"])[0].id, "t0.explicit_identifier");
   const exactUrl = domain.parseTarget("https://example.org/public-profile");
-  assert.equal(
-    search.sourceLanesForTarget(exactUrl, ["fetch_public_source"])[0].id,
-    "t0.explicit_url",
-  );
+  assert.equal(search.sourceLanesForTarget(exactUrl, ["fetch_public_source"])[0].id, "t0.explicit_url");
   assert.equal(
     live.exactUserSuppliedUrl({ target: exactUrl }, "https://example.org/public-profile"),
     "https://example.org/public-profile",
   );
-  assert.equal(
-    live.exactUserSuppliedUrl({ target: exactUrl }, "https://example.org/other-profile"),
-    null,
-  );
+  assert.equal(live.exactUserSuppliedUrl({ target: exactUrl }, "https://example.org/other-profile"), null);
 });
 
 test("denied generic research tools never seed a lane or reach an adapter", async () => {
@@ -295,11 +325,18 @@ test("denied generic research tools never seed a lane or reach an adapter", asyn
   for (const tool of deniedTools) {
     assert.equal(search.isDeniedResearchTool(tool), true, tool);
     assert.deepEqual(search.sourceLanesForTarget(target, [tool]), [], tool);
-    assert.equal(agent.isActionPolicyCompliant({
+    assert.equal(
+      agent.isActionPolicyCompliant(
+        {
+          tool,
+          purpose: "Look up a public professional profile.",
+          arguments: { query: target.normalizedQuery },
+        },
+        [tool],
+      ).allowed,
+      false,
       tool,
-      purpose: "Look up a public professional profile.",
-      arguments: { query: target.normalizedQuery },
-    }, [tool]).allowed, false, tool);
+    );
 
     let plannerCalls = 0;
     let adapterCalls = 0;
@@ -319,7 +356,8 @@ test("denied generic research tools never seed a lane or reach an adapter", asyn
         },
       },
       { availableTools: [tool] },
-    )) updates.push(update);
+    ))
+      updates.push(update);
     assert.equal(plannerCalls, 0, tool);
     assert.equal(adapterCalls, 0, tool);
     assert.equal(updates.at(-1).report.stop.reason, "no_legal_actions", tool);
@@ -329,11 +367,17 @@ test("denied generic research tools never seed a lane or reach an adapter", asyn
   const legitimateTool = "professional_registry_search";
   assert.equal(search.isDeniedResearchTool(legitimateTool), false);
   assert.equal(search.sourceLanesForTarget(target, [legitimateTool]).length, 1);
-  assert.equal(agent.isActionPolicyCompliant({
-    tool: legitimateTool,
-    purpose: "Search a public professional registry.",
-    arguments: { query: target.normalizedQuery },
-  }, [legitimateTool]).allowed, true);
+  assert.equal(
+    agent.isActionPolicyCompliant(
+      {
+        tool: legitimateTool,
+        purpose: "Search a public professional registry.",
+        arguments: { query: target.normalizedQuery },
+      },
+      [legitimateTool],
+    ).allowed,
+    true,
+  );
 
   let legitimateAdapterCalls = 0;
   const legitimateUpdates = [];
@@ -345,12 +389,14 @@ test("denied generic research tools never seed a lane or reach an adapter", asyn
       planner: async ({ selectedFrontierEntries }) => ({
         kind: "actions",
         decisionSummary: "Use the selected professional registry lane.",
-        actions: [{
-          frontierEntryId: selectedFrontierEntries[0].id,
-          tool: legitimateTool,
-          purpose: "Search a public professional registry.",
-          arguments: { query: selectedFrontierEntries[0].queryHint },
-        }],
+        actions: [
+          {
+            frontierEntryId: selectedFrontierEntries[0].id,
+            tool: legitimateTool,
+            purpose: "Search a public professional registry.",
+            arguments: { query: selectedFrontierEntries[0].queryHint },
+          },
+        ],
       }),
       executeAction: async () => {
         legitimateAdapterCalls += 1;
@@ -358,7 +404,8 @@ test("denied generic research tools never seed a lane or reach an adapter", asyn
       },
     },
     { availableTools: [legitimateTool], budget: { maxTurns: 1 } },
-  )) legitimateUpdates.push(update);
+  ))
+    legitimateUpdates.push(update);
   assert.equal(legitimateAdapterCalls, 1);
   assert.equal(legitimateUpdates.at(-1).report.usage.toolCalls, 1);
 
@@ -372,34 +419,41 @@ test("denied generic research tools never seed a lane or reach an adapter", asyn
       planner: async ({ selectedFrontierEntries }) => ({
         kind: "actions",
         decisionSummary: "Attempt supporting evidence through an unregistered generic lane.",
-        actions: [{
-          frontierEntryId: selectedFrontierEntries[0].id,
-          tool: genericTool,
-          purpose: "Query a public professional registry.",
-          arguments: { query: selectedFrontierEntries[0].queryHint },
-        }],
+        actions: [
+          {
+            frontierEntryId: selectedFrontierEntries[0].id,
+            tool: genericTool,
+            purpose: "Query a public professional registry.",
+            arguments: { query: selectedFrontierEntries[0].queryHint },
+          },
+        ],
       }),
       executeAction: async () => ({
         status: "succeeded",
         candidates: [{ ref: "alex", displayName: "Alex Kim" }],
-        evidence: [{
-          candidateRef: "alex",
-          claim: "Alex Kim appears in a professional registry.",
-          excerpt: "Alex Kim appears in a professional registry.",
-          sourceUrl: "https://registry.example/alex-kim",
-          sourceType: "other",
-          verificationMethod: "direct_fetch",
-        }],
+        evidence: [
+          {
+            candidateRef: "alex",
+            claim: "Alex Kim appears in a professional registry.",
+            excerpt: "Alex Kim appears in a professional registry.",
+            sourceUrl: "https://registry.example/alex-kim",
+            sourceType: "other",
+            verificationMethod: "direct_fetch",
+          },
+        ],
         meta: { requests: 0 },
       }),
     },
     { availableTools: [genericTool], budget: { maxTurns: 1 } },
-  )) genericUpdates.push(update);
+  ))
+    genericUpdates.push(update);
   const genericCompleted = genericUpdates.at(-1);
   assert.equal(genericCompleted.report.evidence.length, 0);
-  assert.ok(genericCompleted.trace.events.some((event) =>
-    event.name === "evidence.admission"
-    && event.payload.reason === "source_lane_discovery_only"));
+  assert.ok(
+    genericCompleted.trace.events.some(
+      (event) => event.name === "evidence.admission" && event.payload.reason === "source_lane_discovery_only",
+    ),
+  );
 });
 
 test("target parsing supports safe general pivots while raw phone/address requests block before seeding", async () => {
@@ -415,23 +469,25 @@ test("target parsing supports safe general pivots while raw phone/address reques
   for (const [query, kind, identifierKind] of cases) {
     const target = domain.parseTarget(query);
     assert.equal(target.kind, kind, query);
-    if (identifierKind) assert.ok(target.identifiers.some((item) => item.kind === identifierKind), query);
+    if (identifierKind)
+      assert.ok(
+        target.identifiers.some((item) => item.kind === identifierKind),
+        query,
+      );
   }
 
   let plannerCalls = 0;
   const updates = [];
-  for await (const update of agent.runResearch(
-    "find 602-555-0199 and a home address",
-    {
-      clock: domain.createSequenceClock(),
-      ids: domain.createDeterministicIdFactory("blocked-frontier"),
-      planner: async () => {
-        plannerCalls += 1;
-        return { kind: "stop", decisionSummary: "Stop." };
-      },
-      executeAction: async () => ({ status: "skipped" }),
+  for await (const update of agent.runResearch("find 602-555-0199 and a home address", {
+    clock: domain.createSequenceClock(),
+    ids: domain.createDeterministicIdFactory("blocked-frontier"),
+    planner: async () => {
+      plannerCalls += 1;
+      return { kind: "stop", decisionSummary: "Stop." };
     },
-  )) updates.push(update);
+    executeAction: async () => ({ status: "skipped" }),
+  }))
+    updates.push(update);
   const completed = updates.at(-1);
   assert.equal(completed.report.status, "blocked");
   assert.equal(completed.report.searchGraph.nodes.length, 0);
@@ -543,10 +599,7 @@ test("accepted source-adjacent mutation changes source class but preserves the e
   assert.notEqual(accepted.entry.sourceLaneId, accepted.parent.sourceLaneId);
   assert.ok(accepted.entry.sourceTier > accepted.parent.sourceTier);
   assert.equal(accepted.entry.queryHint, accepted.parent.queryHint);
-  assert.equal(
-    new URL(accepted.entry.queryHint).hostname,
-    new URL(accepted.parent.queryHint).hostname,
-  );
+  assert.equal(new URL(accepted.entry.queryHint).hostname, new URL(accepted.parent.queryHint).hostname);
   assert.equal(accepted.proposal.payload.queryChanged, false);
 });
 
@@ -616,12 +669,14 @@ test("live runner binds one frontier/action/tool/evidence ID, separates names, e
       planner: async ({ selectedFrontierEntries }) => ({
         kind: "actions",
         decisionSummary: "Expand the minimum-cost public discovery pivot.",
-        actions: [{
-          frontierEntryId: selectedFrontierEntries[0].id,
-          tool: "fetch_public_source",
-          purpose: "Find public professional candidates.",
-          arguments: { query: selectedFrontierEntries[0].queryHint },
-        }],
+        actions: [
+          {
+            frontierEntryId: selectedFrontierEntries[0].id,
+            tool: "fetch_public_source",
+            purpose: "Find public professional candidates.",
+            arguments: { query: selectedFrontierEntries[0].queryHint },
+          },
+        ],
       }),
       executeAction: async (action) => {
         actionSeen = action;
@@ -631,14 +686,16 @@ test("live runner binds one frontier/action/tool/evidence ID, separates names, e
             { ref: "one", displayName: "Alex Kim" },
             { ref: "two", displayName: "Alex Kim" },
           ],
-          evidence: [{
-            candidateRef: "one",
-            claim: "Alex Kim works as an engineer at Example Labs.",
-            excerpt: "Alex Kim works as an engineer at Example Labs.",
-            sourceUrl: "https://examplelabs.org/team/alex-kim",
-            sourceType: "company_page",
-            verificationMethod: "direct_fetch",
-          }],
+          evidence: [
+            {
+              candidateRef: "one",
+              claim: "Alex Kim works as an engineer at Example Labs.",
+              excerpt: "Alex Kim works as an engineer at Example Labs.",
+              sourceUrl: "https://examplelabs.org/team/alex-kim",
+              sourceType: "company_page",
+              verificationMethod: "direct_fetch",
+            },
+          ],
           meta: { requests: 1 },
         };
       },
@@ -647,19 +704,24 @@ test("live runner binds one frontier/action/tool/evidence ID, separates names, e
       availableTools: ["fetch_public_source"],
       budget: { maxTurns: 1 },
     },
-  )) updates.push(update);
+  ))
+    updates.push(update);
   const completed = updates.at(-1);
   assert.equal(completed.type, "completed");
   assert.equal(actionSeen.id, actionSeen.frontierEntryId);
   assert.equal(completed.report.evidence[0].toolCallId, actionSeen.id);
-  const evidenceNode = completed.report.searchGraph.nodes.find((node) =>
-    node.evidenceId === completed.report.evidence[0].id);
-  assert.ok(evidenceNode, JSON.stringify({
-    status: completed.report.status,
-    stop: completed.report.stop,
-    evidence: completed.report.evidence,
-    nodes: completed.report.searchGraph.nodes,
-  }));
+  const evidenceNode = completed.report.searchGraph.nodes.find(
+    (node) => node.evidenceId === completed.report.evidence[0].id,
+  );
+  assert.ok(
+    evidenceNode,
+    JSON.stringify({
+      status: completed.report.status,
+      stop: completed.report.stop,
+      evidence: completed.report.evidence,
+      nodes: completed.report.searchGraph.nodes,
+    }),
+  );
   assert.equal(evidenceNode.actionId, actionSeen.id);
   assert.ok(completed.report.searchGraph.edges.some((edge) => edge.kind === "separates"));
   assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
@@ -679,7 +741,8 @@ test("live runner binds one frontier/action/tool/evidence ID, separates names, e
       executeAction: async () => ({ status: "skipped" }),
     },
     { availableTools: ["public_search"], signal: controller.signal },
-  )) canceled.push(update);
+  ))
+    canceled.push(update);
   assert.equal(canceled.at(-1).report.status, "canceled");
   assert.equal(canceled.at(-1).report.stop.reason, "cancelled");
 });
@@ -695,17 +758,18 @@ test("live runner rejects cross-lane tools and foreign evidence action joins bef
       clock: domain.createSequenceClock(),
       ids: domain.createDeterministicIdFactory("cross-lane-tool"),
       planner: async ({ selectedFrontierEntries }) => {
-        const firstEntry = selectedFrontierEntries.find((entry) =>
-          entry.allowedTools.includes(firstTool));
+        const firstEntry = selectedFrontierEntries.find((entry) => entry.allowedTools.includes(firstTool));
         return {
           kind: "actions",
           decisionSummary: "Attempt a cross-lane tool binding.",
-          actions: [{
-            frontierEntryId: firstEntry.id,
-            tool: secondTool,
-            purpose: "Search a public professional publication index.",
-            arguments: { query: firstEntry.queryHint },
-          }],
+          actions: [
+            {
+              frontierEntryId: firstEntry.id,
+              tool: secondTool,
+              purpose: "Search a public professional publication index.",
+              arguments: { query: firstEntry.queryHint },
+            },
+          ],
         };
       },
       executeAction: async () => {
@@ -717,11 +781,18 @@ test("live runner rejects cross-lane tools and foreign evidence action joins bef
       availableTools: [firstTool, secondTool],
       budget: { maxTurns: 1 },
     },
-  )) mismatched.push(update);
+  ))
+    mismatched.push(update);
   assert.equal(mismatchedAdapterCalls, 0);
-  assert.ok(mismatched.at(-1).trace.events.some((event) =>
-    event.name === "action.rejected"
-    && event.payload.reason === "action is not bound to one selected compatible frontier entry"));
+  assert.ok(
+    mismatched
+      .at(-1)
+      .trace.events.some(
+        (event) =>
+          event.name === "action.rejected" &&
+          event.payload.reason === "action is not bound to one selected compatible frontier entry",
+      ),
+  );
 
   let ghostAdapterCalls = 0;
   const ghost = [];
@@ -733,13 +804,15 @@ test("live runner rejects cross-lane tools and foreign evidence action joins bef
       planner: async ({ selectedFrontierEntries }) => ({
         kind: "actions",
         decisionSummary: "Attempt to bind an unbound lane to a foreign candidate.",
-        actions: [{
-          frontierEntryId: selectedFrontierEntries[0].id,
-          tool: selectedFrontierEntries[0].allowedTools[0],
-          purpose: "Search a public professional registry.",
-          arguments: { query: selectedFrontierEntries[0].queryHint },
-          candidateId: "ghost_candidate",
-        }],
+        actions: [
+          {
+            frontierEntryId: selectedFrontierEntries[0].id,
+            tool: selectedFrontierEntries[0].allowedTools[0],
+            purpose: "Search a public professional registry.",
+            arguments: { query: selectedFrontierEntries[0].queryHint },
+            candidateId: "ghost_candidate",
+          },
+        ],
       }),
       executeAction: async () => {
         ghostAdapterCalls += 1;
@@ -747,12 +820,19 @@ test("live runner rejects cross-lane tools and foreign evidence action joins bef
       },
     },
     { availableTools: [firstTool], budget: { maxTurns: 1 } },
-  )) ghost.push(update);
+  ))
+    ghost.push(update);
   assert.equal(ghostAdapterCalls, 0);
   assert.equal(ghost.at(-1).type, "completed");
-  assert.ok(ghost.at(-1).trace.events.some((event) =>
-    event.name === "action.rejected"
-    && event.payload.reason === "action is not bound to one selected compatible frontier entry"));
+  assert.ok(
+    ghost
+      .at(-1)
+      .trace.events.some(
+        (event) =>
+          event.name === "action.rejected" &&
+          event.payload.reason === "action is not bound to one selected compatible frontier entry",
+      ),
+  );
 
   let foreignAdapterCalls = 0;
   const foreign = [];
@@ -764,41 +844,48 @@ test("live runner rejects cross-lane tools and foreign evidence action joins bef
       planner: async ({ selectedFrontierEntries }) => ({
         kind: "actions",
         decisionSummary: "Use the selected professional registry lane.",
-        actions: [{
-          frontierEntryId: selectedFrontierEntries[0].id,
-          tool: firstTool,
-          purpose: "Search a public professional registry.",
-          arguments: { query: selectedFrontierEntries[0].queryHint },
-        }],
+        actions: [
+          {
+            frontierEntryId: selectedFrontierEntries[0].id,
+            tool: firstTool,
+            purpose: "Search a public professional registry.",
+            arguments: { query: selectedFrontierEntries[0].queryHint },
+          },
+        ],
       }),
       executeAction: async () => {
         foreignAdapterCalls += 1;
         return {
           status: "succeeded",
           candidates: [{ ref: "alex", displayName: "Alex Kim" }],
-          evidence: [{
-            candidateRef: "alex",
-            toolCallId: "foreign_action",
-            claim: "Alex Kim has a public professional profile.",
-            excerpt: "Alex Kim has a public professional profile.",
-            sourceUrl: "https://example.org/team/alex-kim",
-            sourceType: "company_page",
-            verificationMethod: "direct_fetch",
-          }],
+          evidence: [
+            {
+              candidateRef: "alex",
+              toolCallId: "foreign_action",
+              claim: "Alex Kim has a public professional profile.",
+              excerpt: "Alex Kim has a public professional profile.",
+              sourceUrl: "https://example.org/team/alex-kim",
+              sourceType: "company_page",
+              verificationMethod: "direct_fetch",
+            },
+          ],
           meta: { requests: 0 },
         };
       },
     },
     { availableTools: [firstTool], budget: { maxTurns: 1 } },
-  )) foreign.push(update);
+  ))
+    foreign.push(update);
   const completed = foreign.at(-1);
   assert.equal(foreignAdapterCalls, 1);
   assert.equal(completed.type, "completed");
   assert.equal(completed.report.evidence.length, 0);
   assert.doesNotMatch(JSON.stringify(completed.report), /foreign_action/);
-  assert.ok(completed.trace.events.some((event) =>
-    event.name === "evidence.admission"
-    && event.payload.reason === "foreign_tool_call_id"));
+  assert.ok(
+    completed.trace.events.some(
+      (event) => event.name === "evidence.admission" && event.payload.reason === "foreign_tool_call_id",
+    ),
+  );
   assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
 });
 
@@ -818,12 +905,14 @@ test("candidate-bound actions cannot mutate a foreign candidate through any adap
           return {
             kind: "actions",
             decisionSummary: "Discover two separated public candidates.",
-            actions: [{
-              frontierEntryId: entry.id,
-              tool: "search_web",
-              purpose: "Find public professional candidates.",
-              arguments: { query: entry.queryHint },
-            }],
+            actions: [
+              {
+                frontierEntryId: entry.id,
+                tool: "search_web",
+                purpose: "Find public professional candidates.",
+                arguments: { query: entry.queryHint },
+              },
+            ],
           };
         }
         const entry = selectedFrontierEntries.find((item) => item.candidateId !== null);
@@ -832,13 +921,15 @@ test("candidate-bound actions cannot mutate a foreign candidate through any adap
         return {
           kind: "actions",
           decisionSummary: "Exercise one candidate-bound first-party lane.",
-          actions: [{
-            frontierEntryId: entry.id,
-            tool: "fetch_public_source",
-            purpose: "Fetch the candidate-bound organization page.",
-            arguments: { url: "https://examplelabs.org/team/alex-kim" },
-            candidateId: boundCandidateId,
-          }],
+          actions: [
+            {
+              frontierEntryId: entry.id,
+              tool: "fetch_public_source",
+              purpose: "Fetch the candidate-bound organization page.",
+              arguments: { url: "https://examplelabs.org/team/alex-kim" },
+              candidateId: boundCandidateId,
+            },
+          ],
         };
       },
       executeAction: async (action, context) => {
@@ -857,32 +948,40 @@ test("candidate-bound actions cannot mutate a foreign candidate through any adap
         return {
           status: "succeeded",
           candidates: [{ ref: "third", displayName: "Alex Kim" }],
-          candidateSignals: [{
-            candidateId: other.id,
-            signals: [{
-              kind: "organization",
-              value: "Foreign Labs",
-              normalizedValue: "foreign labs",
-              strength: "strong",
-              assurance: "verified",
-              sourceFamily: "foreign.example",
-            }],
-          }],
-          evidence: [{
-            candidateId: other.id,
-            claim: "The other Alex Kim works at Example Labs.",
-            excerpt: "The other Alex Kim works at Example Labs.",
-            sourceUrl: "https://examplelabs.org/team/other-alex-kim",
-            sourceType: "company_page",
-            verificationMethod: "direct_fetch",
-          }],
-          findings: [{
-            candidateId: other.id,
-            title: "Foreign candidate finding",
-            description: "This must not be admitted from a candidate-bound action.",
-            category: "identity",
-            evidenceIds: [],
-          }],
+          candidateSignals: [
+            {
+              candidateId: other.id,
+              signals: [
+                {
+                  kind: "organization",
+                  value: "Foreign Labs",
+                  normalizedValue: "foreign labs",
+                  strength: "strong",
+                  assurance: "verified",
+                  sourceFamily: "foreign.example",
+                },
+              ],
+            },
+          ],
+          evidence: [
+            {
+              candidateId: other.id,
+              claim: "The other Alex Kim works at Example Labs.",
+              excerpt: "The other Alex Kim works at Example Labs.",
+              sourceUrl: "https://examplelabs.org/team/other-alex-kim",
+              sourceType: "company_page",
+              verificationMethod: "direct_fetch",
+            },
+          ],
+          findings: [
+            {
+              candidateId: other.id,
+              title: "Foreign candidate finding",
+              description: "This must not be admitted from a candidate-bound action.",
+              category: "identity",
+              evidenceIds: [],
+            },
+          ],
           meta: { requests: 0 },
         };
       },
@@ -891,7 +990,8 @@ test("candidate-bound actions cannot mutate a foreign candidate through any adap
       availableTools: ["search_web", "fetch_public_source"],
       budget: { maxTurns: 2 },
     },
-  )) updates.push(update);
+  ))
+    updates.push(update);
   const completed = updates.at(-1);
   assert.equal(adapterCalls, 2);
   assert.equal(completed.type, "completed");
@@ -899,16 +999,21 @@ test("candidate-bound actions cannot mutate a foreign candidate through any adap
   assert.equal(completed.report.findings.length, 0);
   assert.equal(completed.report.candidates.length, 2);
   assert.ok(boundCandidateId && foreignCandidateId && boundCandidateId !== foreignCandidateId);
-  assert.ok(!completed.report.candidates
-    .find((candidate) => candidate.id === foreignCandidateId)
-    .signals.some((signal) => signal.normalizedValue === "foreign labs"));
+  assert.ok(
+    !completed.report.candidates
+      .find((candidate) => candidate.id === foreignCandidateId)
+      .signals.some((signal) => signal.normalizedValue === "foreign labs"),
+  );
   for (const [name, reason] of [
     ["candidate.rejected", "candidate_bound_action_cannot_create_candidates"],
     ["candidate_signal.rejected", "foreign_candidate_id"],
     ["evidence.admission", "foreign_candidate_id"],
     ["finding.rejected", "foreign_candidate_id"],
-  ]) assert.ok(completed.trace.events.some((event) =>
-    event.name === name && event.payload.reason === reason), `${name}:${reason}`);
+  ])
+    assert.ok(
+      completed.trace.events.some((event) => event.name === name && event.payload.reason === reason),
+      `${name}:${reason}`,
+    );
   assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
   assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
 });
@@ -923,12 +1028,14 @@ test("first-party lanes reject news, host-tier mismatches, and adapter label upg
       planner: async ({ selectedFrontierEntries }) => ({
         kind: "actions",
         decisionSummary: "Exercise the selected first-party lane.",
-        actions: [{
-          frontierEntryId: selectedFrontierEntries[0].id,
-          tool: "fetch_public_source",
-          purpose: "Fetch a candidate-facing public page.",
-          arguments: { url: "https://news.example/alex-kim" },
-        }],
+        actions: [
+          {
+            frontierEntryId: selectedFrontierEntries[0].id,
+            tool: "fetch_public_source",
+            purpose: "Fetch a candidate-facing public page.",
+            arguments: { url: "https://news.example/alex-kim" },
+          },
+        ],
       }),
       executeAction: async () => ({
         status: "succeeded",
@@ -963,14 +1070,22 @@ test("first-party lanes reject news, host-tier mismatches, and adapter label upg
       }),
     },
     { availableTools: ["fetch_public_source"], budget: { maxTurns: 1 } },
-  )) updates.push(update);
+  ))
+    updates.push(update);
   const completed = updates.at(-1);
   assert.equal(completed.type, "completed");
   assert.equal(completed.report.evidence.length, 0);
-  assert.ok(completed.trace.events.some((event) =>
-    event.name === "evidence.admission" && event.payload.reason === "source_type_outside_lane"));
-  assert.equal(completed.trace.events.filter((event) =>
-    event.name === "evidence.admission" && event.payload.reason === "source_tier_mismatch").length, 2);
+  assert.ok(
+    completed.trace.events.some(
+      (event) => event.name === "evidence.admission" && event.payload.reason === "source_type_outside_lane",
+    ),
+  );
+  assert.equal(
+    completed.trace.events.filter(
+      (event) => event.name === "evidence.admission" && event.payload.reason === "source_tier_mismatch",
+    ).length,
+    2,
+  );
   assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
 });
 
@@ -991,7 +1106,8 @@ test("budget exhaustion wins deterministically over a remaining queued frontier"
       availableTools: ["public_search"],
       budget: { maxTurns: 1 },
     },
-  )) updates.push(update);
+  ))
+    updates.push(update);
 
   const completed = updates.at(-1);
   assert.equal(completed.report.status, "partial");

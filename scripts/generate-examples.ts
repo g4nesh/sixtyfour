@@ -10,11 +10,7 @@ import {
   summarizeCoverage,
 } from "../lib/domain/report.ts";
 import { evaluateStop } from "../lib/domain/stopping.ts";
-import {
-  cloneJson,
-  createDeterministicIdFactory,
-  createSequenceClock,
-} from "../lib/domain/runtime.ts";
+import { cloneJson, createDeterministicIdFactory, createSequenceClock } from "../lib/domain/runtime.ts";
 import {
   SCHEMA_VERSION,
   type Candidate,
@@ -176,21 +172,13 @@ class ReplaySearchGraph {
 
   seed(): SearchFrontierEntry[] {
     const state = this.engine.snapshot();
-    return this.#apply(seedFrontier(
-      state.searchGraph,
-      state.target,
-      this.availableTools,
-      this.engine.ids,
-      this.engine.clock.now(),
-    ));
+    return this.#apply(
+      seedFrontier(state.searchGraph, state.target, this.availableTools, this.engine.ids, this.engine.clock.now()),
+    );
   }
 
   selectNext(): SearchFrontierEntry {
-    const selected = this.#apply(selectFrontierBatch(
-      this.#graph(),
-      1,
-      this.engine.clock.now(),
-    ));
+    const selected = this.#apply(selectFrontierBatch(this.#graph(), 1, this.engine.clock.now()));
     if (selected.length !== 1) throw new Error("example frontier has no selectable entry");
     return selected[0];
   }
@@ -210,16 +198,23 @@ class ReplaySearchGraph {
     const parent = options.parent ?? null;
     const parentNodeId = parent?.nodeId ?? graph.seedNodeId;
     if (!parentNodeId) throw new Error("example graph must be seeded before enqueue");
-    const value = this.#apply(enqueueFrontier(graph, {
-      lane,
-      target: this.engine.snapshot().target,
-      parentNodeId,
-      parentFrontierEntry: parent,
-      candidateId: options.candidate?.id ?? null,
-      candidateLabel: options.candidate?.displayName ?? null,
-      intent: options.intent,
-      queryHint: options.queryHint,
-    }, this.engine.ids, this.engine.clock.now()));
+    const value = this.#apply(
+      enqueueFrontier(
+        graph,
+        {
+          lane,
+          target: this.engine.snapshot().target,
+          parentNodeId,
+          parentFrontierEntry: parent,
+          candidateId: options.candidate?.id ?? null,
+          candidateLabel: options.candidate?.displayName ?? null,
+          intent: options.intent,
+          queryHint: options.queryHint,
+        },
+        this.engine.ids,
+        this.engine.clock.now(),
+      ),
+    );
     if (!value) throw new Error(`example frontier entry ${laneId} was unexpectedly dominated`);
     return value;
   }
@@ -278,35 +273,18 @@ class ReplaySearchGraph {
     });
   }
 
-  outcome(
-    entry: SearchFrontierEntry,
-    status: Extract<SearchGraphStatus, "verified" | "rejected" | "exhausted">,
-  ): void {
+  outcome(entry: SearchFrontierEntry, status: Extract<SearchGraphStatus, "verified" | "rejected" | "exhausted">): void {
     // Mirror the live runner: a selected entry transitions to `running` before
     // its outcome is admitted. The kernel requires exactly one running entry.
-    this.engine.replaceSearchGraph(setFrontierStatus(
-      this.#graph(),
-      [entry.id],
-      "running",
-      this.engine.clock.now(),
-    ));
-    this.#apply(recordFrontierOutcome(
-      this.#graph(),
-      entry,
-      status,
-      this.engine.clock.now(),
-    ));
+    this.engine.replaceSearchGraph(setFrontierStatus(this.#graph(), [entry.id], "running", this.engine.clock.now()));
+    this.#apply(recordFrontierOutcome(this.#graph(), entry, status, this.engine.clock.now()));
   }
 
   async proposeMutation(parent: SearchFrontierEntry): Promise<SearchFrontierEntry | null> {
     const state = this.engine.snapshot();
-    return this.#apply(await proposeBoundedMutation(
-      state.searchGraph,
-      state.target,
-      parent,
-      this.engine.ids,
-      this.engine.clock.now(),
-    ));
+    return this.#apply(
+      await proposeBoundedMutation(state.searchGraph, state.target, parent, this.engine.ids, this.engine.clock.now()),
+    );
   }
 
   linkEvidence(entry: SearchFrontierEntry, evidenceId: string): void {
@@ -314,72 +292,100 @@ class ReplaySearchGraph {
     if (!record) throw new Error(`unknown example evidence ${evidenceId}`);
     const status: SearchGraphStatus = record.disposition === "contradicts" ? "rejected" : "verified";
     this.#transaction(() => {
-      const source = this.#apply(admitGraphNode(this.#graph(), {
-        kind: "source",
-        label: record.title ?? record.sourceFamily,
-        status,
-        sourceTier: entry.sourceTier,
-        sourceLaneId: entry.sourceLaneId,
-        frontierEntryId: entry.id,
-        actionId: entry.actionId,
-        candidateId: record.candidateId,
-        evidenceId: record.id,
-        data: {
-          sourceUrl: record.sourceUrl,
-          sourceFamily: record.sourceFamily,
-          sourceType: record.sourceType,
-        },
-        dedupeEntityKey: `source:${record.id}`,
-      }, this.engine.ids, this.engine.clock.now()));
+      const source = this.#apply(
+        admitGraphNode(
+          this.#graph(),
+          {
+            kind: "source",
+            label: record.title ?? record.sourceFamily,
+            status,
+            sourceTier: entry.sourceTier,
+            sourceLaneId: entry.sourceLaneId,
+            frontierEntryId: entry.id,
+            actionId: entry.actionId,
+            candidateId: record.candidateId,
+            evidenceId: record.id,
+            data: {
+              sourceUrl: record.sourceUrl,
+              sourceFamily: record.sourceFamily,
+              sourceType: record.sourceType,
+            },
+            dedupeEntityKey: `source:${record.id}`,
+          },
+          this.engine.ids,
+          this.engine.clock.now(),
+        ),
+      );
       const sourceCost = graphCost(entry.pathCost + 0.04);
       this.#nodePathCosts.set(source.id, sourceCost);
-      this.#apply(admitGraphEdge(this.#graph(), {
-        fromNodeId: entry.nodeId,
-        toNodeId: source.id,
-        kind: "grounds",
-        status,
-        frontierEntryId: entry.id,
-        actionId: entry.actionId,
-        edgeCost: 0.04,
-        pathCost: sourceCost,
-      }, this.engine.ids, this.engine.clock.now()));
+      this.#apply(
+        admitGraphEdge(
+          this.#graph(),
+          {
+            fromNodeId: entry.nodeId,
+            toNodeId: source.id,
+            kind: "grounds",
+            status,
+            frontierEntryId: entry.id,
+            actionId: entry.actionId,
+            edgeCost: 0.04,
+            pathCost: sourceCost,
+          },
+          this.engine.ids,
+          this.engine.clock.now(),
+        ),
+      );
 
-      const evidenceNode = this.#apply(admitGraphNode(this.#graph(), {
-        kind: "evidence",
-        label: record.claim,
-        status,
-        sourceTier: entry.sourceTier,
-        sourceLaneId: entry.sourceLaneId,
-        frontierEntryId: entry.id,
-        actionId: entry.actionId,
-        candidateId: record.candidateId,
-        evidenceId: record.id,
-        data: {
-          sourceUrl: record.sourceUrl,
-          sourceFamily: record.sourceFamily,
-          sourceType: record.sourceType,
-          disposition: record.disposition,
-          contentHash: record.contentHash,
-          verificationMethod: record.verificationMethod,
-        },
-        dedupeEntityKey: `evidence:${record.id}`,
-      }, this.engine.ids, this.engine.clock.now()));
+      const evidenceNode = this.#apply(
+        admitGraphNode(
+          this.#graph(),
+          {
+            kind: "evidence",
+            label: record.claim,
+            status,
+            sourceTier: entry.sourceTier,
+            sourceLaneId: entry.sourceLaneId,
+            frontierEntryId: entry.id,
+            actionId: entry.actionId,
+            candidateId: record.candidateId,
+            evidenceId: record.id,
+            data: {
+              sourceUrl: record.sourceUrl,
+              sourceFamily: record.sourceFamily,
+              sourceType: record.sourceType,
+              disposition: record.disposition,
+              contentHash: record.contentHash,
+              verificationMethod: record.verificationMethod,
+            },
+            dedupeEntityKey: `evidence:${record.id}`,
+          },
+          this.engine.ids,
+          this.engine.clock.now(),
+        ),
+      );
       const evidenceCost = graphCost(sourceCost + 0.03);
       this.#nodePathCosts.set(evidenceNode.id, evidenceCost);
       this.#evidenceNodes.set(record.id, evidenceNode.id);
       // A source structurally grounds its extracted evidence; the supporting or
       // contradicting disposition is carried by node/edge status and by the
       // evidence->candidate edge, matching the live runner's graph.
-      this.#apply(admitGraphEdge(this.#graph(), {
-        fromNodeId: source.id,
-        toNodeId: evidenceNode.id,
-        kind: "grounds",
-        status,
-        frontierEntryId: entry.id,
-        actionId: entry.actionId,
-        edgeCost: 0.03,
-        pathCost: evidenceCost,
-      }, this.engine.ids, this.engine.clock.now()));
+      this.#apply(
+        admitGraphEdge(
+          this.#graph(),
+          {
+            fromNodeId: source.id,
+            toNodeId: evidenceNode.id,
+            kind: "grounds",
+            status,
+            frontierEntryId: entry.id,
+            actionId: entry.actionId,
+            edgeCost: 0.03,
+            pathCost: evidenceCost,
+          },
+          this.engine.ids,
+          this.engine.clock.now(),
+        ),
+      );
     });
   }
 
@@ -403,140 +409,194 @@ class ReplaySearchGraph {
     // Candidate, disambiguation, finding, and report nodes plus their edges form
     // one connected terminal subgraph; admit them as a single validated unit.
     this.#transaction(() => {
-    for (const candidate of state.candidates) {
-      const candidateStatus: SearchGraphStatus = candidate.status === "rejected" ? "rejected" : "verified";
-      const candidateNode = this.#apply(admitGraphNode(this.#graph(), {
-        kind: "candidate",
-        label: candidate.displayName,
-        status: candidateStatus,
-        candidateId: candidate.id,
-        data: {},
-        dedupeEntityKey: `candidate:${candidate.id}`,
-      }, this.engine.ids, this.engine.clock.now()));
-      this.#candidateNodes.set(candidate.id, candidateNode.id);
-      const evidenceNodes = candidate.evidenceIds
-        .map((evidenceId) => this.#evidenceNodes.get(evidenceId))
-        .filter((nodeId): nodeId is string => Boolean(nodeId));
-      if (evidenceNodes.length === 0) {
-        const seedNodeId = this.#graph().seedNodeId;
-        if (!seedNodeId) throw new Error("search graph has no seed node");
-        const pathCost = 0.08;
-        this.#nodePathCosts.set(candidateNode.id, pathCost);
-        this.#apply(admitGraphEdge(this.#graph(), {
-          fromNodeId: seedNodeId,
-          toNodeId: candidateNode.id,
-          kind: "grounds",
-          status: candidateStatus,
-          edgeCost: 0.08,
-          pathCost,
-        }, this.engine.ids, this.engine.clock.now()));
-      } else {
-        evidenceNodes.forEach((evidenceNodeId, index) => {
-          const sourcePath = this.#nodePathCosts.get(evidenceNodeId);
-          if (sourcePath === undefined) throw new Error(`missing graph path for ${evidenceNodeId}`);
-          const pathCost = graphCost(sourcePath + 0.05);
-          if (index === 0) this.#nodePathCosts.set(candidateNode.id, pathCost);
-          this.#apply(admitGraphEdge(this.#graph(), {
-            fromNodeId: evidenceNodeId,
-            toNodeId: candidateNode.id,
-            kind: "grounds",
-            status: candidateStatus,
-            edgeCost: 0.05,
-            pathCost,
-          }, this.engine.ids, this.engine.clock.now()));
-        });
+      for (const candidate of state.candidates) {
+        const candidateStatus: SearchGraphStatus = candidate.status === "rejected" ? "rejected" : "verified";
+        const candidateNode = this.#apply(
+          admitGraphNode(
+            this.#graph(),
+            {
+              kind: "candidate",
+              label: candidate.displayName,
+              status: candidateStatus,
+              candidateId: candidate.id,
+              data: {},
+              dedupeEntityKey: `candidate:${candidate.id}`,
+            },
+            this.engine.ids,
+            this.engine.clock.now(),
+          ),
+        );
+        this.#candidateNodes.set(candidate.id, candidateNode.id);
+        const evidenceNodes = candidate.evidenceIds
+          .map((evidenceId) => this.#evidenceNodes.get(evidenceId))
+          .filter((nodeId): nodeId is string => Boolean(nodeId));
+        if (evidenceNodes.length === 0) {
+          const seedNodeId = this.#graph().seedNodeId;
+          if (!seedNodeId) throw new Error("search graph has no seed node");
+          const pathCost = 0.08;
+          this.#nodePathCosts.set(candidateNode.id, pathCost);
+          this.#apply(
+            admitGraphEdge(
+              this.#graph(),
+              {
+                fromNodeId: seedNodeId,
+                toNodeId: candidateNode.id,
+                kind: "grounds",
+                status: candidateStatus,
+                edgeCost: 0.08,
+                pathCost,
+              },
+              this.engine.ids,
+              this.engine.clock.now(),
+            ),
+          );
+        } else {
+          evidenceNodes.forEach((evidenceNodeId, index) => {
+            const sourcePath = this.#nodePathCosts.get(evidenceNodeId);
+            if (sourcePath === undefined) throw new Error(`missing graph path for ${evidenceNodeId}`);
+            const pathCost = graphCost(sourcePath + 0.05);
+            if (index === 0) this.#nodePathCosts.set(candidateNode.id, pathCost);
+            this.#apply(
+              admitGraphEdge(
+                this.#graph(),
+                {
+                  fromNodeId: evidenceNodeId,
+                  toNodeId: candidateNode.id,
+                  kind: "grounds",
+                  status: candidateStatus,
+                  edgeCost: 0.05,
+                  pathCost,
+                },
+                this.engine.ids,
+                this.engine.clock.now(),
+              ),
+            );
+          });
+        }
       }
-    }
 
-    const candidatesByName = new Map<string, Candidate[]>();
-    for (const candidate of state.candidates) {
-      const candidates = candidatesByName.get(candidate.normalizedName) ?? [];
-      candidates.push(candidate);
-      candidatesByName.set(candidate.normalizedName, candidates);
-    }
-    for (const candidates of candidatesByName.values()) {
-      if (candidates.length < 2) continue;
-      const ordered = [...candidates].sort((left, right) =>
-        right.score.total - left.score.total || left.id.localeCompare(right.id));
-      const sourceNodeId = this.#candidateNodes.get(ordered[0].id);
-      if (!sourceNodeId) continue;
-      for (const candidate of ordered.slice(1)) {
-        const targetNodeId = this.#candidateNodes.get(candidate.id);
-        const sourcePath = this.#nodePathCosts.get(sourceNodeId);
-        if (!targetNodeId || sourcePath === undefined) continue;
-        this.#apply(admitGraphEdge(this.#graph(), {
-          fromNodeId: sourceNodeId,
-          toNodeId: targetNodeId,
-          kind: "separates",
-          status: "rejected",
-          edgeCost: 0.11,
-          pathCost: graphCost(sourcePath + 0.11),
-        }, this.engine.ids, this.engine.clock.now()));
+      const candidatesByName = new Map<string, Candidate[]>();
+      for (const candidate of state.candidates) {
+        const candidates = candidatesByName.get(candidate.normalizedName) ?? [];
+        candidates.push(candidate);
+        candidatesByName.set(candidate.normalizedName, candidates);
       }
-    }
-
-    const findingNodes: SearchGraphNode[] = [];
-    for (const finding of state.findings) {
-      const candidateNodeId = this.#candidateNodes.get(finding.candidateId);
-      const candidatePath = candidateNodeId ? this.#nodePathCosts.get(candidateNodeId) : undefined;
-      if (!candidateNodeId || candidatePath === undefined) {
-        throw new Error(`finding ${finding.id} has no candidate graph node`);
+      for (const candidates of candidatesByName.values()) {
+        if (candidates.length < 2) continue;
+        const ordered = [...candidates].sort(
+          (left, right) => right.score.total - left.score.total || left.id.localeCompare(right.id),
+        );
+        const sourceNodeId = this.#candidateNodes.get(ordered[0].id);
+        if (!sourceNodeId) continue;
+        for (const candidate of ordered.slice(1)) {
+          const targetNodeId = this.#candidateNodes.get(candidate.id);
+          const sourcePath = this.#nodePathCosts.get(sourceNodeId);
+          if (!targetNodeId || sourcePath === undefined) continue;
+          this.#apply(
+            admitGraphEdge(
+              this.#graph(),
+              {
+                fromNodeId: sourceNodeId,
+                toNodeId: targetNodeId,
+                kind: "separates",
+                status: "rejected",
+                edgeCost: 0.11,
+                pathCost: graphCost(sourcePath + 0.11),
+              },
+              this.engine.ids,
+              this.engine.clock.now(),
+            ),
+          );
+        }
       }
-      const findingNode = this.#apply(admitGraphNode(this.#graph(), {
-        kind: "finding",
-        label: finding.title,
-        status: "verified",
-        candidateId: finding.candidateId,
-        findingId: finding.id,
-        data: {
-          category: finding.category,
-          confidence: finding.confidence.score,
-        },
-        dedupeEntityKey: `finding:${finding.id}`,
-      }, this.engine.ids, this.engine.clock.now()));
-      const findingPath = graphCost(candidatePath + 0.05);
-      this.#nodePathCosts.set(findingNode.id, findingPath);
-      this.#apply(admitGraphEdge(this.#graph(), {
-        fromNodeId: candidateNodeId,
-        toNodeId: findingNode.id,
-        kind: "supports",
-        status: "verified",
-        edgeCost: 0.05,
-        pathCost: findingPath,
-      }, this.engine.ids, this.engine.clock.now()));
-      findingNodes.push(findingNode);
-    }
 
-    const reportNode = this.#apply(admitGraphNode(this.#graph(), {
-      kind: "report",
-      label: "Final intelligence report",
-      status: "verified",
-      data: { findingCount: state.findings.length },
-      dedupeEntityKey: `report:${this.engine.runId}`,
-    }, this.engine.ids, this.engine.clock.now()));
-    for (const findingNode of findingNodes) {
-      const findingPath = this.#nodePathCosts.get(findingNode.id);
-      if (findingPath === undefined) continue;
-      const pathCost = graphCost(findingPath + 0.04);
-      if (!this.#nodePathCosts.has(reportNode.id)) this.#nodePathCosts.set(reportNode.id, pathCost);
-      this.#apply(admitGraphEdge(this.#graph(), {
-        fromNodeId: findingNode.id,
-        toNodeId: reportNode.id,
-        kind: "includes",
-        status: "verified",
-        edgeCost: 0.04,
-        pathCost,
-      }, this.engine.ids, this.engine.clock.now()));
-    }
-    // The report node may only exist in a terminal graph, so mark the graph
-    // terminal as the last step of the same validated commit (like the runner).
-    selectedBeforeTerminal = [...this.#graph().selectedFrontierEntryIds];
-    this.#working = markSearchGraphTerminal(
-      this.#graph(),
-      "completed",
-      this.engine.clock.now(),
-      { preserveQueued: true },
-    );
+      const findingNodes: SearchGraphNode[] = [];
+      for (const finding of state.findings) {
+        const candidateNodeId = this.#candidateNodes.get(finding.candidateId);
+        const candidatePath = candidateNodeId ? this.#nodePathCosts.get(candidateNodeId) : undefined;
+        if (!candidateNodeId || candidatePath === undefined) {
+          throw new Error(`finding ${finding.id} has no candidate graph node`);
+        }
+        const findingNode = this.#apply(
+          admitGraphNode(
+            this.#graph(),
+            {
+              kind: "finding",
+              label: finding.title,
+              status: "verified",
+              candidateId: finding.candidateId,
+              findingId: finding.id,
+              data: {
+                category: finding.category,
+                confidence: finding.confidence.score,
+              },
+              dedupeEntityKey: `finding:${finding.id}`,
+            },
+            this.engine.ids,
+            this.engine.clock.now(),
+          ),
+        );
+        const findingPath = graphCost(candidatePath + 0.05);
+        this.#nodePathCosts.set(findingNode.id, findingPath);
+        this.#apply(
+          admitGraphEdge(
+            this.#graph(),
+            {
+              fromNodeId: candidateNodeId,
+              toNodeId: findingNode.id,
+              kind: "supports",
+              status: "verified",
+              edgeCost: 0.05,
+              pathCost: findingPath,
+            },
+            this.engine.ids,
+            this.engine.clock.now(),
+          ),
+        );
+        findingNodes.push(findingNode);
+      }
+
+      const reportNode = this.#apply(
+        admitGraphNode(
+          this.#graph(),
+          {
+            kind: "report",
+            label: "Final intelligence report",
+            status: "verified",
+            data: { findingCount: state.findings.length },
+            dedupeEntityKey: `report:${this.engine.runId}`,
+          },
+          this.engine.ids,
+          this.engine.clock.now(),
+        ),
+      );
+      for (const findingNode of findingNodes) {
+        const findingPath = this.#nodePathCosts.get(findingNode.id);
+        if (findingPath === undefined) continue;
+        const pathCost = graphCost(findingPath + 0.04);
+        if (!this.#nodePathCosts.has(reportNode.id)) this.#nodePathCosts.set(reportNode.id, pathCost);
+        this.#apply(
+          admitGraphEdge(
+            this.#graph(),
+            {
+              fromNodeId: findingNode.id,
+              toNodeId: reportNode.id,
+              kind: "includes",
+              status: "verified",
+              edgeCost: 0.04,
+              pathCost,
+            },
+            this.engine.ids,
+            this.engine.clock.now(),
+          ),
+        );
+      }
+      // The report node may only exist in a terminal graph, so mark the graph
+      // terminal as the last step of the same validated commit (like the runner).
+      selectedBeforeTerminal = [...this.#graph().selectedFrontierEntryIds];
+      this.#working = markSearchGraphTerminal(this.#graph(), "completed", this.engine.clock.now(), {
+        preserveQueued: true,
+      });
     });
     const terminalGraph = this.#graph();
 
@@ -557,8 +617,9 @@ class ReplaySearchGraph {
         status: terminalGraph.status,
         nodeCount: terminalGraph.nodes.length,
         edgeCount: terminalGraph.edges.length,
-        queuedBranches: terminalGraph.frontier.filter((entry) =>
-          entry.status === "queued" || entry.status === "mutated").length,
+        queuedBranches: terminalGraph.frontier.filter(
+          (entry) => entry.status === "queued" || entry.status === "mutated",
+        ).length,
       },
       usage: { unavailableReason: "scripted_frontier_kernel" },
     });
@@ -573,13 +634,12 @@ function admit(engine: InvestigationEngine, draft: EvidenceDraft): string {
   return result.evidence.id;
 }
 
-function finish(
-  id: string,
-  engine: InvestigationEngine,
-  search: ReplaySearchGraph,
-  detail: string,
-): GeneratedExample {
-  advance(engine, "report", "Compiled only referentially valid findings and explicit limitations into the versioned report.");
+function finish(id: string, engine: InvestigationEngine, search: ReplaySearchGraph, detail: string): GeneratedExample {
+  advance(
+    engine,
+    "report",
+    "Compiled only referentially valid findings and explicit limitations into the versioned report.",
+  );
   search.finalizeStructure();
   const stop = evaluateStop(engine.snapshot());
   if (!stop.allowed || stop.reason !== "goal_satisfied") {
@@ -612,9 +672,13 @@ function finish(
 async function buildLinus(): Promise<GeneratedExample> {
   const clock = createSequenceClock(capturedAt, 7);
   const ids = createDeterministicIdFactory("linus_replay");
-  const engine = new InvestigationEngine(input(linusInputJson), { clock, ids }, {
-    runId: "replay-linus-codegraph-v2",
-  });
+  const engine = new InvestigationEngine(
+    input(linusInputJson),
+    { clock, ids },
+    {
+      runId: "replay-linus-codegraph-v2",
+    },
+  );
   const search = new ReplaySearchGraph(engine, [
     "fetch_public_source",
     "github_email_codegraph",
@@ -622,10 +686,22 @@ async function buildLinus(): Promise<GeneratedExample> {
     "search_web",
   ]);
 
-  advance(engine, "classify", "The query contains one exact user-supplied email and is limited to public professional correlation.");
-  advance(engine, "plan", "Run the bounded exact-email codegraph, anchor identity on the Linux Foundation leadership page, and corroborate with the kernel contribution documentation while inspecting the strongest commit.");
+  advance(
+    engine,
+    "classify",
+    "The query contains one exact user-supplied email and is limited to public professional correlation.",
+  );
+  advance(
+    engine,
+    "plan",
+    "Run the bounded exact-email codegraph, anchor identity on the Linux Foundation leadership page, and corroborate with the kernel contribution documentation while inspecting the strongest commit.",
+  );
   search.seed();
-  advance(engine, "discover", "Fetch direct sources before admitting any claim; treat provider/search summaries as discovery-only.");
+  advance(
+    engine,
+    "discover",
+    "Fetch direct sources before admitting any claim; treat provider/search summaries as discovery-only.",
+  );
 
   const candidate = engine.addCandidate({
     displayName: "Linus Torvalds",
@@ -743,58 +819,75 @@ async function buildLinus(): Promise<GeneratedExample> {
     }
   }
 
-  advance(engine, "separate_candidates", "The exact email, public Linux documentation, and linked GitHub login form one candidate; Git metadata remains a spoofable signal, not a merge authority.");
-  advance(engine, "corroborate", "Admit minimal direct-source records and require the Linux Foundation source before allowing high-confidence identity findings.");
+  advance(
+    engine,
+    "separate_candidates",
+    "The exact email, public Linux documentation, and linked GitHub login form one candidate; Git metadata remains a spoofable signal, not a merge authority.",
+  );
+  advance(
+    engine,
+    "corroborate",
+    "Admit minimal direct-source records and require the Linux Foundation source before allowing high-confidence identity findings.",
+  );
 
-  const linuxDoc = admit(engine, verifiedDirectEvidence("req-linux-doc", 0, linuxDocEntry.actionId, {
-    candidateId: candidate.id,
-    sourceUrl: "https://github.com/torvalds/linux/blob/master/Documentation/process/submitting-patches.rst",
-    queryUrl: null,
-    sourceType: "public_document",
-    title: "Submitting patches: the essential guide",
-    publisher: "Linux kernel project",
-    sourceFamily: "github.com",
-    observedAt: capturedAt,
-    httpStatus: 200,
-    temporalStatus: "current",
-    reliability: 1,
-    spoofable: false,
-  }));
-  const foundation = admit(engine, verifiedDirectEvidence("req-linux-foundation", 0, foundationEntry.actionId, {
-    candidateId: candidate.id,
-    sourceUrl: "https://www.linuxfoundation.org/about/leadership",
-    queryUrl: null,
-    sourceType: "official_profile",
-    title: "Linux Foundation leadership",
-    publisher: "Linux Foundation",
-    sourceFamily: "linuxfoundation.org",
-    observedAt: capturedAt,
-    httpStatus: 200,
-    temporalStatus: "current",
-    reliability: 1,
-    spoofable: false,
-  }));
-  const commit = admit(engine, verifiedApiEvidence("req-github-commit", commitEntry.actionId, {
-    candidateId: candidate.id,
-    sourceUrl: `https://github.com/torvalds/linux/commit/${VERIFIED_GITHUB_STRONGEST_SHA}`,
-    queryUrl: `https://api.github.com/repos/torvalds/linux/commits/${VERIFIED_GITHUB_STRONGEST_SHA}`,
-    sourceType: "code_commit",
-    title: "Public commit metadata in torvalds/linux",
-    publisher: "GitHub",
-    sourceFamily: "github.com",
-    publishedAt: "2026-08-18T21:13:43.000Z",
-    observedAt: capturedAt,
-    httpStatus: 200,
-    temporalStatus: "current",
-    reliability: 1,
-    spoofable: true,
-    attributes: {
-      sha: VERIFIED_GITHUB_STRONGEST_SHA,
-      repository: "torvalds/linux",
-      login: "torvalds",
-      signature: "unsigned",
-    },
-  }));
+  const linuxDoc = admit(
+    engine,
+    verifiedDirectEvidence("req-linux-doc", 0, linuxDocEntry.actionId, {
+      candidateId: candidate.id,
+      sourceUrl: "https://github.com/torvalds/linux/blob/master/Documentation/process/submitting-patches.rst",
+      queryUrl: null,
+      sourceType: "public_document",
+      title: "Submitting patches: the essential guide",
+      publisher: "Linux kernel project",
+      sourceFamily: "github.com",
+      observedAt: capturedAt,
+      httpStatus: 200,
+      temporalStatus: "current",
+      reliability: 1,
+      spoofable: false,
+    }),
+  );
+  const foundation = admit(
+    engine,
+    verifiedDirectEvidence("req-linux-foundation", 0, foundationEntry.actionId, {
+      candidateId: candidate.id,
+      sourceUrl: "https://www.linuxfoundation.org/about/leadership",
+      queryUrl: null,
+      sourceType: "official_profile",
+      title: "Linux Foundation leadership",
+      publisher: "Linux Foundation",
+      sourceFamily: "linuxfoundation.org",
+      observedAt: capturedAt,
+      httpStatus: 200,
+      temporalStatus: "current",
+      reliability: 1,
+      spoofable: false,
+    }),
+  );
+  const commit = admit(
+    engine,
+    verifiedApiEvidence("req-github-commit", commitEntry.actionId, {
+      candidateId: candidate.id,
+      sourceUrl: `https://github.com/torvalds/linux/commit/${VERIFIED_GITHUB_STRONGEST_SHA}`,
+      queryUrl: `https://api.github.com/repos/torvalds/linux/commits/${VERIFIED_GITHUB_STRONGEST_SHA}`,
+      sourceType: "code_commit",
+      title: "Public commit metadata in torvalds/linux",
+      publisher: "GitHub",
+      sourceFamily: "github.com",
+      publishedAt: "2026-08-18T21:13:43.000Z",
+      observedAt: capturedAt,
+      httpStatus: 200,
+      temporalStatus: "current",
+      reliability: 1,
+      spoofable: true,
+      attributes: {
+        sha: VERIFIED_GITHUB_STRONGEST_SHA,
+        repository: "torvalds/linux",
+        login: "torvalds",
+        signature: "unsigned",
+      },
+    }),
+  );
   search.linkEvidence(linuxDocEntry, linuxDoc);
   search.linkEvidence(foundationEntry, foundation);
   search.linkEvidence(commitEntry, commit);
@@ -841,11 +934,16 @@ async function buildLinus(): Promise<GeneratedExample> {
     },
   ]);
 
-  advance(engine, "calibrate", "The non-Git Linux Foundation anchor lifts the resolved candidate beyond the spoofable-only cap; the Git-specific finding retains its caveat.");
+  advance(
+    engine,
+    "calibrate",
+    "The non-Git Linux Foundation anchor lifts the resolved candidate beyond the spoofable-only cap; the Git-specific finding retains its caveat.",
+  );
   engine.addFinding({
     candidateId: candidate.id,
     title: "Exact email resolves to Linus Torvalds in the bounded public record",
-    description: "Two independent source families identify Linus Torvalds: the Linux guide publishes the exact supplied email, and the Linux Foundation names him as a Fellow.",
+    description:
+      "Two independent source families identify Linus Torvalds: the Linux guide publishes the exact supplied email, and the Linux Foundation names him as a Fellow.",
     category: "identity",
     evidenceIds: [linuxDoc, foundation],
     counterEvidenceIds: [],
@@ -853,7 +951,8 @@ async function buildLinus(): Promise<GeneratedExample> {
   engine.addFinding({
     candidateId: candidate.id,
     title: "Public GitHub codegraph links the email to @torvalds",
-    description: "GitHub's commit API returned an immutable commit in torvalds/linux, linked it to @torvalds with an exact author-email match, and reported it unsigned.",
+    description:
+      "GitHub's commit API returned an immutable commit in torvalds/linux, linked it to @torvalds with an exact author-email match, and reported it unsigned.",
     category: "online_presence",
     evidenceIds: [commit],
     counterEvidenceIds: [],
@@ -879,18 +978,27 @@ async function buildLinus(): Promise<GeneratedExample> {
 async function buildChris(): Promise<GeneratedExample> {
   const clock = createSequenceClock(capturedAt, 7);
   const ids = createDeterministicIdFactory("chris_replay");
-  const engine = new InvestigationEngine(input(chrisInputJson), { clock, ids }, {
-    runId: "replay-chris-anderson-ted-v2",
-  });
-  const search = new ReplaySearchGraph(engine, [
-    "fetch_public_source",
-    "wayback_profile_history",
-  ]);
+  const engine = new InvestigationEngine(
+    input(chrisInputJson),
+    { clock, ids },
+    {
+      runId: "replay-chris-anderson-ted-v2",
+    },
+  );
+  const search = new ReplaySearchGraph(engine, ["fetch_public_source", "wayback_profile_history"]);
 
   advance(engine, "classify", "The query provides a person's name plus TED as an organization constraint.");
-  advance(engine, "plan", "Fetch the TED-constrained profile and actively search for same-name professional candidates before selection.");
+  advance(
+    engine,
+    "plan",
+    "Fetch the TED-constrained profile and actively search for same-name professional candidates before selection.",
+  );
   search.seed();
-  advance(engine, "discover", "Direct profiles reveal two public professionals named Chris Anderson and require explicit separation.");
+  advance(
+    engine,
+    "discover",
+    "Direct profiles reveal two public professionals named Chris Anderson and require explicit separation.",
+  );
 
   const selected = engine.addCandidate({ displayName: "Chris Anderson" }).candidate;
   const decoy = engine.addCandidate({ displayName: "Chris Anderson" }).candidate;
@@ -941,71 +1049,91 @@ async function buildChris(): Promise<GeneratedExample> {
     search.outcome(entry, "verified");
   }
 
-  advance(engine, "separate_candidates", "Name equality is weak evidence: the TED leader and the former WIRED editor/3DR executive remain separate candidates with separate ledgers.");
-  advance(engine, "corroborate", "Admit the direct TED and WIRED records to their own candidate IDs and preserve the organization conflict.");
+  advance(
+    engine,
+    "separate_candidates",
+    "Name equality is weak evidence: the TED leader and the former WIRED editor/3DR executive remain separate candidates with separate ledgers.",
+  );
+  advance(
+    engine,
+    "corroborate",
+    "Admit the direct TED and WIRED records to their own candidate IDs and preserve the organization conflict.",
+  );
 
-  const tedProfile = admit(engine, verifiedDirectEvidence("req-ted-selected", 0, tedSelectedEntry.actionId, {
-    candidateId: selected.id,
-    sourceUrl: "https://www.ted.com/speakers/chris_anderson_ted",
-    queryUrl: null,
-    sourceType: "official_profile",
-    title: "Chris Anderson — TED speaker profile",
-    publisher: "TED",
-    sourceFamily: "ted.com",
-    observedAt: capturedAt,
-    httpStatus: 200,
-    temporalStatus: "current",
-    reliability: 1,
-    spoofable: false,
-    attributes: { organization: "TED", role: "Chairman, TED" },
-  }));
-  const tedEmployment = admit(engine, verifiedDirectEvidence("req-ted-selected", 1, tedSelectedEntry.actionId, {
-    candidateId: selected.id,
-    sourceUrl: "https://www.ted.com/speakers/chris_anderson_ted",
-    queryUrl: null,
-    sourceType: "official_profile",
-    title: "Chris Anderson — TED leadership",
-    publisher: "TED",
-    sourceFamily: "ted.com",
-    observedAt: capturedAt,
-    httpStatus: 200,
-    temporalStatus: "current",
-    reliability: 1,
-    spoofable: false,
-  }));
-  const tedDecoy = admit(engine, verifiedDirectEvidence("req-ted-decoy", 0, tedDecoyEntry.actionId, {
-    candidateId: decoy.id,
-    // The disambiguation explicitly denies this speaker is the TED curator, so
-    // it is admitted as a contradiction that grounds the decoy's conflict. It is
-    // a conference-published disambiguation note (tier-3 institutional document),
-    // not a first-party profile.
-    disposition: "contradicts",
-    sourceUrl: "https://www.ted.com/speakers/chris_anderson_wired",
-    queryUrl: null,
-    sourceType: "public_document",
-    title: "Chris Anderson — separate TED speaker profile",
-    publisher: "TED",
-    sourceFamily: "ted.com",
-    observedAt: capturedAt,
-    httpStatus: 200,
-    temporalStatus: "current",
-    reliability: 1,
-    spoofable: false,
-  }));
-  const wiredDecoy = admit(engine, verifiedDirectEvidence("req-wired-decoy", 0, wiredDecoyEntry.actionId, {
-    candidateId: decoy.id,
-    sourceUrl: "https://www.wired.com/story/airware-drones/",
-    queryUrl: null,
-    sourceType: "news",
-    title: "Airware drones",
-    publisher: "WIRED",
-    sourceFamily: "wired.com",
-    observedAt: capturedAt,
-    httpStatus: 200,
-    temporalStatus: "historical",
-    reliability: 0.9,
-    spoofable: false,
-  }));
+  const tedProfile = admit(
+    engine,
+    verifiedDirectEvidence("req-ted-selected", 0, tedSelectedEntry.actionId, {
+      candidateId: selected.id,
+      sourceUrl: "https://www.ted.com/speakers/chris_anderson_ted",
+      queryUrl: null,
+      sourceType: "official_profile",
+      title: "Chris Anderson — TED speaker profile",
+      publisher: "TED",
+      sourceFamily: "ted.com",
+      observedAt: capturedAt,
+      httpStatus: 200,
+      temporalStatus: "current",
+      reliability: 1,
+      spoofable: false,
+      attributes: { organization: "TED", role: "Chairman, TED" },
+    }),
+  );
+  const tedEmployment = admit(
+    engine,
+    verifiedDirectEvidence("req-ted-selected", 1, tedSelectedEntry.actionId, {
+      candidateId: selected.id,
+      sourceUrl: "https://www.ted.com/speakers/chris_anderson_ted",
+      queryUrl: null,
+      sourceType: "official_profile",
+      title: "Chris Anderson — TED leadership",
+      publisher: "TED",
+      sourceFamily: "ted.com",
+      observedAt: capturedAt,
+      httpStatus: 200,
+      temporalStatus: "current",
+      reliability: 1,
+      spoofable: false,
+    }),
+  );
+  const tedDecoy = admit(
+    engine,
+    verifiedDirectEvidence("req-ted-decoy", 0, tedDecoyEntry.actionId, {
+      candidateId: decoy.id,
+      // The disambiguation explicitly denies this speaker is the TED curator, so
+      // it is admitted as a contradiction that grounds the decoy's conflict. It is
+      // a conference-published disambiguation note (tier-3 institutional document),
+      // not a first-party profile.
+      disposition: "contradicts",
+      sourceUrl: "https://www.ted.com/speakers/chris_anderson_wired",
+      queryUrl: null,
+      sourceType: "public_document",
+      title: "Chris Anderson — separate TED speaker profile",
+      publisher: "TED",
+      sourceFamily: "ted.com",
+      observedAt: capturedAt,
+      httpStatus: 200,
+      temporalStatus: "current",
+      reliability: 1,
+      spoofable: false,
+    }),
+  );
+  const wiredDecoy = admit(
+    engine,
+    verifiedDirectEvidence("req-wired-decoy", 0, wiredDecoyEntry.actionId, {
+      candidateId: decoy.id,
+      sourceUrl: "https://www.wired.com/story/airware-drones/",
+      queryUrl: null,
+      sourceType: "news",
+      title: "Airware drones",
+      publisher: "WIRED",
+      sourceFamily: "wired.com",
+      observedAt: capturedAt,
+      httpStatus: 200,
+      temporalStatus: "historical",
+      reliability: 0.9,
+      spoofable: false,
+    }),
+  );
   search.linkEvidence(tedSelectedEntry, tedProfile);
   search.linkEvidence(tedSelectedEntry, tedEmployment);
   search.linkEvidence(tedDecoyEntry, tedDecoy);
@@ -1099,11 +1227,16 @@ async function buildChris(): Promise<GeneratedExample> {
     },
   ]);
 
-  advance(engine, "calibrate", "The TED-constrained profile supplies a unique strong anchor and clear runner-up margin; decoy evidence is quarantined rather than cited across candidates.");
+  advance(
+    engine,
+    "calibrate",
+    "The TED-constrained profile supplies a unique strong anchor and clear runner-up margin; decoy evidence is quarantined rather than cited across candidates.",
+  );
   engine.addFinding({
     candidateId: selected.id,
     title: "The TED-constrained identity is Chris Anderson, Chairman, TED",
-    description: "TED's direct profile exactly names Chris Anderson as Chairman, TED and supplies a candidate-specific official profile URL.",
+    description:
+      "TED's direct profile exactly names Chris Anderson as Chairman, TED and supplies a candidate-specific official profile URL.",
     category: "identity",
     evidenceIds: [tedProfile],
     counterEvidenceIds: [],
@@ -1112,7 +1245,8 @@ async function buildChris(): Promise<GeneratedExample> {
   engine.addFinding({
     candidateId: selected.id,
     title: "TED records his conference leadership from 2002",
-    description: "The official profile says Anderson became curator of the TED Conference in 2002 and currently labels him Chairman, TED.",
+    description:
+      "The official profile says Anderson became curator of the TED Conference in 2002 and currently labels him Chairman, TED.",
     category: "employment",
     evidenceIds: [tedEmployment],
     counterEvidenceIds: [],
@@ -1140,13 +1274,25 @@ async function buildChris(): Promise<GeneratedExample> {
 async function buildPython(): Promise<GeneratedExample> {
   const clock = createSequenceClock(capturedAt, 7);
   const ids = createDeterministicIdFactory("python_replay");
-  const engine = new InvestigationEngine(input(pythonInputJson), { clock, ids }, {
-    runId: "replay-python-creator-v2",
-  });
+  const engine = new InvestigationEngine(
+    input(pythonInputJson),
+    { clock, ids },
+    {
+      runId: "replay-python-creator-v2",
+    },
+  );
   const search = new ReplaySearchGraph(engine, ["fetch_public_source"]);
 
-  advance(engine, "classify", "The query is a role-only public figure request: resolve the creator of Python without assuming a name.");
-  advance(engine, "plan", "Use the official Python site and the candidate's public biography as independent direct sources.");
+  advance(
+    engine,
+    "classify",
+    "The query is a role-only public figure request: resolve the creator of Python without assuming a name.",
+  );
+  advance(
+    engine,
+    "plan",
+    "Use the official Python site and the candidate's public biography as independent direct sources.",
+  );
   search.seed();
   advance(engine, "discover", "Both direct sources name the same person and describe the same unique creator role.");
 
@@ -1183,37 +1329,51 @@ async function buildPython(): Promise<GeneratedExample> {
   );
   search.outcome(pythonForewordEntry, "verified");
 
-  advance(engine, "separate_candidates", "The role phrase remains a clue until two direct sources converge on the same named candidate and unique personal domain.");
-  advance(engine, "corroborate", "Admit the official ecosystem foreword and the candidate's public biography as two independent source families.");
+  advance(
+    engine,
+    "separate_candidates",
+    "The role phrase remains a clue until two direct sources converge on the same named candidate and unique personal domain.",
+  );
+  advance(
+    engine,
+    "corroborate",
+    "Admit the official ecosystem foreword and the candidate's public biography as two independent source families.",
+  );
 
-  const pythonForeword = admit(engine, verifiedDirectEvidence("req-python-foreword", 0, pythonForewordEntry.actionId, {
-    candidateId: candidate.id,
-    sourceUrl: "https://www.python.org/doc/essays/foreword/",
-    queryUrl: null,
-    sourceType: "public_document",
-    title: "Foreword for Programming Python",
-    publisher: "Python Software Foundation",
-    sourceFamily: "python.org",
-    observedAt: capturedAt,
-    httpStatus: 200,
-    temporalStatus: "historical",
-    reliability: 1,
-    spoofable: false,
-  }));
-  const publicBio = admit(engine, verifiedDirectEvidence("req-guido-bio", 0, publicBioEntry.actionId, {
-    candidateId: candidate.id,
-    sourceUrl: "https://gvanrossum.github.io/bio",
-    queryUrl: null,
-    sourceType: "official_profile",
-    title: "Guido van Rossum — brief bio",
-    publisher: "Guido van Rossum",
-    sourceFamily: "github.io",
-    observedAt: capturedAt,
-    httpStatus: 200,
-    temporalStatus: "current",
-    reliability: 1,
-    spoofable: false,
-  }));
+  const pythonForeword = admit(
+    engine,
+    verifiedDirectEvidence("req-python-foreword", 0, pythonForewordEntry.actionId, {
+      candidateId: candidate.id,
+      sourceUrl: "https://www.python.org/doc/essays/foreword/",
+      queryUrl: null,
+      sourceType: "public_document",
+      title: "Foreword for Programming Python",
+      publisher: "Python Software Foundation",
+      sourceFamily: "python.org",
+      observedAt: capturedAt,
+      httpStatus: 200,
+      temporalStatus: "historical",
+      reliability: 1,
+      spoofable: false,
+    }),
+  );
+  const publicBio = admit(
+    engine,
+    verifiedDirectEvidence("req-guido-bio", 0, publicBioEntry.actionId, {
+      candidateId: candidate.id,
+      sourceUrl: "https://gvanrossum.github.io/bio",
+      queryUrl: null,
+      sourceType: "official_profile",
+      title: "Guido van Rossum — brief bio",
+      publisher: "Guido van Rossum",
+      sourceFamily: "github.io",
+      observedAt: capturedAt,
+      httpStatus: 200,
+      temporalStatus: "current",
+      reliability: 1,
+      spoofable: false,
+    }),
+  );
   search.linkEvidence(pythonForewordEntry, pythonForeword);
   search.linkEvidence(publicBioEntry, publicBio);
 
@@ -1265,11 +1425,16 @@ async function buildPython(): Promise<GeneratedExample> {
     },
   ]);
 
-  advance(engine, "calibrate", "Two independent direct source families support the same unique creator role with no hard conflict.");
+  advance(
+    engine,
+    "calibrate",
+    "Two independent direct source families support the same unique creator role with no hard conflict.",
+  );
   engine.addFinding({
     candidateId: candidate.id,
     title: "The creator of Python resolves to Guido van Rossum",
-    description: "The official Python site and van Rossum's public biography independently identify him as Python's creator.",
+    description:
+      "The official Python site and van Rossum's public biography independently identify him as Python's creator.",
     category: "identity",
     evidenceIds: [publicBio],
     counterEvidenceIds: [],
@@ -1277,7 +1442,8 @@ async function buildPython(): Promise<GeneratedExample> {
   engine.addFinding({
     candidateId: candidate.id,
     title: "Van Rossum created the Python programming language",
-    description: "His public biography states that he created Python in 1990, while the official Python foreword independently describes his creator role.",
+    description:
+      "His public biography states that he created Python in 1990, while the official Python foreword independently describes his creator role.",
     category: "project",
     evidenceIds: [pythonForeword],
     counterEvidenceIds: [],
@@ -1315,9 +1481,12 @@ async function writeExample(example: GeneratedExample): Promise<void> {
     "python-creator": pythonManifestJson as unknown as JsonObject,
   };
   const descriptions: Record<string, string> = {
-    "linus-codegraph": "A scripted reconstruction from source-verified public captures that connects an exact user-supplied email to Linux documentation and bounded GitHub commit metadata while preserving the spoofable-metadata confidence cap.",
-    "chris-anderson-ted": "A scripted reconstruction from source-verified public captures that selects the TED leader and explicitly quarantines the former WIRED editor and 3DR executive as a different Chris Anderson.",
-    "python-creator": "A scripted reconstruction from source-verified public captures that resolves a role description to Guido van Rossum using the official Python site and his public biography.",
+    "linus-codegraph":
+      "A scripted reconstruction from source-verified public captures that connects an exact user-supplied email to Linux documentation and bounded GitHub commit metadata while preserving the spoofable-metadata confidence cap.",
+    "chris-anderson-ted":
+      "A scripted reconstruction from source-verified public captures that selects the TED leader and explicitly quarantines the former WIRED editor and 3DR executive as a different Chris Anderson.",
+    "python-creator":
+      "A scripted reconstruction from source-verified public captures that resolves a role description to Guido van Rossum using the official Python site and his public biography.",
   };
   const actionCaptureIds = Object.fromEntries(
     Object.entries(example.captureActions).map(([captureId, actionId]) => [actionId, captureId]),

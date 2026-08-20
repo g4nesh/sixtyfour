@@ -128,10 +128,7 @@ function clampInteger(value: number | undefined, fallback: number, min: number, 
 function normalizePolicy(policy: HardenedFetchPolicy): NormalizedPolicy {
   const allowedHostnames = (policy.allowedHostnames ?? []).map(normalizeHostname);
   if (allowedHostnames.length === 0 && !policy.resolveHostname) {
-    throw new HardenedFetchError(
-      "blocked_host",
-      "A hostname allowlist or a DNS validation callback is required.",
-    );
+    throw new HardenedFetchError("blocked_host", "A hostname allowlist or a DNS validation callback is required.");
   }
 
   return {
@@ -390,7 +387,10 @@ async function readBoundedResponse(response: Response, maxBytes: number, safeRes
   return bytes;
 }
 
-function createAttemptSignal(external: AbortSignal | undefined, timeoutMs: number): {
+function createAttemptSignal(
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+): {
   signal: AbortSignal;
   didTimeout: () => boolean;
   cleanup: () => void;
@@ -466,11 +466,7 @@ function redirectedMethod(status: number, method: string, policy: NormalizedPoli
   return status === 303 || ((status === 301 || status === 302) && method === "POST") ? "GET" : method;
 }
 
-function withTransportCounts(
-  error: HardenedFetchError,
-  requests: number,
-  attempt: number,
-): HardenedFetchError {
+function withTransportCounts(error: HardenedFetchError, requests: number, attempt: number): HardenedFetchError {
   if (error.requests === requests && error.attempt === attempt) return error;
   return new HardenedFetchError(error.code, error.message, {
     retryable: error.retryable,
@@ -505,9 +501,7 @@ export function createHardenedFetch(policyInput: HardenedFetchPolicy) {
       throw new HardenedFetchError("method_not_allowed", "The outbound HTTP method is not allowed.");
     }
     let currentUrl = await validateOutboundUrl(original.url, policy, init.signal ?? undefined);
-    const requestBody = method === "GET" || method === "HEAD"
-      ? undefined
-      : await original.clone().arrayBuffer();
+    const requestBody = method === "GET" || method === "HEAD" ? undefined : await original.clone().arrayBuffer();
     let headers = new Headers(original.headers);
     const redirects: string[] = [];
     let attempt = 0;
@@ -524,13 +518,14 @@ export function createHardenedFetch(policyInput: HardenedFetchPolicy) {
         if (policy.beforeRequest) {
           let granted = false;
           try {
-            granted = (await policy.beforeRequest({
-              safeUrl: safeUrl(attemptUrl),
-              method: attemptMethod,
-              attempt,
-              redirect: redirectCount,
-              requestNumber: requestCount + 1,
-            })) !== false;
+            granted =
+              (await policy.beforeRequest({
+                safeUrl: safeUrl(attemptUrl),
+                method: attemptMethod,
+                attempt,
+                redirect: redirectCount,
+                requestNumber: requestCount + 1,
+              })) !== false;
           } catch (error) {
             throw new HardenedFetchError("budget_exhausted", "The outbound request budget check failed closed.", {
               safeUrl: safeUrl(attemptUrl),
@@ -653,7 +648,9 @@ export function createHardenedFetch(policyInput: HardenedFetchPolicy) {
         }
         let bytes: Uint8Array;
         try {
-          bytes = hasBody ? await readBoundedResponse(response, policy.maxBytes, safeUrl(attemptUrl)) : new Uint8Array();
+          bytes = hasBody
+            ? await readBoundedResponse(response, policy.maxBytes, safeUrl(attemptUrl))
+            : new Uint8Array();
         } catch (error) {
           attemptSignal.cleanup();
           if (error instanceof HardenedFetchError) {

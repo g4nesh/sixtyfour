@@ -12,20 +12,11 @@ after(async () => vite.close());
 
 const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 const agent = await vite.ssrLoadModule("/lib/agent/index.ts");
-const {
-  createLiveDependencies,
-  sourceAllowedForCandidate,
-  streamLiveResearch,
-} = await vite.ssrLoadModule("/lib/live/orchestrator.ts");
+const { createLiveDependencies, sourceAllowedForCandidate, streamLiveResearch } =
+  await vite.ssrLoadModule("/lib/live/orchestrator.ts");
 const { fetchPublicSource } = await vite.ssrLoadModule("/lib/tools/public-source.ts");
 
-const TOKEN_FIELDS = [
-  "inputTokens",
-  "cachedInputTokens",
-  "outputTokens",
-  "thinkingTokens",
-  "costUsd",
-];
+const TOKEN_FIELDS = ["inputTokens", "cachedInputTokens", "outputTokens", "thinkingTokens", "costUsd"];
 
 function jsonResponse(value, init = {}) {
   return new Response(JSON.stringify(value), {
@@ -34,28 +25,36 @@ function jsonResponse(value, init = {}) {
   });
 }
 
-function completion(callNumber, argumentsValue, usage = {
-  prompt_tokens: 1,
-  completion_tokens: 1,
-  reasoning_tokens: 1,
-  prompt_tokens_details: { cached_tokens: 1 },
-  cost: 0.001,
-}) {
+function completion(
+  callNumber,
+  argumentsValue,
+  usage = {
+    prompt_tokens: 1,
+    completion_tokens: 1,
+    reasoning_tokens: 1,
+    prompt_tokens_details: { cached_tokens: 1 },
+    cost: 0.001,
+  },
+) {
   return jsonResponse({
     id: `gen-${callNumber}`,
     model: "test/model",
-    choices: [{
-      finish_reason: "tool_calls",
-      message: {
-        role: "assistant",
-        content: null,
-        tool_calls: [{
-          id: `call-${callNumber}`,
-          type: "function",
-          function: { name: "propose_research_batch", arguments: argumentsValue },
-        }],
+    choices: [
+      {
+        finish_reason: "tool_calls",
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: `call-${callNumber}`,
+              type: "function",
+              function: { name: "propose_research_batch", arguments: argumentsValue },
+            },
+          ],
+        },
       },
-    }],
+    ],
     ...(usage === null ? {} : { usage }),
   });
 }
@@ -72,7 +71,8 @@ async function liveEvents(fetch, signal) {
     model: "test/model",
     fetch,
     ...(signal ? { signal } : {}),
-  })) events.push(event);
+  }))
+    events.push(event);
   return events;
 }
 
@@ -110,10 +110,12 @@ test("arbitrary-host public fetches require DNS validation and block private ans
 test("candidate source authorization is exact, candidate-scoped, and rejects secret query keys", () => {
   const state = {
     evidence: [{ candidateId: "candidate-1", sourceUrl: "https://example.com/profile?view=public" }],
-    candidates: [{
-      id: "candidate-1",
-      signals: [{ kind: "profile_url", value: "https://profiles.example/person" }],
-    }],
+    candidates: [
+      {
+        id: "candidate-1",
+        signals: [{ kind: "profile_url", value: "https://profiles.example/person" }],
+      },
+    ],
   };
   assert.equal(
     sourceAllowedForCandidate(state, "https://example.com/profile?view=public", "candidate-1"),
@@ -131,42 +133,51 @@ test("candidate source authorization is exact, candidate-scoped, and rejects sec
 
 test("GitHub codegraph accepts every exact email explicitly present in the request", async () => {
   let observedQuery = null;
-  const dependencies = createLiveDependencies({
-    schemaVersion: domain.SCHEMA_VERSION,
-    query: "first@example.com second@example.com",
-    requestedDepth: "quick",
-  }, {
-    apiKey: "test-key",
-    model: "test/model",
-    fetch: async (url) => {
-      observedQuery = new URL(String(url)).searchParams.get("q");
-      return jsonResponse({ total_count: 0, incomplete_results: false, items: [] }, {
-        headers: { "x-ratelimit-remaining": "9" },
-      });
+  const dependencies = createLiveDependencies(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      query: "first@example.com second@example.com",
+      requestedDepth: "quick",
     },
-  });
-  const result = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-email",
-    tool: "github_email_codegraph",
-    purpose: "Use the second exact supplied email.",
-    arguments: { email: "second@example.com" },
-    budgetClass: "search",
-  }, {
-    schemaVersion: domain.SCHEMA_VERSION,
-    state: {
-      target: {
-        identifiers: [
-          { kind: "email", normalizedValue: "first@example.com", provenance: "user_input" },
-          { kind: "email", normalizedValue: "second@example.com", provenance: "user_input" },
-        ],
+    {
+      apiKey: "test-key",
+      model: "test/model",
+      fetch: async (url) => {
+        observedQuery = new URL(String(url)).searchParams.get("q");
+        return jsonResponse(
+          { total_count: 0, incomplete_results: false, items: [] },
+          {
+            headers: { "x-ratelimit-remaining": "9" },
+          },
+        );
       },
     },
-    modelAccounting: {
-      reserve: () => false,
-      settle: () => assert.fail("GitHub should not use model accounting"),
+  );
+  const result = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-email",
+      tool: "github_email_codegraph",
+      purpose: "Use the second exact supplied email.",
+      arguments: { email: "second@example.com" },
+      budgetClass: "search",
     },
-  });
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: {
+        target: {
+          identifiers: [
+            { kind: "email", normalizedValue: "first@example.com", provenance: "user_input" },
+            { kind: "email", normalizedValue: "second@example.com", provenance: "user_input" },
+          ],
+        },
+      },
+      modelAccounting: {
+        reserve: () => false,
+        settle: () => assert.fail("GitHub should not use model accounting"),
+      },
+    },
+  );
   assert.equal(result.status, "not_found");
   assert.equal(observedQuery, "author-email:second@example.com is:public");
 });
@@ -175,14 +186,15 @@ test("planner repairs charge every provider request, token class, and cached inp
   let calls = 0;
   const events = await liveEvents(async () => {
     calls += 1;
-    const argumentsValue = calls % 2 === 1
-      ? JSON.stringify({})
-      : JSON.stringify({
-          kind: "stop",
-          decisionSummary: "No additional bounded action.",
-          nextPhase: null,
-          actions: [],
-        });
+    const argumentsValue =
+      calls % 2 === 1
+        ? JSON.stringify({})
+        : JSON.stringify({
+            kind: "stop",
+            decisionSummary: "No additional bounded action.",
+            nextPhase: null,
+            actions: [],
+          });
     return completion(calls, argumentsValue);
   });
   const terminal = events.findLast((event) => event.name === "result.terminal");
@@ -196,8 +208,14 @@ test("planner repairs charge every provider request, token class, and cached inp
   assert.equal(terminal.payload.report.usage.costUsd, 0.004);
   assert.equal(terminal.usage.cachedInputTokens, 4);
   const plannerSpans = events.filter((event) => event.kind === "span_end" && event.name === "planner.decision");
-  assert.deepEqual(plannerSpans.map((event) => event.usage.llmCalls), [2, 2]);
-  assert.deepEqual(plannerSpans.map((event) => event.usage.networkRequests), [2, 2]);
+  assert.deepEqual(
+    plannerSpans.map((event) => event.usage.llmCalls),
+    [2, 2],
+  );
+  assert.deepEqual(
+    plannerSpans.map((event) => event.usage.networkRequests),
+    [2, 2],
+  );
 });
 
 test("concurrent model actions cannot reserve beyond the shared LLM budget", async () => {
@@ -244,15 +262,11 @@ test("concurrent model actions cannot reserve beyond the shared LLM budget", asy
       },
     },
     {
-      availableTools: [
-        "model_probe_1",
-        "model_probe_2",
-        "model_probe_3",
-        "model_probe_4",
-      ],
+      availableTools: ["model_probe_1", "model_probe_2", "model_probe_3", "model_probe_4"],
       budget: { maxLlmCalls: 3, maxActionsPerTurn: 4 },
     },
-  )) updates.push(update);
+  ))
+    updates.push(update);
   const report = updates.at(-1).report;
   assert.equal(actionReservations, 2);
   assert.equal(report.usage.llmCalls, 3);
@@ -266,12 +280,16 @@ test("missing provider usage remains null in the terminal aggregate", async () =
   let calls = 0;
   const events = await liveEvents(async () => {
     calls += 1;
-    return completion(calls, JSON.stringify({
-      kind: "stop",
-      decisionSummary: "No additional bounded action.",
-      nextPhase: null,
-      actions: [],
-    }), null);
+    return completion(
+      calls,
+      JSON.stringify({
+        kind: "stop",
+        decisionSummary: "No additional bounded action.",
+        nextPhase: null,
+        actions: [],
+      }),
+      null,
+    );
   });
   const terminal = events.findLast((event) => event.name === "result.terminal");
   assert.ok(calls > 0);
@@ -285,19 +303,19 @@ test("missing provider usage remains null in the terminal aggregate", async () =
 
 test("an abort during an in-flight planner request terminates as canceled", async () => {
   const controller = new AbortController();
-  const blockedFetch = (_request, init = {}) => new Promise((_resolve, reject) => {
-    const rejectAbort = () => reject(new DOMException("Aborted", "AbortError"));
-    if (init.signal?.aborted) rejectAbort();
-    else init.signal?.addEventListener("abort", rejectAbort, { once: true });
-  });
+  const blockedFetch = (_request, init = {}) =>
+    new Promise((_resolve, reject) => {
+      const rejectAbort = () => reject(new DOMException("Aborted", "AbortError"));
+      if (init.signal?.aborted) rejectAbort();
+      else init.signal?.addEventListener("abort", rejectAbort, { once: true });
+    });
   setTimeout(() => controller.abort("test cancellation"), 20);
   const events = await liveEvents(blockedFetch, controller.signal);
   const terminals = events.filter((event) => event.name === "result.terminal");
   assert.equal(terminals.length, 1);
   assert.equal(terminals[0].payload.report.status, "canceled");
   assert.equal(terminals[0].payload.report.stop.reason, "cancelled");
-  const plannerEnds = events.filter((event) =>
-    event.kind === "span_end" && event.name === "planner.decision");
+  const plannerEnds = events.filter((event) => event.kind === "span_end" && event.name === "planner.decision");
   assert.equal(plannerEnds.length, 1);
   assert.equal(plannerEnds[0].status, "canceled");
 });

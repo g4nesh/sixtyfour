@@ -36,12 +36,13 @@ const MERGE_GRADE_SIGNAL_KINDS = new Set<IdentitySignalKind>([
 ]);
 
 function isResolutionGrade(signal: IdentitySignal): boolean {
-  return isMergeGrade(signal) || (
-    signal.kind === "cross_source_match"
-    && signal.strength === "strong"
-    && signal.assurance === "corroborated"
-    && signal.sourceFamily?.startsWith("cross-source:") === true
-    && Boolean(signal.sourceEvidenceId)
+  return (
+    isMergeGrade(signal) ||
+    (signal.kind === "cross_source_match" &&
+      signal.strength === "strong" &&
+      signal.assurance === "corroborated" &&
+      signal.sourceFamily?.startsWith("cross-source:") === true &&
+      Boolean(signal.sourceEvidenceId))
   );
 }
 
@@ -54,12 +55,8 @@ export function normalizeSignal(signal: IdentitySignal): IdentitySignal {
   return {
     ...signal,
     value,
-    normalizedValue: signal.normalizedValue
-      ? normalizeComparable(signal.normalizedValue)
-      : normalizeComparable(value),
-    ...(signal.sourceFamily
-      ? { sourceFamily: signal.sourceFamily.toLocaleLowerCase("en-US") }
-      : {}),
+    normalizedValue: signal.normalizedValue ? normalizeComparable(signal.normalizedValue) : normalizeComparable(value),
+    ...(signal.sourceFamily ? { sourceFamily: signal.sourceFamily.toLocaleLowerCase("en-US") } : {}),
   };
 }
 
@@ -98,21 +95,14 @@ function matchesTarget(signal: IdentitySignal, target: ParsedTarget): boolean {
     case "email":
     case "github_commit_email":
       return target.identifiers.some(
-        (identifier) =>
-          identifier.kind === "email" && identifier.normalizedValue === signal.normalizedValue,
+        (identifier) => identifier.kind === "email" && identifier.normalizedValue === signal.normalizedValue,
       );
     case "organization":
-      return target.organizationHints.some(
-        (organization) => organization.normalizedName === signal.normalizedValue,
-      );
+      return target.organizationHints.some((organization) => organization.normalizedName === signal.normalizedValue);
     case "role":
-      return target.roleHints.some(
-        (role) => normalizeComparable(role) === signal.normalizedValue,
-      );
+      return target.roleHints.some((role) => normalizeComparable(role) === signal.normalizedValue);
     case "location":
-      return target.locationHints.some(
-        (location) => normalizeComparable(location) === signal.normalizedValue,
-      );
+      return target.locationHints.some((location) => normalizeComparable(location) === signal.normalizedValue);
     case "conflict":
       return true;
     default:
@@ -123,25 +113,21 @@ function matchesTarget(signal: IdentitySignal, target: ParsedTarget): boolean {
 }
 
 function isIndependent(signal: IdentitySignal): boolean {
-  return Boolean(signal.sourceFamily && signal.sourceEvidenceId)
-    || signal.kind === "email"
-    || signal.kind === "name";
+  return Boolean(signal.sourceFamily && signal.sourceEvidenceId) || signal.kind === "email" || signal.kind === "name";
 }
 
 /**
  * Tool-proposed identity signals become trust-bearing only when their value,
  * candidate, and source family are all grounded by one admitted record.
  */
-export function identitySignalGroundedByEvidence(
-  signal: IdentitySignal,
-  evidence: EvidenceRecord,
-): boolean {
+export function identitySignalGroundedByEvidence(signal: IdentitySignal, evidence: EvidenceRecord): boolean {
   if (
-    evidence.disposition !== (signal.kind === "conflict" ? "contradicts" : "supports")
-    || evidence.sourceType === "search_result"
-    || signal.sourceEvidenceId !== evidence.id
-    || signal.sourceFamily?.toLocaleLowerCase("en-US") !== evidence.sourceFamily
-  ) return false;
+    evidence.disposition !== (signal.kind === "conflict" ? "contradicts" : "supports") ||
+    evidence.sourceType === "search_result" ||
+    signal.sourceEvidenceId !== evidence.id ||
+    signal.sourceFamily?.toLocaleLowerCase("en-US") !== evidence.sourceFamily
+  )
+    return false;
   const needle = normalizeComparable(signal.value);
   if (needle.replace(/\s+/g, "").length < 3) return false;
   const rawMaterial = [
@@ -188,8 +174,7 @@ export function identitySignalGroundedByEvidence(
     return rawMaterial.some((value) => value.toLocaleLowerCase("en-US").includes(email));
   }
   const tokenPhrase = ` ${needle} `;
-  return rawMaterial.some((value) =>
-    ` ${normalizeComparable(value)} `.includes(tokenPhrase));
+  return rawMaterial.some((value) => ` ${normalizeComparable(value)} `.includes(tokenPhrase));
 }
 
 function isMergeGrade(signal: IdentitySignal): boolean {
@@ -217,10 +202,7 @@ export function scoreCandidate(
   const scoredSignals = dedupeSignals(nameSignal ? [nameSignal, ...signals] : signals);
   const positiveByFamily = new Map<string, { weight: number; signal: IdentitySignal }>();
   const conflicting: IdentitySignal[] = [];
-  if (
-    target.normalizedName &&
-    normalizeComparable(candidate.displayName) !== target.normalizedName
-  ) {
+  if (target.normalizedName && normalizeComparable(candidate.displayName) !== target.normalizedName) {
     conflicting.push({
       kind: "conflict",
       value: `name mismatch: ${candidate.displayName}`,
@@ -245,7 +227,7 @@ export function scoreCandidate(
     weight = clamp(weight);
 
     const family = isIndependent(signal)
-      ? signal.sourceFamily ?? `${signal.kind}:${signal.normalizedValue}`
+      ? (signal.sourceFamily ?? `${signal.kind}:${signal.normalizedValue}`)
       : signal.kind;
     const current = positiveByFamily.get(family);
     if (!current || weight > current.weight) {
@@ -253,10 +235,7 @@ export function scoreCandidate(
     }
   }
 
-  const positive = 1 - [...positiveByFamily.values()].reduce(
-    (remaining, item) => remaining * (1 - item.weight),
-    1,
-  );
+  const positive = 1 - [...positiveByFamily.values()].reduce((remaining, item) => remaining * (1 - item.weight), 1);
   const penalty = Math.min(0.75, conflicting.length * 0.3);
   let total = clamp(positive - penalty);
 
@@ -267,8 +246,7 @@ export function scoreCandidate(
   );
   const hasIndependentCorroboration = identityBearing.some(
     (signal) =>
-      signal.kind !== "github_commit_email" &&
-      (signal.assurance === "verified" || signal.assurance === "corroborated"),
+      signal.kind !== "github_commit_email" && (signal.assurance === "verified" || signal.assurance === "corroborated"),
   );
   const onlySpoofableIdentity = hasSpoofableIdentity && !hasIndependentCorroboration;
   if (onlySpoofableIdentity) total = Math.min(total, 0.69);
@@ -314,12 +292,7 @@ export function candidateStatus(
   return "separate";
 }
 
-export function createCandidate(
-  draft: CandidateDraft,
-  target: ParsedTarget,
-  id: string,
-  timestamp: string,
-): Candidate {
+export function createCandidate(draft: CandidateDraft, target: ParsedTarget, id: string, timestamp: string): Candidate {
   const displayName = normalizeWhitespace(draft.displayName);
   if (!displayName) throw new TypeError("candidate displayName must not be empty");
   const signals = dedupeSignals(draft.signals ?? []);
@@ -375,12 +348,7 @@ export function canMergeCandidates(left: Candidate, right: Candidate): Candidate
   return { allowed: false, reason: "no_strong_identifier" };
 }
 
-export function mergeCandidates(
-  left: Candidate,
-  right: Candidate,
-  target: ParsedTarget,
-  timestamp: string,
-): Candidate {
+export function mergeCandidates(left: Candidate, right: Candidate, target: ParsedTarget, timestamp: string): Candidate {
   const decision = canMergeCandidates(left, right);
   if (!decision.allowed) {
     throw new Error(`candidate merge rejected: ${decision.reason}`);

@@ -32,12 +32,7 @@ function isAddressLiteral(value: string): boolean {
   return value.includes(":") && /^[0-9a-fA-F:.]+$/.test(value);
 }
 
-async function queryDoh(
-  endpoint: string,
-  hostname: string,
-  type: number,
-  signal?: AbortSignal,
-): Promise<string[]> {
+async function queryDoh(endpoint: string, hostname: string, type: number, signal?: AbortSignal): Promise<string[]> {
   const url = new URL(endpoint);
   url.searchParams.set("name", hostname);
   url.searchParams.set("type", String(type));
@@ -56,9 +51,7 @@ async function queryDoh(
 }
 
 /** Create a DoH-backed resolver returning A and AAAA address literals. */
-export function createDohResolver(
-  options: { endpoint?: string } = {},
-): HostnameResolver {
+export function createDohResolver(options: { endpoint?: string } = {}): HostnameResolver {
   const endpoint = options.endpoint ?? DEFAULT_DOH_ENDPOINT;
   return async (hostname: string, signal?: AbortSignal): Promise<readonly string[]> => {
     const host = hostname.trim().toLocaleLowerCase("en-US");

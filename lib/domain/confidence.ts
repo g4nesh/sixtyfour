@@ -1,10 +1,5 @@
 import { clamp, roundScore } from "./runtime";
-import type {
-  ConfidenceAssessment,
-  ConfidenceLabel,
-  EvidenceRecord,
-  EvidenceSourceType,
-} from "./types";
+import type { ConfidenceAssessment, ConfidenceLabel, EvidenceRecord, EvidenceSourceType } from "./types";
 
 export const SPOOFABLE_CONFIDENCE_CAP = 0.69;
 export const SINGLE_FAMILY_CONFIDENCE_CAP = 0.79;
@@ -54,10 +49,8 @@ export function assessConfidence(evidence: readonly EvidenceRecord[]): Confidenc
     }
   }
 
-  const supportScore = 1 - [...byFamily.values()].reduce(
-    (remaining, item) => remaining * (1 - evidenceWeight(item)),
-    1,
-  );
+  const supportScore =
+    1 - [...byFamily.values()].reduce((remaining, item) => remaining * (1 - evidenceWeight(item)), 1);
   const contradictionPenalty = Math.min(
     0.8,
     contradicting.reduce((sum, item) => sum + evidenceWeight(item) * 0.65, 0),
@@ -70,11 +63,7 @@ export function assessConfidence(evidence: readonly EvidenceRecord[]): Confidenc
     appliedCaps.push("single_source_family");
   }
 
-  if (
-    supporting.length > 0 &&
-    supporting.every((item) => item.spoofable) &&
-    score > SPOOFABLE_CONFIDENCE_CAP
-  ) {
+  if (supporting.length > 0 && supporting.every((item) => item.spoofable) && score > SPOOFABLE_CONFIDENCE_CAP) {
     score = SPOOFABLE_CONFIDENCE_CAP;
     appliedCaps.push("spoofable_only");
   }

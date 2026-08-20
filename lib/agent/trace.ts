@@ -11,14 +11,7 @@ import {
 } from "../domain/content-policy";
 
 export type TraceEventKind = "event" | "span_start" | "span_end";
-export type TraceStatus =
-  | "recorded"
-  | "started"
-  | "succeeded"
-  | "partial"
-  | "failed"
-  | "skipped"
-  | "canceled";
+export type TraceStatus = "recorded" | "started" | "succeeded" | "partial" | "failed" | "skipped" | "canceled";
 export type TraceSpanStatus = Exclude<TraceStatus, "recorded" | "started">;
 
 /** Normalized on every event; unavailable counters are null, never guessed. */
@@ -200,23 +193,39 @@ function shouldRemoveTraceKey(key: string): boolean {
 }
 
 const STRUCTURAL_ID_KEYS = new Set([
-  "id", "runid", "eventid", "spanid", "parentspanid", "candidateid", "evidenceid",
-  "findingid", "toolcallid", "sourceevidenceid",
+  "id",
+  "runid",
+  "eventid",
+  "spanid",
+  "parentspanid",
+  "candidateid",
+  "evidenceid",
+  "findingid",
+  "toolcallid",
+  "sourceevidenceid",
 ]);
 const STRUCTURAL_HASH_KEYS = new Set(["fingerprint", "contenthash", "sha"]);
 const STRUCTURAL_TIMESTAMP_KEYS = new Set([
-  "timestamp", "at", "createdat", "updatedat", "retrievedat", "observedat", "publishedat",
+  "timestamp",
+  "at",
+  "createdat",
+  "updatedat",
+  "retrievedat",
+  "observedat",
+  "publishedat",
   "generatedat",
 ]);
 
 const TRACE_URL_KEYS = new Set(["sourceurl", "canonicalurl", "queryurl", "url"]);
 
 function isMachineIdentifier(value: string): boolean {
-  return value.length <= 180
-    && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)
-    && !/^\d{10,15}$/.test(value)
-    && !/^\d{2,4}(?:-\d{2,4}){2,4}$/.test(value)
-    && !/(?:^|[_:.-])\d{3}-\d{3}-\d{4}(?:$|[_:.-])/.test(value);
+  return (
+    value.length <= 180 &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value) &&
+    !/^\d{10,15}$/.test(value) &&
+    !/^\d{2,4}(?:-\d{2,4}){2,4}$/.test(value) &&
+    !/(?:^|[_:.-])\d{3}-\d{3}-\d{4}(?:$|[_:.-])/.test(value)
+  );
 }
 
 function isCanonicalTimestamp(value: string): boolean {
@@ -226,9 +235,7 @@ function isCanonicalTimestamp(value: string): boolean {
 }
 
 function isTraceName(value: string): boolean {
-  return value.length > 0
-    && value.length <= 160
-    && /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/.test(value);
+  return value.length > 0 && value.length <= 160 && /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/.test(value);
 }
 
 function isStructuralHash(value: string): boolean {
@@ -246,9 +253,11 @@ function structuralTraceStringIsValid(key: string | undefined, value: string): b
 
 function isStructuralTraceStringKey(key: string): boolean {
   const normalized = normalizedKey(key);
-  return STRUCTURAL_ID_KEYS.has(normalized)
-    || STRUCTURAL_HASH_KEYS.has(normalized)
-    || STRUCTURAL_TIMESTAMP_KEYS.has(normalized);
+  return (
+    STRUCTURAL_ID_KEYS.has(normalized) ||
+    STRUCTURAL_HASH_KEYS.has(normalized) ||
+    STRUCTURAL_TIMESTAMP_KEYS.has(normalized)
+  );
 }
 
 function isTraceUrlKey(key: string | undefined): boolean {
@@ -273,17 +282,20 @@ function allowedEmailsFromPayload(value: JsonValue): ReadonlySet<string> {
   if (target === null || Array.isArray(target) || typeof target !== "object") return new Set();
   const identifiers = target.identifiers;
   if (!Array.isArray(identifiers)) return new Set();
-  return new Set(identifiers.flatMap((identifier) => {
-    if (
-      identifier === null
-      || Array.isArray(identifier)
-      || typeof identifier !== "object"
-      || identifier.kind !== "email"
-      || identifier.provenance !== "user_input"
-      || typeof identifier.normalizedValue !== "string"
-    ) return [];
-    return [identifier.normalizedValue.toLocaleLowerCase("en-US")];
-  }));
+  return new Set(
+    identifiers.flatMap((identifier) => {
+      if (
+        identifier === null ||
+        Array.isArray(identifier) ||
+        typeof identifier !== "object" ||
+        identifier.kind !== "email" ||
+        identifier.provenance !== "user_input" ||
+        typeof identifier.normalizedValue !== "string"
+      )
+        return [];
+      return [identifier.normalizedValue.toLocaleLowerCase("en-US")];
+    }),
+  );
 }
 
 function redactCredentialQueryParams(value: string): string {
@@ -310,11 +322,7 @@ function redactCredentialQueryParams(value: string): string {
   return changed ? url.toString() : value;
 }
 
-function containsForbiddenContentKey(
-  value: JsonValue,
-  key?: string,
-  options: ContentPolicyOptions = {},
-): boolean {
+function containsForbiddenContentKey(value: JsonValue, key?: string, options: ContentPolicyOptions = {}): boolean {
   if (Array.isArray(value)) {
     return value.some((item) => containsForbiddenContentKey(item, key, options));
   }
@@ -323,13 +331,11 @@ function containsForbiddenContentKey(
     const urlRedacted = redactCredentialQueryParams(value);
     if (urlRedacted !== value) return true;
     const privacyText = isTraceUrlKey(key) ? decodedUrlPrivacyText(value) : value;
-    return containsRestrictedPublicContent(privacyText, options)
-      || !structuralTraceStringIsValid(key, value);
+    return containsRestrictedPublicContent(privacyText, options) || !structuralTraceStringIsValid(key, value);
   }
   if (value === null || typeof value !== "object") return false;
   return Object.entries(value).some(
-    ([key, child]) =>
-      shouldRemoveTraceKey(key) || containsForbiddenContentKey(child, key, options),
+    ([key, child]) => shouldRemoveTraceKey(key) || containsForbiddenContentKey(child, key, options),
   );
 }
 
@@ -345,16 +351,13 @@ function isTraceUsage(value: unknown): value is TraceUsage {
   if (value === null || Array.isArray(value) || typeof value !== "object") return false;
   const usage = value as Record<string, unknown>;
   if (!TRACE_USAGE_COUNTERS.every((key) => isNullableCounter(usage[key]))) return false;
-  if (
-    !(
-      usage.unavailableReason === null
-      || (
-        isNonEmptyString(usage.unavailableReason)
-        && usage.unavailableReason.length <= 500
-        && !containsRestrictedPublicContent(usage.unavailableReason)
-      )
-    )
-  ) return false;
+  if (!(
+    usage.unavailableReason === null ||
+    (isNonEmptyString(usage.unavailableReason) &&
+      usage.unavailableReason.length <= 500 &&
+      !containsRestrictedPublicContent(usage.unavailableReason))
+  ))
+    return false;
   const hasUnavailable = TRACE_USAGE_COUNTERS.some((key) => usage[key] === null);
   return !hasUnavailable || isNonEmptyString(usage.unavailableReason);
 }
@@ -364,11 +367,7 @@ function isTraceUsage(value: unknown): value is TraceUsage {
  * `thinkingTokens` telemetry is kept; hidden content fields are removed
  * recursively before an event can enter the append-only log.
  */
-function sanitizeTraceValueInternal(
-  value: JsonValue,
-  options: ContentPolicyOptions,
-  key?: string,
-): JsonValue {
+function sanitizeTraceValueInternal(value: JsonValue, options: ContentPolicyOptions, key?: string): JsonValue {
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeTraceValueInternal(item, options, key));
   }
@@ -377,10 +376,7 @@ function sanitizeTraceValueInternal(
   }
   if (typeof value === "string") {
     const urlRedacted = redactCredentialQueryParams(value);
-    if (
-      isTraceUrlKey(key)
-      && containsRestrictedPublicContent(decodedUrlPrivacyText(urlRedacted), options)
-    ) {
+    if (isTraceUrlKey(key) && containsRestrictedPublicContent(decodedUrlPrivacyText(urlRedacted), options)) {
       return "[redacted: restricted personal content]";
     }
     return redactRestrictedPublicContent(urlRedacted, options);
@@ -389,11 +385,8 @@ function sanitizeTraceValueInternal(
     const result: JsonObject = {};
     for (const [key, child] of Object.entries(value)) {
       if (shouldRemoveTraceKey(key)) continue;
-      if (
-        typeof child === "string"
-        && isStructuralTraceStringKey(key)
-        && !structuralTraceStringIsValid(key, child)
-      ) continue;
+      if (typeof child === "string" && isStructuralTraceStringKey(key) && !structuralTraceStringIsValid(key, child))
+        continue;
       result[key] = sanitizeTraceValueInternal(child, options, key);
     }
     return result;
@@ -401,17 +394,11 @@ function sanitizeTraceValueInternal(
   return value;
 }
 
-export function sanitizeTraceValue(
-  value: JsonValue,
-  options: ContentPolicyOptions = {},
-): JsonValue {
+export function sanitizeTraceValue(value: JsonValue, options: ContentPolicyOptions = {}): JsonValue {
   return sanitizeTraceValueInternal(value, options);
 }
 
-function mergedContentPolicyOptions(
-  value: JsonObject,
-  options: ContentPolicyOptions,
-): ContentPolicyOptions {
+function mergedContentPolicyOptions(value: JsonObject, options: ContentPolicyOptions): ContentPolicyOptions {
   return {
     ...options,
     // A caller-supplied set is authoritative. Report-shaped hostile payloads
@@ -420,10 +407,7 @@ function mergedContentPolicyOptions(
   };
 }
 
-function sanitizePayload(
-  value: JsonObject | undefined,
-  options: ContentPolicyOptions = {},
-): JsonObject {
+function sanitizePayload(value: JsonObject | undefined, options: ContentPolicyOptions = {}): JsonObject {
   if (!value) return {};
   if (!isJsonValue(value)) throw new TypeError("trace payload must be JSON serializable");
   return sanitizeTraceValue(value, mergedContentPolicyOptions(value, options)) as JsonObject;
@@ -448,9 +432,7 @@ function normalizeUsage(value: TraceUsageInput | undefined): TraceUsage {
     bytesRead: nullableCounter(value?.bytesRead),
     unavailableReason: value?.unavailableReason ?? null,
   };
-  const hasUnavailable = Object.entries(usage).some(
-    ([key, entry]) => key !== "unavailableReason" && entry === null,
-  );
+  const hasUnavailable = Object.entries(usage).some(([key, entry]) => key !== "unavailableReason" && entry === null);
   if (hasUnavailable && !usage.unavailableReason) usage.unavailableReason = "not_reported";
   return usage;
 }
@@ -463,45 +445,41 @@ function validAttempt(attempt: number | undefined): number {
   return value;
 }
 
-export function isTraceEvent(
-  value: unknown,
-  options: ContentPolicyOptions = {},
-): value is TraceEvent {
+export function isTraceEvent(value: unknown, options: ContentPolicyOptions = {}): value is TraceEvent {
   if (!isJsonValue(value) || value === null || Array.isArray(value) || typeof value !== "object") {
     return false;
   }
   const event = value as unknown as Record<string, unknown>;
-  if (
-    !(
-      event.schemaVersion === SCHEMA_VERSION &&
-      typeof event.seq === "number" &&
-      Number.isInteger(event.seq) &&
-      event.seq > 0 &&
-      isNonEmptyString(event.eventId) &&
-      isMachineIdentifier(event.eventId) &&
-      isNonEmptyString(event.runId) &&
-      isMachineIdentifier(event.runId) &&
-      isNonEmptyString(event.timestamp) &&
-      isCanonicalTimestamp(event.timestamp) &&
-      typeof event.elapsedMs === "number" &&
-      Number.isFinite(event.elapsedMs) &&
-      event.elapsedMs >= 0 &&
-      TRACE_KINDS.includes(event.kind as TraceEventKind) &&
-      isNonEmptyString(event.name) &&
-      isTraceName(event.name) &&
-      RESEARCH_PHASES.includes(event.phase as ResearchPhase) &&
-      (event.spanId === null || (isNonEmptyString(event.spanId) && isMachineIdentifier(event.spanId))) &&
-      (event.parentSpanId === null || (isNonEmptyString(event.parentSpanId) && isMachineIdentifier(event.parentSpanId))) &&
-      typeof event.attempt === "number" &&
-      Number.isInteger(event.attempt) &&
-      event.attempt > 0 &&
-      TRACE_STATUSES.includes(event.status as TraceStatus) &&
-      event.payload !== null &&
-      !Array.isArray(event.payload) &&
-      typeof event.payload === "object" &&
-      isTraceUsage(event.usage)
-    )
-  ) {
+  if (!(
+    event.schemaVersion === SCHEMA_VERSION &&
+    typeof event.seq === "number" &&
+    Number.isInteger(event.seq) &&
+    event.seq > 0 &&
+    isNonEmptyString(event.eventId) &&
+    isMachineIdentifier(event.eventId) &&
+    isNonEmptyString(event.runId) &&
+    isMachineIdentifier(event.runId) &&
+    isNonEmptyString(event.timestamp) &&
+    isCanonicalTimestamp(event.timestamp) &&
+    typeof event.elapsedMs === "number" &&
+    Number.isFinite(event.elapsedMs) &&
+    event.elapsedMs >= 0 &&
+    TRACE_KINDS.includes(event.kind as TraceEventKind) &&
+    isNonEmptyString(event.name) &&
+    isTraceName(event.name) &&
+    RESEARCH_PHASES.includes(event.phase as ResearchPhase) &&
+    (event.spanId === null || (isNonEmptyString(event.spanId) && isMachineIdentifier(event.spanId))) &&
+    (event.parentSpanId === null ||
+      (isNonEmptyString(event.parentSpanId) && isMachineIdentifier(event.parentSpanId))) &&
+    typeof event.attempt === "number" &&
+    Number.isInteger(event.attempt) &&
+    event.attempt > 0 &&
+    TRACE_STATUSES.includes(event.status as TraceStatus) &&
+    event.payload !== null &&
+    !Array.isArray(event.payload) &&
+    typeof event.payload === "object" &&
+    isTraceUsage(event.usage)
+  )) {
     return false;
   }
 
@@ -509,19 +487,12 @@ export function isTraceEvent(
   const status = event.status as TraceStatus;
   if (kind === "event" && event.spanId !== null) return false;
   if (kind === "span_start" && (!isNonEmptyString(event.spanId) || status !== "started")) return false;
-  if (
-    kind === "span_end" &&
-    (!isNonEmptyString(event.spanId) || status === "started" || status === "recorded")
-  ) {
+  if (kind === "span_end" && (!isNonEmptyString(event.spanId) || status === "started" || status === "recorded")) {
     return false;
   }
   if (event.spanId !== null && event.spanId === event.parentSpanId) return false;
   const payload = event.payload as JsonObject;
-  return !containsForbiddenContentKey(
-    payload,
-    undefined,
-    mergedContentPolicyOptions(payload, options),
-  );
+  return !containsForbiddenContentKey(payload, undefined, mergedContentPolicyOptions(payload, options));
 }
 
 export class TraceRecorder {
@@ -533,12 +504,7 @@ export class TraceRecorder {
   readonly #openSpans = new Map<string, OpenSpan>();
   readonly #contentPolicyOptions: ContentPolicyOptions;
 
-  constructor(
-    runId: string,
-    clock: Clock,
-    ids: IdFactory,
-    contentPolicyOptions: ContentPolicyOptions = {},
-  ) {
+  constructor(runId: string, clock: Clock, ids: IdFactory, contentPolicyOptions: ContentPolicyOptions = {}) {
     if (!isMachineIdentifier(runId)) throw new TypeError("runId must be a safe machine identifier");
     this.runId = runId;
     this.#clock = clock;

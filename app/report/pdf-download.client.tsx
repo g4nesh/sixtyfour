@@ -1,25 +1,10 @@
 "use client";
 
-import {
-  Circle,
-  Document,
-  Link,
-  Page,
-  Path,
-  pdf,
-  StyleSheet,
-  Svg,
-  Text,
-  View,
-} from "@react-pdf/renderer";
+import { Circle, Document, Link, Page, Path, pdf, StyleSheet, Svg, Text, View } from "@react-pdf/renderer";
 import type { ReactNode } from "react";
 import { reportPdfFilename } from "../../lib/report-export/markdown";
 import { softWrapUrl } from "../../lib/report-export/sanitize";
-import type {
-  ReportEvidenceView,
-  ReportFindingView,
-  ReportViewModel,
-} from "../../lib/report-export/types";
+import type { ReportEvidenceView, ReportFindingView, ReportViewModel } from "../../lib/report-export/types";
 
 const colors = {
   ink: "#0c111b",
@@ -213,7 +198,13 @@ const styles = StyleSheet.create({
   bulletMark: { width: 12, color: colors.orange, fontFamily: "Helvetica-Bold" },
   bulletText: { flexGrow: 1, fontSize: 8.1, lineHeight: 1.45 },
   methodologyCard: { backgroundColor: colors.ink, color: colors.paper, padding: 13, marginBottom: 8 },
-  methodologyTitle: { color: "#9fb9e9", fontFamily: "Helvetica-Bold", fontSize: 7, letterSpacing: 0.5, marginBottom: 4 },
+  methodologyTitle: {
+    color: "#9fb9e9",
+    fontFamily: "Helvetica-Bold",
+    fontSize: 7,
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
   methodologyText: { color: "#e3e8ef", fontSize: 8, lineHeight: 1.45 },
 });
 
@@ -234,7 +225,9 @@ function Section({ index, title, children }: { index: string; title: string; chi
   return (
     <View style={styles.section} minPresenceAhead={72}>
       <Text style={styles.sectionKicker}>{index}</Text>
-      <Text style={styles.sectionTitle} minPresenceAhead={42}>{title}</Text>
+      <Text style={styles.sectionTitle} minPresenceAhead={42}>
+        {title}
+      </Text>
       {children}
     </View>
   );
@@ -265,8 +258,8 @@ function BodyPage({
 }
 
 function CoverPath({ viewModel }: { viewModel: ReportViewModel }) {
-  const accepted = viewModel.searchStrategy.paths.filter((path) =>
-    path.disposition === "accepted" || path.disposition === "mutation_accepted",
+  const accepted = viewModel.searchStrategy.paths.filter(
+    (path) => path.disposition === "accepted" || path.disposition === "mutation_accepted",
   ).length;
   const values = [
     ["QUERY", 0],
@@ -283,7 +276,7 @@ function CoverPath({ viewModel }: { viewModel: ReportViewModel }) {
         {values.map(([, index]) => (
           <Circle
             key={index}
-            cx={18 + (index * 110)}
+            cx={18 + index * 110}
             cy={14}
             r={index === 0 ? 7 : 5}
             fill={index === 0 ? colors.blue : index < 4 ? colors.green : colors.amber}
@@ -292,7 +285,9 @@ function CoverPath({ viewModel }: { viewModel: ReportViewModel }) {
       </Svg>
       <View style={{ display: "flex", flexDirection: "row", justifyContent: "space-between", marginTop: -11 }}>
         {values.map(([label]) => (
-          <Text key={label} style={{ width: 82, color: "#8190a5", fontSize: 5.8, letterSpacing: 0.3 }}>{label}</Text>
+          <Text key={label} style={{ width: 82, color: "#8190a5", fontSize: 5.8, letterSpacing: 0.3 }}>
+            {label}
+          </Text>
         ))}
       </View>
     </View>
@@ -305,17 +300,24 @@ function FindingCard({ finding, index }: { finding: ReportFindingView; index: nu
       <View style={styles.findingTop}>
         <Text style={styles.findingIndex}>{String(index + 1).padStart(2, "0")}</Text>
         <Text style={styles.findingHeading}>{finding.title}</Text>
-        <Text style={styles.badge}>{human(finding.confidenceLabel)} {percent(finding.confidenceScore)}</Text>
+        <Text style={styles.badge}>
+          {human(finding.confidenceLabel)} {percent(finding.confidenceScore)}
+        </Text>
       </View>
       <Text style={styles.findingDescription}>{finding.description}</Text>
-      <Text style={styles.citationLine}>Sources: {finding.sources.length > 0
-        ? finding.sources.map((source, sourceIndex) => (
-            <Text key={`${source.url}-${sourceIndex}`}>
-              {sourceIndex > 0 ? ", " : ""}
-              <Link src={source.url} style={styles.citationLink}>{source.domain}</Link>
-            </Text>
-          ))
-        : "None"}</Text>
+      <Text style={styles.citationLine}>
+        Sources:{" "}
+        {finding.sources.length > 0
+          ? finding.sources.map((source, sourceIndex) => (
+              <Text key={`${source.url}-${sourceIndex}`}>
+                {sourceIndex > 0 ? ", " : ""}
+                <Link src={source.url} style={styles.citationLink}>
+                  {source.domain}
+                </Link>
+              </Text>
+            ))
+          : "None"}
+      </Text>
       {finding.caveats.map((caveat) => (
         <View key={caveat} style={[styles.bullet, { marginTop: 5 }]}>
           <Text style={styles.bulletMark}>!</Text>
@@ -339,14 +341,20 @@ function EvidenceCard({ evidence }: { evidence: ReportEvidenceView }) {
       <Text style={styles.evidenceClaim}>{evidence.claim}</Text>
       {evidence.exactExcerpt !== null ? <Text style={styles.excerpt}>{`"${evidence.exactExcerpt}"`}</Text> : null}
       <Text style={styles.evidenceMeta}>
-        {evidence.sourceFamily} / {human(evidence.sourceType)} / {human(evidence.verificationMethod)} / {human(evidence.temporalStatus)}
+        {evidence.sourceFamily} / {human(evidence.sourceType)} / {human(evidence.verificationMethod)} /{" "}
+        {human(evidence.temporalStatus)}
       </Text>
       <Text style={styles.evidenceMeta}>
-        Retrieved {evidence.retrievedAt} / Observed {evidence.observedAt ?? "not supplied"} / Hash {evidence.contentHash ?? "not supplied"}
+        Retrieved {evidence.retrievedAt} / Observed {evidence.observedAt ?? "not supplied"} / Hash{" "}
+        {evidence.contentHash ?? "not supplied"}
       </Text>
       {evidence.sourceUrl ? (
-        <Link src={evidence.sourceUrl} style={styles.link}>{softWrapUrl(evidence.sourceUrl)}</Link>
-      ) : <Text style={styles.evidenceMeta}>Source URL unavailable</Text>}
+        <Link src={evidence.sourceUrl} style={styles.link}>
+          {softWrapUrl(evidence.sourceUrl)}
+        </Link>
+      ) : (
+        <Text style={styles.evidenceMeta}>Source URL unavailable</Text>
+      )}
     </View>
   );
 }
@@ -354,12 +362,12 @@ function EvidenceCard({ evidence }: { evidence: ReportEvidenceView }) {
 function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
   const selected = viewModel.identity.selected;
   const created = safeMetadataDate(viewModel.run.generatedAt);
-  const statusCounts = viewModel.searchStrategy.nodeStatusCounts
-    .map((item) => `${human(item.label)} ${item.count}`)
-    .join(" / ") || "No canonical graph statistics";
-  const frontierCounts = viewModel.searchStrategy.frontierCounts
-    .map((item) => `${human(item.label)} ${item.count}`)
-    .join(" / ") || "No frontier entries";
+  const statusCounts =
+    viewModel.searchStrategy.nodeStatusCounts.map((item) => `${human(item.label)} ${item.count}`).join(" / ") ||
+    "No canonical graph statistics";
+  const frontierCounts =
+    viewModel.searchStrategy.frontierCounts.map((item) => `${human(item.label)} ${item.count}`).join(" / ") ||
+    "No frontier entries";
   return (
     <Document
       title={viewModel.title}
@@ -384,35 +392,79 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
           {viewModel.executiveSummary}
         </Text>
         <View style={styles.coverMeta}>
-          <View style={styles.coverMetaRow}><Text style={styles.coverMetaLabel}>QUERY</Text><Text style={styles.coverMetaValue}>{viewModel.run.query}</Text></View>
-          <View style={styles.coverMetaRow}><Text style={styles.coverMetaLabel}>RUN</Text><Text style={styles.coverMetaValue}>{viewModel.run.id}</Text></View>
-          <View style={styles.coverMetaRow}><Text style={styles.coverMetaLabel}>SCOPE</Text><Text style={styles.coverMetaValue}>{viewModel.run.scope}</Text></View>
-          <View style={styles.coverMetaRow}><Text style={styles.coverMetaLabel}>GENERATED</Text><Text style={styles.coverMetaValue}>{viewModel.run.generatedAt}</Text></View>
+          <View style={styles.coverMetaRow}>
+            <Text style={styles.coverMetaLabel}>QUERY</Text>
+            <Text style={styles.coverMetaValue}>{viewModel.run.query}</Text>
+          </View>
+          <View style={styles.coverMetaRow}>
+            <Text style={styles.coverMetaLabel}>RUN</Text>
+            <Text style={styles.coverMetaValue}>{viewModel.run.id}</Text>
+          </View>
+          <View style={styles.coverMetaRow}>
+            <Text style={styles.coverMetaLabel}>SCOPE</Text>
+            <Text style={styles.coverMetaValue}>{viewModel.run.scope}</Text>
+          </View>
+          <View style={styles.coverMetaRow}>
+            <Text style={styles.coverMetaLabel}>GENERATED</Text>
+            <Text style={styles.coverMetaValue}>{viewModel.run.generatedAt}</Text>
+          </View>
         </View>
       </Page>
 
       <BodyPage viewModel={viewModel} bookmark="Assessment">
         <Section index="01 / ASSESSMENT" title="Executive summary">
           <View style={styles.metricGrid}>
-            <View style={styles.metricCard} wrap={false}><View style={styles.metricInner}><Text style={styles.metricValue}>{human(viewModel.identity.status)}</Text><Text style={styles.metricLabel}>IDENTITY</Text></View></View>
-            <View style={styles.metricCard} wrap={false}><View style={styles.metricInner}><Text style={styles.metricValue}>{viewModel.findings.length}</Text><Text style={styles.metricLabel}>FINDINGS</Text></View></View>
-            <View style={styles.metricCard} wrap={false}><View style={styles.metricInner}><Text style={styles.metricValue}>{viewModel.evidence.length}</Text><Text style={styles.metricLabel}>EVIDENCE</Text></View></View>
-            <View style={styles.metricCard} wrap={false}><View style={styles.metricInner}><Text style={styles.metricValue}>{percent(viewModel.coverage.score)}</Text><Text style={styles.metricLabel}>COVERAGE</Text></View></View>
+            <View style={styles.metricCard} wrap={false}>
+              <View style={styles.metricInner}>
+                <Text style={styles.metricValue}>{human(viewModel.identity.status)}</Text>
+                <Text style={styles.metricLabel}>IDENTITY</Text>
+              </View>
+            </View>
+            <View style={styles.metricCard} wrap={false}>
+              <View style={styles.metricInner}>
+                <Text style={styles.metricValue}>{viewModel.findings.length}</Text>
+                <Text style={styles.metricLabel}>FINDINGS</Text>
+              </View>
+            </View>
+            <View style={styles.metricCard} wrap={false}>
+              <View style={styles.metricInner}>
+                <Text style={styles.metricValue}>{viewModel.evidence.length}</Text>
+                <Text style={styles.metricLabel}>EVIDENCE</Text>
+              </View>
+            </View>
+            <View style={styles.metricCard} wrap={false}>
+              <View style={styles.metricInner}>
+                <Text style={styles.metricValue}>{percent(viewModel.coverage.score)}</Text>
+                <Text style={styles.metricLabel}>COVERAGE</Text>
+              </View>
+            </View>
           </View>
           <Text style={styles.paragraph}>{viewModel.executiveSummary}</Text>
           <View style={styles.detailRow}>
-            <View style={styles.detailCell}><Text style={styles.label}>STATUS</Text><Text style={styles.value}>{human(viewModel.run.status)}</Text></View>
-            <View style={styles.detailCell}><Text style={styles.label}>STOP REASON</Text><Text style={styles.value}>{human(viewModel.run.stopReason)}</Text></View>
+            <View style={styles.detailCell}>
+              <Text style={styles.label}>STATUS</Text>
+              <Text style={styles.value}>{human(viewModel.run.status)}</Text>
+            </View>
+            <View style={styles.detailCell}>
+              <Text style={styles.label}>STOP REASON</Text>
+              <Text style={styles.value}>{human(viewModel.run.stopReason)}</Text>
+            </View>
           </View>
         </Section>
 
         <Section index="02 / IDENTITY" title="Identity resolution">
           <View style={styles.decision}>
-            <Text style={styles.decisionTitle}>{selected ? `${selected.name} / ${human(selected.status)} / ${percent(selected.score)}` : "No selected candidate"}</Text>
+            <Text style={styles.decisionTitle}>
+              {selected
+                ? `${selected.name} / ${human(selected.status)} / ${percent(selected.score)}`
+                : "No selected candidate"}
+            </Text>
             <Text style={styles.decisionText}>{viewModel.identity.rationale}</Text>
           </View>
           <Text style={[styles.paragraph, styles.muted]}>
-            Runner-up margin {percent(viewModel.identity.runnerUpMargin)} / required margin {percent(viewModel.identity.marginThreshold)} / resolution threshold {percent(viewModel.identity.resolutionThreshold)}
+            Runner-up margin {percent(viewModel.identity.runnerUpMargin)} / required margin{" "}
+            {percent(viewModel.identity.marginThreshold)} / resolution threshold{" "}
+            {percent(viewModel.identity.resolutionThreshold)}
           </Text>
           {viewModel.identity.alternatives.length > 0 ? (
             <View>
@@ -420,27 +472,41 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
               {viewModel.identity.alternatives.map((candidate) => (
                 <View key={candidate.id} style={styles.candidateRow} wrap={false}>
                   <Text style={styles.candidateName}>{candidate.name}</Text>
-                  <Text style={styles.candidateState}>{human(candidate.status)} / {percent(candidate.score)}</Text>
-                  <Text style={styles.candidateSignals}>Matched {candidate.matchedSignals.join(", ") || "none"}; conflicts {candidate.conflictingSignals.join(", ") || "none"}</Text>
+                  <Text style={styles.candidateState}>
+                    {human(candidate.status)} / {percent(candidate.score)}
+                  </Text>
+                  <Text style={styles.candidateSignals}>
+                    Matched {candidate.matchedSignals.join(", ") || "none"}; conflicts{" "}
+                    {candidate.conflictingSignals.join(", ") || "none"}
+                  </Text>
                 </View>
               ))}
             </View>
-          ) : <Text style={styles.paragraph}>No alternative candidate was retained.</Text>}
+          ) : (
+            <Text style={styles.paragraph}>No alternative candidate was retained.</Text>
+          )}
         </Section>
 
         <Section index="03 / FINDINGS" title="Evidence-backed findings">
-          {viewModel.findings.length > 0
-            ? viewModel.findings.map((finding, index) => <FindingCard key={finding.id} finding={finding} index={index} />)
-            : <Text style={styles.paragraph}>No finding met the admission and confidence rules.</Text>}
+          {viewModel.findings.length > 0 ? (
+            viewModel.findings.map((finding, index) => <FindingCard key={finding.id} finding={finding} index={index} />)
+          ) : (
+            <Text style={styles.paragraph}>No finding met the admission and confidence rules.</Text>
+          )}
         </Section>
       </BodyPage>
 
       <BodyPage viewModel={viewModel} bookmark="Evidence ledger">
         <Section index="04 / SOURCES" title="Evidence and source ledger">
-          <Text style={[styles.paragraph, styles.muted]}>Stable E-references distinguish exact excerpts from structured API claims. Links remain live; raw provider payloads are excluded.</Text>
-          {viewModel.evidence.length > 0
-            ? viewModel.evidence.map((evidence) => <EvidenceCard key={evidence.id} evidence={evidence} />)
-            : <Text style={styles.paragraph}>No evidence was admitted.</Text>}
+          <Text style={[styles.paragraph, styles.muted]}>
+            Stable E-references distinguish exact excerpts from structured API claims. Links remain live; raw provider
+            payloads are excluded.
+          </Text>
+          {viewModel.evidence.length > 0 ? (
+            viewModel.evidence.map((evidence) => <EvidenceCard key={evidence.id} evidence={evidence} />)
+          ) : (
+            <Text style={styles.paragraph}>No evidence was admitted.</Text>
+          )}
         </Section>
       </BodyPage>
 
@@ -448,10 +514,30 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
         <Section index="05 / SEARCH" title="Search strategy and retained paths">
           <Text style={styles.paragraph}>{viewModel.searchStrategy.narrative}</Text>
           <View style={styles.metricGrid}>
-            <View style={styles.metricCard} wrap={false}><View style={styles.metricInner}><Text style={styles.metricValue}>{viewModel.searchStrategy.nodeCount}</Text><Text style={styles.metricLabel}>GRAPH NODES</Text></View></View>
-            <View style={styles.metricCard} wrap={false}><View style={styles.metricInner}><Text style={styles.metricValue}>{viewModel.searchStrategy.edgeCount}</Text><Text style={styles.metricLabel}>GRAPH EDGES</Text></View></View>
-            <View style={styles.metricCard} wrap={false}><View style={styles.metricInner}><Text style={styles.metricValue}>{viewModel.searchStrategy.mutation.accepted}</Text><Text style={styles.metricLabel}>MUTATIONS ACCEPTED</Text></View></View>
-            <View style={styles.metricCard} wrap={false}><View style={styles.metricInner}><Text style={styles.metricValue}>{viewModel.searchStrategy.mutation.rejected}</Text><Text style={styles.metricLabel}>MUTATIONS REJECTED</Text></View></View>
+            <View style={styles.metricCard} wrap={false}>
+              <View style={styles.metricInner}>
+                <Text style={styles.metricValue}>{viewModel.searchStrategy.nodeCount}</Text>
+                <Text style={styles.metricLabel}>GRAPH NODES</Text>
+              </View>
+            </View>
+            <View style={styles.metricCard} wrap={false}>
+              <View style={styles.metricInner}>
+                <Text style={styles.metricValue}>{viewModel.searchStrategy.edgeCount}</Text>
+                <Text style={styles.metricLabel}>GRAPH EDGES</Text>
+              </View>
+            </View>
+            <View style={styles.metricCard} wrap={false}>
+              <View style={styles.metricInner}>
+                <Text style={styles.metricValue}>{viewModel.searchStrategy.mutation.accepted}</Text>
+                <Text style={styles.metricLabel}>MUTATIONS ACCEPTED</Text>
+              </View>
+            </View>
+            <View style={styles.metricCard} wrap={false}>
+              <View style={styles.metricInner}>
+                <Text style={styles.metricValue}>{viewModel.searchStrategy.mutation.rejected}</Text>
+                <Text style={styles.metricLabel}>MUTATIONS REJECTED</Text>
+              </View>
+            </View>
           </View>
           <Text style={[styles.paragraph, styles.muted]}>Graph nodes: {statusCounts}</Text>
           <Text style={[styles.paragraph, styles.muted]}>Frontier entries: {frontierCounts}</Text>
@@ -459,25 +545,46 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
           {viewModel.searchStrategy.sourceLadder.map((tier) => (
             <View key={tier.tier} style={styles.tierRow} wrap={false}>
               <Text style={styles.tierNumber}>T{tier.tier}</Text>
-              <Text style={styles.tierDetail}>{tier.label} / {tier.frontierCount} frontier entries / {tier.verifiedCount} verified / {tier.rejectedCount} rejected / {tier.exhaustedCount} exhausted / {tier.evidenceCount} admitted / {tier.sourceFamilies.join(", ") || "no source family"}</Text>
+              <Text style={styles.tierDetail}>
+                {tier.label} / {tier.frontierCount} frontier entries / {tier.verifiedCount} verified /{" "}
+                {tier.rejectedCount} rejected / {tier.exhaustedCount} exhausted / {tier.evidenceCount} admitted /{" "}
+                {tier.sourceFamilies.join(", ") || "no source family"}
+              </Text>
             </View>
           ))}
           <Text style={[styles.label, { marginTop: 6, marginBottom: 6 }]}>ACCEPTED, REJECTED, AND MUTATION PATHS</Text>
-          {viewModel.searchStrategy.paths.length > 0 ? viewModel.searchStrategy.paths.map((path) => (
-            <View key={path.id} style={styles.pathRow} wrap={false}>
-              <Text style={[styles.pathStatus, { color: path.disposition.includes("rejected") ? colors.orange : colors.green }]}>{human(path.disposition)}</Text>
-              <Text style={styles.pathText}>{path.path.join(" -> ")}{path.cost === null ? "" : ` / cost ${path.cost.toFixed(3)}`}</Text>
-            </View>
-          )) : <Text style={styles.paragraph}>No canonical path summary was available.</Text>}
+          {viewModel.searchStrategy.paths.length > 0 ? (
+            viewModel.searchStrategy.paths.map((path) => (
+              <View key={path.id} style={styles.pathRow} wrap={false}>
+                <Text
+                  style={[
+                    styles.pathStatus,
+                    { color: path.disposition.includes("rejected") ? colors.orange : colors.green },
+                  ]}
+                >
+                  {human(path.disposition)}
+                </Text>
+                <Text style={styles.pathText}>
+                  {path.path.join(" -> ")}
+                  {path.cost === null ? "" : ` / cost ${path.cost.toFixed(3)}`}
+                </Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.paragraph}>No canonical path summary was available.</Text>
+          )}
         </Section>
 
         <Section index="06 / LIMITS" title="Coverage gaps and limitations">
           {[...viewModel.coverage.gaps, ...viewModel.limitations].map((item) => (
-            <View key={item} style={styles.bullet}><Text style={styles.bulletMark}>-</Text><Text style={styles.bulletText}>{item}</Text></View>
+            <View key={item} style={styles.bullet}>
+              <Text style={styles.bulletMark}>-</Text>
+              <Text style={styles.bulletText}>{item}</Text>
+            </View>
           ))}
-          {viewModel.coverage.gaps.length + viewModel.limitations.length === 0
-            ? <Text style={styles.paragraph}>No additional limitation was recorded.</Text>
-            : null}
+          {viewModel.coverage.gaps.length + viewModel.limitations.length === 0 ? (
+            <Text style={styles.paragraph}>No additional limitation was recorded.</Text>
+          ) : null}
         </Section>
       </BodyPage>
 
@@ -485,7 +592,12 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
         <Section index="07 / EXECUTION" title="Usage, latency, and stopping">
           <View style={styles.metricGrid}>
             {viewModel.execution.usage.map((metric) => (
-              <View key={metric.label} style={styles.metricCard} wrap={false}><View style={styles.metricInner}><Text style={styles.metricValue}>{metric.value}</Text><Text style={styles.metricLabel}>{metric.label.toLocaleUpperCase("en-US")}</Text></View></View>
+              <View key={metric.label} style={styles.metricCard} wrap={false}>
+                <View style={styles.metricInner}>
+                  <Text style={styles.metricValue}>{metric.value}</Text>
+                  <Text style={styles.metricLabel}>{metric.label.toLocaleUpperCase("en-US")}</Text>
+                </View>
+              </View>
             ))}
           </View>
           <Text style={styles.label}>STOP DETAIL</Text>
@@ -510,13 +622,12 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
   );
 }
 
-export async function renderReportPdfBlob(
-  viewModel: ReportViewModel,
-): Promise<{ blob: Blob; filename: string }> {
+export async function renderReportPdfBlob(viewModel: ReportViewModel): Promise<{ blob: Blob; filename: string }> {
   const rendered = await pdf(<ReportDocument viewModel={viewModel} />).toBlob();
-  const blob = rendered.type === "application/pdf"
-    ? rendered
-    : new Blob([await rendered.arrayBuffer()], { type: "application/pdf" });
+  const blob =
+    rendered.type === "application/pdf"
+      ? rendered
+      : new Blob([await rendered.arrayBuffer()], { type: "application/pdf" });
   return { blob, filename: reportPdfFilename(viewModel) };
 }
 

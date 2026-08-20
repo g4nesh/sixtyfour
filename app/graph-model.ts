@@ -38,19 +38,23 @@ function stringValue(...values: unknown[]): string | undefined {
 export function canonicalGraph(value: unknown): CanonicalSearchGraph | null {
   if (!isRecord(value) || value.schemaVersion !== 2) return null;
   if (
-    typeof value.runId !== "string"
-    || typeof value.seed !== "string"
-    || !Array.isArray(value.nodes)
-    || !Array.isArray(value.edges)
-    || !Array.isArray(value.frontier)
-    || !Array.isArray(value.selectedFrontierEntryIds)
-  ) return null;
+    typeof value.runId !== "string" ||
+    typeof value.seed !== "string" ||
+    !Array.isArray(value.nodes) ||
+    !Array.isArray(value.edges) ||
+    !Array.isArray(value.frontier) ||
+    !Array.isArray(value.selectedFrontierEntryIds)
+  )
+    return null;
   const graph = value as unknown as CanonicalSearchGraph;
   if (
-    graph.nodes.some((node) => node.schemaVersion !== 2 || !node.id || !node.label)
-    || graph.edges.some((edge) => edge.schemaVersion !== 2 || !edge.id || !edge.fromNodeId || !edge.toNodeId)
-    || graph.frontier.some((entry) => entry.schemaVersion !== 2 || entry.id !== entry.frontierEntryId || entry.id !== entry.actionId)
-  ) return null;
+    graph.nodes.some((node) => node.schemaVersion !== 2 || !node.id || !node.label) ||
+    graph.edges.some((edge) => edge.schemaVersion !== 2 || !edge.id || !edge.fromNodeId || !edge.toNodeId) ||
+    graph.frontier.some(
+      (entry) => entry.schemaVersion !== 2 || entry.id !== entry.frontierEntryId || entry.id !== entry.actionId,
+    )
+  )
+    return null;
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
   if (graph.edges.some((edge) => !nodeIds.has(edge.fromNodeId) || !nodeIds.has(edge.toNodeId))) return null;
   return graph;
@@ -63,31 +67,32 @@ export function graphFromReport(report: Report | null): CanonicalSearchGraph | n
 export function fullGraphFromTrace(event: TraceEvent): CanonicalSearchGraph | null {
   const payload = event.payload;
   const attributes = event.attributes;
-  return canonicalGraph(payload?.searchGraph)
-    ?? canonicalGraph(attributes?.searchGraph)
-    ?? canonicalGraph((event as Record<string, unknown>).searchGraph);
+  return (
+    canonicalGraph(payload?.searchGraph) ??
+    canonicalGraph(attributes?.searchGraph) ??
+    canonicalGraph((event as Record<string, unknown>).searchGraph)
+  );
 }
 
-export function mergeGraphEvent(
-  current: CanonicalSearchGraph | null,
-  event: TraceEvent,
-): CanonicalSearchGraph | null {
+export function mergeGraphEvent(current: CanonicalSearchGraph | null, event: TraceEvent): CanonicalSearchGraph | null {
   return fullGraphFromTrace(event) ?? current;
 }
 
 export function eventStableId(event: TraceEvent): string | null {
   const payload = event.payload;
   const attributes = event.attributes;
-  return stringValue(
-    event.frontierId,
-    event.actionId,
-    payload?.frontierEntryId,
-    payload?.frontierId,
-    payload?.actionId,
-    attributes?.frontierEntryId,
-    attributes?.frontierId,
-    attributes?.actionId,
-  ) ?? null;
+  return (
+    stringValue(
+      event.frontierId,
+      event.actionId,
+      payload?.frontierEntryId,
+      payload?.frontierId,
+      payload?.actionId,
+      attributes?.frontierEntryId,
+      attributes?.frontierId,
+      attributes?.actionId,
+    ) ?? null
+  );
 }
 
 export function stableNodeForEvent(graph: CanonicalSearchGraph | null, stableId: string | null): string | null {
@@ -115,14 +120,16 @@ export function nodePriority(graph: CanonicalSearchGraph, node: SearchGraphNode)
   const entry = frontierForNode(graph, node);
   if (!entry) return undefined;
   const utility = entry.utility;
-  return utility.relevance
-    + utility.novelty
-    + utility.informationGain
-    + utility.sourceTrust
-    - utility.executionCost
-    - utility.policyRisk
-    - utility.repetition
-    - utility.depthPenalty;
+  return (
+    utility.relevance +
+    utility.novelty +
+    utility.informationGain +
+    utility.sourceTrust -
+    utility.executionCost -
+    utility.policyRisk -
+    utility.repetition -
+    utility.depthPenalty
+  );
 }
 
 export function nodeDetail(graph: CanonicalSearchGraph, node: SearchGraphNode): string | undefined {
@@ -184,10 +191,12 @@ export function deterministicPositions(graph: CanonicalSearchGraph): Map<string,
   const positions = new Map<string, { x: number; y: number }>();
   for (const [layer, nodes] of [...layers.entries()].sort(([left], [right]) => left - right)) {
     nodes.sort((left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id));
-    nodes.forEach((node, index) => positions.set(node.id, {
-      x: 96 + layer * 320,
-      y: 92 + index * 126 + (layer % 2 === 0 ? 0 : 36),
-    }));
+    nodes.forEach((node, index) =>
+      positions.set(node.id, {
+        x: 96 + layer * 320,
+        y: 92 + index * 126 + (layer % 2 === 0 ? 0 : 36),
+      }),
+    );
   }
   return positions;
 }

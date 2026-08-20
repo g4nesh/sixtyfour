@@ -8,7 +8,7 @@ async function listFiles(directory) {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const absolute = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory);
-    if (entry.isDirectory()) files.push(...await listFiles(absolute));
+    if (entry.isDirectory()) files.push(...(await listFiles(absolute)));
     else files.push(absolute);
   }
   return files;
@@ -39,6 +39,14 @@ test("server-renders the black graph-first Atlas workspace", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+  assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+  assert.equal(response.headers.get("cross-origin-opener-policy"), "same-origin");
+  assert.equal(
+    response.headers.get("permissions-policy"),
+    "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+  );
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
 
   const html = await response.text();
   assert.match(html, /<title>Atlas — People Intelligence<\/title>/i);
@@ -68,11 +76,10 @@ test("built Worker health remains available when local bindings are absent", asy
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("health-test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
-  const response = await worker.fetch(
-    new Request("http://localhost/api/health"),
-    undefined,
-    { waitUntil() {}, passThroughOnException() {} },
-  );
+  const response = await worker.fetch(new Request("http://localhost/api/health"), undefined, {
+    waitUntil() {},
+    passThroughOnException() {},
+  });
   assert.equal(response.status, 200);
   const payload = await response.json();
   assert.equal(payload.status, "ok");
@@ -94,18 +101,19 @@ test("built Worker image route fails closed when local bindings are absent", asy
 });
 
 test("graph components preserve canonical state, accessible fallbacks, and client-only heavy libraries", async () => {
-  const [page, workbench, graphModel, workspace, canvas, inspector, report, layout, css, packageJson] = await Promise.all([
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/workbench.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/graph-model.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/graph-workspace.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/graph-canvas.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/node-inspector.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/report-sheet.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
-    readFile(new URL("../package.json", import.meta.url), "utf8"),
-  ]);
+  const [page, workbench, graphModel, workspace, canvas, inspector, report, layout, css, packageJson] =
+    await Promise.all([
+      readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/workbench.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/graph-model.ts", import.meta.url), "utf8"),
+      readFile(new URL("../app/components/graph-workspace.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/components/graph-canvas.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/components/node-inspector.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/components/report-sheet.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+      readFile(new URL("../package.json", import.meta.url), "utf8"),
+    ]);
 
   await assert.rejects(access(new URL("app/_sites-preview", projectRoot)));
   assert.doesNotMatch(page, /SkeletonPreview|<svg|dangerouslySetInnerHTML/);
@@ -150,6 +158,9 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(css, /prefers-contrast:\s*more/);
   assert.match(css, /@media \(max-width: 700px\)/);
   assert.match(css, /@media \(max-width: 400px\)/);
+  assert.match(css, /\.scope-row \.scope-note\s*\{[^}]*position:\s*static/s);
+  assert.match(css, /\.scope-row\s*\{[^}]*padding:\s*43px 8px 0/s);
+  assert.match(css, /\.graph-toolbar\s*\{[^}]*top:\s*146px/s);
 });
 
 test("browser-only graph and PDF libraries stay out of the Worker module graph", async () => {
@@ -163,9 +174,7 @@ test("browser-only graph and PDF libraries stay out of the Worker module graph",
 
   const serverJavaScript = (
     await Promise.all(
-      serverFiles
-        .filter((file) => /\.(?:js|mjs)$/.test(file.pathname))
-        .map((file) => readFile(file, "utf8")),
+      serverFiles.filter((file) => /\.(?:js|mjs)$/.test(file.pathname)).map((file) => readFile(file, "utf8")),
     )
   ).join("\n");
   assert.doesNotMatch(serverJavaScript, /@react-pdf\/renderer|@xyflow\/react/);

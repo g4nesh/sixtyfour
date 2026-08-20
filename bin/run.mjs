@@ -15,4 +15,3 @@ try {
   await vite.close();
 }
 process.exitCode = exitCode;
-

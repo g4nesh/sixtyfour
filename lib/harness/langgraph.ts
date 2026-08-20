@@ -37,33 +37,25 @@ function routeAfterClassify(state: FrontierHarnessStateValue): "seed_frontier" |
   return state.route === "terminal" ? END : "seed_frontier";
 }
 
-function routeAfterSelection(
-  state: FrontierHarnessStateValue,
-): "plan_expansion" | "synthesize" | typeof END {
+function routeAfterSelection(state: FrontierHarnessStateValue): "plan_expansion" | "synthesize" | typeof END {
   if (state.route === "terminal") return END;
   if (state.route === "synthesize") return "synthesize";
   return "plan_expansion";
 }
 
-function routeAfterPlan(
-  state: FrontierHarnessStateValue,
-): "execute_expansion" | "assess" | "synthesize" | typeof END {
+function routeAfterPlan(state: FrontierHarnessStateValue): "execute_expansion" | "assess" | "synthesize" | typeof END {
   if (state.route === "terminal") return END;
   if (state.route === "synthesize") return "synthesize";
   return state.route === "execute_expansion" ? "execute_expansion" : "assess";
 }
 
-function routeAfterAssessment(
-  state: FrontierHarnessStateValue,
-): "select_frontier" | "synthesize" | typeof END {
+function routeAfterAssessment(state: FrontierHarnessStateValue): "select_frontier" | "synthesize" | typeof END {
   if (state.route === "terminal") return END;
   if (state.route === "synthesize") return "synthesize";
   return "select_frontier";
 }
 
-function routeAfterSynthesis(
-  state: FrontierHarnessStateValue,
-): "select_frontier" | typeof END {
+function routeAfterSynthesis(state: FrontierHarnessStateValue): "select_frontier" | typeof END {
   return state.route === "terminal" ? END : "select_frontier";
 }
 

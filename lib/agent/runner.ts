@@ -51,20 +51,9 @@ import {
   sourceTierForUrl,
   type SearchKernelEvent,
 } from "../search";
-import {
-  compileFrontierHarness,
-  initialFrontierHarnessState,
-  type FrontierHarnessRoute,
-} from "../harness";
+import { compileFrontierHarness, initialFrontierHarnessState, type FrontierHarnessRoute } from "../harness";
 
-export type ActionStatus =
-  | "succeeded"
-  | "partial"
-  | "not_found"
-  | "rate_limited"
-  | "failed"
-  | "skipped"
-  | "canceled";
+export type ActionStatus = "succeeded" | "partial" | "not_found" | "rate_limited" | "failed" | "skipped" | "canceled";
 
 export const MAX_OUTBOUND_CONCURRENCY = 4;
 
@@ -292,9 +281,13 @@ function emailTokens(value: string): string[] {
   } catch {
     // Malformed percent encoding is simply not a second valid text variant.
   }
-  return [...new Set(variants.flatMap((variant) =>
-    [...variant.matchAll(ACTION_EMAIL_PATTERN)].map((match) =>
-      match[0].toLocaleLowerCase("en-US"))))];
+  return [
+    ...new Set(
+      variants.flatMap((variant) =>
+        [...variant.matchAll(ACTION_EMAIL_PATTERN)].map((match) => match[0].toLocaleLowerCase("en-US")),
+      ),
+    ),
+  ];
 }
 
 function containsSensitiveUrlQuery(value: string): boolean {
@@ -331,29 +324,40 @@ export function isActionPolicyCompliant(
   }
   const outboundStrings = [action.purpose, ...collectStringArguments(action.arguments)];
   if (outboundStrings.some(isDeniedResearchSource)) {
-    return { allowed: false, reason: "action targets a denied people-search, contact, property, tax, family, or credential source" };
+    return {
+      allowed: false,
+      reason: "action targets a denied people-search, contact, property, tax, family, or credential source",
+    };
   }
   const allowedEmails = context.allowedEmails ?? new Set<string>();
-  if (outboundStrings.some((value) =>
-    emailTokens(value).some((email) => !allowedEmails.has(email)))) {
+  if (outboundStrings.some((value) => emailTokens(value).some((email) => !allowedEmails.has(email)))) {
     return { allowed: false, reason: "action contains an email that was not explicitly supplied by the user" };
   }
   if (outboundStrings.some(containsSensitiveUrlQuery)) {
     return { allowed: false, reason: "action contains a credential-like URL query parameter" };
   }
-  if (outboundStrings.some((value) =>
-    containsRestrictedPublicContent(value, {
-      allowedEmails,
-      currentYear: context.currentYear,
-    }))) {
+  if (
+    outboundStrings.some((value) =>
+      containsRestrictedPublicContent(value, {
+        allowedEmails,
+        currentYear: context.currentYear,
+      }),
+    )
+  ) {
     return { allowed: false, reason: "purpose or argument content contains restricted personal data" };
   }
   const unsafeText = outboundStrings
     .filter((value) => value.trim().length >= 2)
-    .some((value) => classifySafety({
-      schemaVersion: SCHEMA_VERSION,
-      query: value.trim().slice(0, 1_000),
-    }, { currentYear: context.currentYear }).level === "block");
+    .some(
+      (value) =>
+        classifySafety(
+          {
+            schemaVersion: SCHEMA_VERSION,
+            query: value.trim().slice(0, 1_000),
+          },
+          { currentYear: context.currentYear },
+        ).level === "block",
+    );
   if (unsafeText) {
     return { allowed: false, reason: "purpose or argument content violates public-professional safety policy" };
   }
@@ -390,11 +394,12 @@ function bindToolProposedSignal(
   if (signal.sourceEvidenceId) {
     const record = evidence.find((item) => item.id === signal.sourceEvidenceId);
     if (
-      !record
-      || record.candidateId !== candidateId
-      || record.toolCallId !== actionId
-      || !identitySignalGroundedByEvidence(signal, record)
-    ) return { reason: "signal_evidence_provenance_mismatch" };
+      !record ||
+      record.candidateId !== candidateId ||
+      record.toolCallId !== actionId ||
+      !identitySignalGroundedByEvidence(signal, record)
+    )
+      return { reason: "signal_evidence_provenance_mismatch" };
     return { signal };
   }
   const matching = evidence
@@ -407,16 +412,13 @@ function bindToolProposedSignal(
         sourceFamily: record.sourceFamily,
       } satisfies IdentitySignal,
     }))
-    .filter(({ record, bound }) =>
-      (!signal.sourceFamily
-        || signal.sourceFamily.toLocaleLowerCase("en-US") === record.sourceFamily)
-      && identitySignalGroundedByEvidence(bound, record));
+    .filter(
+      ({ record, bound }) =>
+        (!signal.sourceFamily || signal.sourceFamily.toLocaleLowerCase("en-US") === record.sourceFamily) &&
+        identitySignalGroundedByEvidence(bound, record),
+    );
   if (matching.length === 1) return { signal: matching[0].bound };
-  if (
-    signal.kind === "conflict"
-    || signal.assurance === "verified"
-    || signal.assurance === "corroborated"
-  ) {
+  if (signal.kind === "conflict" || signal.assurance === "verified" || signal.assurance === "corroborated") {
     return { reason: matching.length > 1 ? "ambiguous_signal_evidence" : "ungrounded_high_assurance_signal" };
   }
   const { sourceEvidenceId: _sourceEvidenceId, sourceFamily: _sourceFamily, ...provisional } = signal;
@@ -444,10 +446,7 @@ interface InternalModelAccounting extends ModelAttemptAccounting {
   summary(): ModelAccountingSummary;
 }
 
-function mergeTokenUsage(
-  left: Partial<TokenUsage>,
-  right: Partial<TokenUsage>,
-): Partial<TokenUsage> {
+function mergeTokenUsage(left: Partial<TokenUsage>, right: Partial<TokenUsage>): Partial<TokenUsage> {
   const merged: Partial<TokenUsage> = { ...left };
   for (const key of ["inputTokens", "cachedInputTokens", "outputTokens", "thinkingTokens", "costUsd"] as const) {
     const value = right[key];
@@ -485,7 +484,7 @@ function createModelAccounting(engine: InvestigationEngine): InternalModelAccoun
         engine.recordTokens(tokens);
         tokenUsage = mergeTokenUsage(tokenUsage, tokens);
       }
-      for (const key of settlement.reportedUsageFields ?? Object.keys(tokens) as Array<keyof TokenUsage>) {
+      for (const key of settlement.reportedUsageFields ?? (Object.keys(tokens) as Array<keyof TokenUsage>)) {
         if (tokens[key] !== undefined) reportedCounts.set(key, (reportedCounts.get(key) ?? 0) + 1);
       }
       if (settlement.usageUnavailableReason?.trim()) {
@@ -540,7 +539,7 @@ function chargeLegacyModelTelemetry(
   const knownTokens = zeroSafeTokens(telemetry?.tokenUsage ?? tokenUsage);
   if (Object.keys(knownTokens).length > 0) engine.recordTokens(knownTokens);
   const tokens: Partial<TokenUsage> = {};
-  const reported = new Set(telemetry?.reportedUsageFields ?? Object.keys(knownTokens) as Array<keyof TokenUsage>);
+  const reported = new Set(telemetry?.reportedUsageFields ?? (Object.keys(knownTokens) as Array<keyof TokenUsage>));
   for (const key of ["inputTokens", "cachedInputTokens", "outputTokens", "thinkingTokens", "costUsd"] as const) {
     if (reported.has(key) && knownTokens[key] !== undefined) tokens[key] = knownTokens[key];
   }
@@ -630,9 +629,10 @@ async function invokePlanner(
     );
     modelAccounting.finalizeOutstanding("planner_returned_with_unsettled_model_attempt");
     const accounted = modelAccounting.summary();
-    const model = accounted.llmCalls > 0
-      ? accounted
-      : chargeLegacyModelTelemetry(engine, decision.modelTelemetry, decision.tokenUsage, 1);
+    const model =
+      accounted.llmCalls > 0
+        ? accounted
+        : chargeLegacyModelTelemetry(engine, decision.modelTelemetry, decision.tokenUsage, 1);
     engine.trace.endSpan(spanId, {
       status: "succeeded",
       payload: {
@@ -651,9 +651,7 @@ async function invokePlanner(
   } catch (error) {
     modelAccounting.finalizeOutstanding("planner_failed_with_unsettled_model_attempt");
     const accounted = modelAccounting.summary();
-    const model = accounted.llmCalls > 0
-      ? accounted
-      : chargeLegacyModelTelemetry(engine, undefined, undefined, 1);
+    const model = accounted.llmCalls > 0 ? accounted : chargeLegacyModelTelemetry(engine, undefined, undefined, 1);
     engine.trace.endSpan(spanId, {
       status: signal?.aborted ? "canceled" : "failed",
       payload: { error: safeError(error) },
@@ -700,9 +698,7 @@ function recordSearchEvents(
 function publicHostname(value: string): string | null {
   try {
     const url = new URL(value.includes("://") ? value : `https://${value}`);
-    return url.protocol === "https:"
-      ? url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "")
-      : null;
+    return url.protocol === "https:" ? url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "") : null;
   } catch {
     return null;
   }
@@ -715,24 +711,26 @@ function sourceTierContextForAction(
   const firstPartyHosts = new Set<string>();
   for (const identifier of state.target.identifiers) {
     if (identifier.provenance !== "user_input") continue;
-    const host = identifier.kind === "email"
-      ? identifier.normalizedValue.split("@")[1] ?? null
-      : publicHostname(identifier.value);
+    const host =
+      identifier.kind === "email"
+        ? (identifier.normalizedValue.split("@")[1] ?? null)
+        : publicHostname(identifier.value);
     if (host) firstPartyHosts.add(host);
   }
-  const candidate = candidateId
-    ? state.candidates.find((item) => item.id === candidateId)
-    : undefined;
+  const candidate = candidateId ? state.candidates.find((item) => item.id === candidateId) : undefined;
   for (const signal of candidate?.signals ?? []) {
     if (
-      !["profile_url", "personal_domain"].includes(signal.kind)
-      || !["verified", "corroborated"].includes(signal.assurance)
-      || !signal.sourceEvidenceId
-      || !state.evidence.some((evidence) =>
-        evidence.id === signal.sourceEvidenceId
-        && evidence.candidateId === candidateId
-        && evidence.disposition === "supports")
-    ) continue;
+      !["profile_url", "personal_domain"].includes(signal.kind) ||
+      !["verified", "corroborated"].includes(signal.assurance) ||
+      !signal.sourceEvidenceId ||
+      !state.evidence.some(
+        (evidence) =>
+          evidence.id === signal.sourceEvidenceId &&
+          evidence.candidateId === candidateId &&
+          evidence.disposition === "supports",
+      )
+    )
+      continue;
     const host = publicHostname(signal.value);
     if (host) firstPartyHosts.add(host);
   }
@@ -754,11 +752,7 @@ async function executeActions(
   let graph = cloneJson(graphValue);
   const state = engine.snapshot();
   const remainingCalls = Math.max(0, state.budget.limits.maxToolCalls - state.budget.usage.toolCalls);
-  const batchLimit = Math.min(
-    state.budget.limits.maxActionsPerTurn,
-    remainingCalls,
-    MAX_OUTBOUND_CONCURRENCY,
-  );
+  const batchLimit = Math.min(state.budget.limits.maxActionsPerTurn, remainingCalls, MAX_OUTBOUND_CONCURRENCY);
   const claimedEntries = new Set<string>();
   const bound: Array<{ proposal: ProposedResearchAction; entry: SearchFrontierEntry }> = [];
   for (const proposal of proposals) {
@@ -766,16 +760,19 @@ async function executeActions(
     const explicit = proposal.frontierEntryId
       ? selectedEntries.find((entry) => entry.id === proposal.frontierEntryId)
       : undefined;
-    const entry = explicit ?? selectedEntries.find((candidate) =>
-      !claimedEntries.has(candidate.id)
-      && candidate.allowedTools.includes(proposal.tool)
-      && (candidate.candidateId === null
-        || proposal.candidateId === candidate.candidateId));
+    const entry =
+      explicit ??
+      selectedEntries.find(
+        (candidate) =>
+          !claimedEntries.has(candidate.id) &&
+          candidate.allowedTools.includes(proposal.tool) &&
+          (candidate.candidateId === null || proposal.candidateId === candidate.candidateId),
+      );
     if (
-      !entry
-      || claimedEntries.has(entry.id)
-      || !entry.allowedTools.includes(proposal.tool)
-      || proposal.candidateId !== (entry.candidateId ?? undefined)
+      !entry ||
+      claimedEntries.has(entry.id) ||
+      !entry.allowedTools.includes(proposal.tool) ||
+      proposal.candidateId !== (entry.candidateId ?? undefined)
     ) {
       engine.trace.record("action.rejected", {
         phase: state.phase,
@@ -791,10 +788,7 @@ async function executeActions(
     bound.push({ proposal: { ...proposal, frontierEntryId: entry.id }, entry });
   }
   const initialBatch = bound;
-  let remainingSearchCalls = Math.max(
-    0,
-    state.budget.limits.maxSearchCalls - state.budget.usage.searchCalls,
-  );
+  let remainingSearchCalls = Math.max(0, state.budget.limits.maxSearchCalls - state.budget.usage.searchCalls);
   const bounded = initialBatch.filter(({ proposal }) => {
     if (actionBudgetClass(proposal) !== "search") return true;
     if (remainingSearchCalls <= 0) return false;
@@ -819,9 +813,11 @@ async function executeActions(
     modelAccounting: InternalModelAccounting;
   }> = [];
   const actionPolicyContext: ActionPolicyContext = {
-    allowedEmails: new Set(state.target.identifiers
-      .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
-      .map((identifier) => identifier.normalizedValue)),
+    allowedEmails: new Set(
+      state.target.identifiers
+        .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
+        .map((identifier) => identifier.normalizedValue),
+    ),
     currentYear: new Date(engine.clock.now()).getUTCFullYear(),
   };
   for (const { proposal, entry } of bounded) {
@@ -851,35 +847,45 @@ async function executeActions(
       pathCost: entry.pathCost,
       mutated: entry.mutation !== null,
     };
-    const actionNodeAdmission = admitGraphNode(graph, {
-      kind: "action",
-      label: `${action.tool} — ${action.purpose}`,
-      status: "running",
-      sourceTier: entry.sourceTier,
-      sourceLaneId: entry.sourceLaneId,
-      frontierEntryId: entry.id,
-      actionId: action.id,
-      candidateId: action.candidateId ?? null,
-      data: {
-        tool: action.tool,
-        budgetClass: action.budgetClass,
-        pathCost: action.pathCost,
-        mutated: action.mutated,
+    const actionNodeAdmission = admitGraphNode(
+      graph,
+      {
+        kind: "action",
+        label: `${action.tool} — ${action.purpose}`,
+        status: "running",
+        sourceTier: entry.sourceTier,
+        sourceLaneId: entry.sourceLaneId,
+        frontierEntryId: entry.id,
+        actionId: action.id,
+        candidateId: action.candidateId ?? null,
+        data: {
+          tool: action.tool,
+          budgetClass: action.budgetClass,
+          pathCost: action.pathCost,
+          mutated: action.mutated,
+        },
+        dedupeEntityKey: `action:${action.id}`,
       },
-      dedupeEntityKey: `action:${action.id}`,
-    }, engine.ids, engine.clock.now());
+      engine.ids,
+      engine.clock.now(),
+    );
     graph = actionNodeAdmission.graph;
     recordSearchEvents(engine, actionNodeAdmission.events);
-    const actionEdgeAdmission = admitGraphEdge(graph, {
-      fromNodeId: entry.nodeId,
-      toNodeId: actionNodeAdmission.value.id,
-      kind: entry.mutation ? "mutates" : "expands",
-      status: "running",
-      frontierEntryId: entry.id,
-      actionId: action.id,
-      edgeCost: 0.05,
-      pathCost: entry.pathCost + 0.05,
-    }, engine.ids, engine.clock.now());
+    const actionEdgeAdmission = admitGraphEdge(
+      graph,
+      {
+        fromNodeId: entry.nodeId,
+        toNodeId: actionNodeAdmission.value.id,
+        kind: entry.mutation ? "mutates" : "expands",
+        status: "running",
+        frontierEntryId: entry.id,
+        actionId: action.id,
+        edgeCost: 0.05,
+        pathCost: entry.pathCost + 0.05,
+      },
+      engine.ids,
+      engine.clock.now(),
+    );
     graph = actionEdgeAdmission.graph;
     recordSearchEvents(engine, actionEdgeAdmission.events);
     const spanId = engine.trace.startSpan({
@@ -993,43 +999,60 @@ async function executeActions(
         // identity), matching the canonical graph the generator produces; this
         // keeps cross-candidate `separates` edges free of a conflicting single
         // action provenance.
-        const candidateNodeAdmission = admitGraphNode(graph, {
-          kind: "candidate",
-          label: candidateMutation.candidate.displayName,
-          status: candidateMutation.created ? "verified" : "selected",
-          candidateId: candidateMutation.candidate.id,
-          data: {},
-          dedupeEntityKey: `candidate:${candidateMutation.candidate.id}`,
-        }, engine.ids, engine.clock.now());
+        const candidateNodeAdmission = admitGraphNode(
+          graph,
+          {
+            kind: "candidate",
+            label: candidateMutation.candidate.displayName,
+            status: candidateMutation.created ? "verified" : "selected",
+            candidateId: candidateMutation.candidate.id,
+            data: {},
+            dedupeEntityKey: `candidate:${candidateMutation.candidate.id}`,
+          },
+          engine.ids,
+          engine.clock.now(),
+        );
         graph = candidateNodeAdmission.graph;
         recordSearchEvents(engine, candidateNodeAdmission.events, spanId);
-        const candidateEdgeAdmission = admitGraphEdge(graph, {
-          fromNodeId: actionNodeId,
-          toNodeId: candidateNodeAdmission.value.id,
-          kind: "expands",
-          status: "verified",
-          frontierEntryId: entry.id,
-          actionId: action.id,
-          edgeCost: 0.06,
-          pathCost: entry.pathCost + 0.11,
-        }, engine.ids, engine.clock.now());
+        const candidateEdgeAdmission = admitGraphEdge(
+          graph,
+          {
+            fromNodeId: actionNodeId,
+            toNodeId: candidateNodeAdmission.value.id,
+            kind: "expands",
+            status: "verified",
+            frontierEntryId: entry.id,
+            actionId: action.id,
+            edgeCost: 0.06,
+            pathCost: entry.pathCost + 0.11,
+          },
+          engine.ids,
+          engine.clock.now(),
+        );
         graph = candidateEdgeAdmission.graph;
         recordSearchEvents(engine, candidateEdgeAdmission.events, spanId);
 
         const snapshotCandidates = engine.snapshot().candidates;
-        for (const other of snapshotCandidates.filter((item) =>
-          item.id !== candidateMutation.candidate.id
-          && item.normalizedName === candidateMutation.candidate.normalizedName)) {
+        for (const other of snapshotCandidates.filter(
+          (item) =>
+            item.id !== candidateMutation.candidate.id &&
+            item.normalizedName === candidateMutation.candidate.normalizedName,
+        )) {
           const otherNode = graph.nodes.find((node) => node.candidateId === other.id);
           if (!otherNode) continue;
-          const separation = admitGraphEdge(graph, {
-            fromNodeId: otherNode.id,
-            toNodeId: candidateNodeAdmission.value.id,
-            kind: "separates",
-            status: "verified",
-            edgeCost: 0.07,
-            pathCost: entry.pathCost + 0.12,
-          }, engine.ids, engine.clock.now());
+          const separation = admitGraphEdge(
+            graph,
+            {
+              fromNodeId: otherNode.id,
+              toNodeId: candidateNodeAdmission.value.id,
+              kind: "separates",
+              status: "verified",
+              edgeCost: 0.07,
+              pathCost: entry.pathCost + 0.12,
+            },
+            engine.ids,
+            engine.clock.now(),
+          );
           graph = separation.graph;
           recordSearchEvents(engine, separation.events, spanId);
         }
@@ -1061,13 +1084,8 @@ async function executeActions(
     const sourceLane = sourceLaneForFrontierEntry(entry);
     const sourceTierContext = sourceTierContextForAction(state, action.candidateId);
     for (const draft of result.evidence ?? []) {
-      const candidateFromRef = draft.candidateRef
-        ? localCandidateIds.get(draft.candidateRef)
-        : undefined;
-      const candidateId =
-        draft.candidateId ??
-        candidateFromRef ??
-        action.candidateId;
+      const candidateFromRef = draft.candidateRef ? localCandidateIds.get(draft.candidateRef) : undefined;
+      const candidateId = draft.candidateId ?? candidateFromRef ?? action.candidateId;
       if (draft.candidateRef && !candidateFromRef) {
         engine.trace.record("evidence.admission", {
           phase: engine.phase,
@@ -1142,8 +1160,7 @@ async function executeActions(
         });
         continue;
       }
-      const discoveryOnly = draft.sourceType === "search_result"
-        || draft.disposition === "discovery_only";
+      const discoveryOnly = draft.sourceType === "search_result" || draft.disposition === "discovery_only";
       if (!sourceLane) {
         engine.trace.record("evidence.admission", {
           phase: engine.phase,
@@ -1219,84 +1236,110 @@ async function executeActions(
       if (admission.admitted && admission.evidence) {
         mutations += 1;
         actionMutations += 1;
-        const sourceNodeAdmission = admitGraphNode(graph, {
-          kind: "source",
-          label: admission.evidence.title ?? admission.evidence.sourceFamily,
-          status: "verified",
-          sourceTier: entry.sourceTier,
-          sourceLaneId: entry.sourceLaneId,
-          frontierEntryId: entry.id,
-          actionId: action.id,
-          candidateId: admission.evidence.candidateId,
-          evidenceId: admission.evidence.id,
-          data: {
-            sourceUrl: admission.evidence.sourceUrl,
-            sourceFamily: admission.evidence.sourceFamily,
-            sourceType: admission.evidence.sourceType,
+        const sourceNodeAdmission = admitGraphNode(
+          graph,
+          {
+            kind: "source",
+            label: admission.evidence.title ?? admission.evidence.sourceFamily,
+            status: "verified",
+            sourceTier: entry.sourceTier,
+            sourceLaneId: entry.sourceLaneId,
+            frontierEntryId: entry.id,
+            actionId: action.id,
+            candidateId: admission.evidence.candidateId,
+            evidenceId: admission.evidence.id,
+            data: {
+              sourceUrl: admission.evidence.sourceUrl,
+              sourceFamily: admission.evidence.sourceFamily,
+              sourceType: admission.evidence.sourceType,
+            },
+            dedupeEntityKey: `source:${admission.evidence.id}`,
           },
-          dedupeEntityKey: `source:${admission.evidence.id}`,
-        }, engine.ids, engine.clock.now());
+          engine.ids,
+          engine.clock.now(),
+        );
         graph = sourceNodeAdmission.graph;
         recordSearchEvents(engine, sourceNodeAdmission.events, spanId);
-        const actionSourceEdge = admitGraphEdge(graph, {
-          fromNodeId: actionNodeId,
-          toNodeId: sourceNodeAdmission.value.id,
-          kind: "expands",
-          status: "verified",
-          frontierEntryId: entry.id,
-          actionId: action.id,
-          edgeCost: 0.04,
-          pathCost: entry.pathCost + 0.09,
-        }, engine.ids, engine.clock.now());
+        const actionSourceEdge = admitGraphEdge(
+          graph,
+          {
+            fromNodeId: actionNodeId,
+            toNodeId: sourceNodeAdmission.value.id,
+            kind: "expands",
+            status: "verified",
+            frontierEntryId: entry.id,
+            actionId: action.id,
+            edgeCost: 0.04,
+            pathCost: entry.pathCost + 0.09,
+          },
+          engine.ids,
+          engine.clock.now(),
+        );
         graph = actionSourceEdge.graph;
         recordSearchEvents(engine, actionSourceEdge.events, spanId);
-        const evidenceNodeAdmission = admitGraphNode(graph, {
-          kind: "evidence",
-          label: admission.evidence.claim,
-          status: admission.evidence.disposition === "contradicts" ? "rejected" : "verified",
-          sourceTier: entry.sourceTier,
-          sourceLaneId: entry.sourceLaneId,
-          frontierEntryId: entry.id,
-          actionId: action.id,
-          candidateId: admission.evidence.candidateId,
-          evidenceId: admission.evidence.id,
-          data: {
-            disposition: admission.evidence.disposition,
-            sourceUrl: admission.evidence.sourceUrl,
-            sourceFamily: admission.evidence.sourceFamily,
-            sourceType: admission.evidence.sourceType,
-            contentHash: admission.evidence.contentHash,
-            verificationMethod: admission.evidence.verificationMethod,
+        const evidenceNodeAdmission = admitGraphNode(
+          graph,
+          {
+            kind: "evidence",
+            label: admission.evidence.claim,
+            status: admission.evidence.disposition === "contradicts" ? "rejected" : "verified",
+            sourceTier: entry.sourceTier,
+            sourceLaneId: entry.sourceLaneId,
+            frontierEntryId: entry.id,
+            actionId: action.id,
+            candidateId: admission.evidence.candidateId,
+            evidenceId: admission.evidence.id,
+            data: {
+              disposition: admission.evidence.disposition,
+              sourceUrl: admission.evidence.sourceUrl,
+              sourceFamily: admission.evidence.sourceFamily,
+              sourceType: admission.evidence.sourceType,
+              contentHash: admission.evidence.contentHash,
+              verificationMethod: admission.evidence.verificationMethod,
+            },
+            dedupeEntityKey: `evidence:${admission.evidence.id}`,
           },
-          dedupeEntityKey: `evidence:${admission.evidence.id}`,
-        }, engine.ids, engine.clock.now());
+          engine.ids,
+          engine.clock.now(),
+        );
         graph = evidenceNodeAdmission.graph;
         recordSearchEvents(engine, evidenceNodeAdmission.events, spanId);
-        const sourceEvidenceEdge = admitGraphEdge(graph, {
-          fromNodeId: sourceNodeAdmission.value.id,
-          toNodeId: evidenceNodeAdmission.value.id,
-          kind: "grounds",
-          status: evidenceNodeAdmission.value.status,
-          frontierEntryId: entry.id,
-          actionId: action.id,
-          edgeCost: 0.04,
-          pathCost: entry.pathCost + 0.13,
-        }, engine.ids, engine.clock.now());
-        graph = sourceEvidenceEdge.graph;
-        recordSearchEvents(engine, sourceEvidenceEdge.events, spanId);
-        const candidateNode = graph.nodes.find((node) =>
-          node.kind === "candidate" && node.candidateId === admission.evidence?.candidateId);
-        if (candidateNode) {
-          const evidenceCandidateEdge = admitGraphEdge(graph, {
-            fromNodeId: evidenceNodeAdmission.value.id,
-            toNodeId: candidateNode.id,
-            kind: admission.evidence.disposition === "contradicts" ? "conflicts" : "supports",
+        const sourceEvidenceEdge = admitGraphEdge(
+          graph,
+          {
+            fromNodeId: sourceNodeAdmission.value.id,
+            toNodeId: evidenceNodeAdmission.value.id,
+            kind: "grounds",
             status: evidenceNodeAdmission.value.status,
             frontierEntryId: entry.id,
             actionId: action.id,
-            edgeCost: 0.03,
-            pathCost: entry.pathCost + 0.16,
-          }, engine.ids, engine.clock.now());
+            edgeCost: 0.04,
+            pathCost: entry.pathCost + 0.13,
+          },
+          engine.ids,
+          engine.clock.now(),
+        );
+        graph = sourceEvidenceEdge.graph;
+        recordSearchEvents(engine, sourceEvidenceEdge.events, spanId);
+        const candidateNode = graph.nodes.find(
+          (node) => node.kind === "candidate" && node.candidateId === admission.evidence?.candidateId,
+        );
+        if (candidateNode) {
+          const evidenceCandidateEdge = admitGraphEdge(
+            graph,
+            {
+              fromNodeId: evidenceNodeAdmission.value.id,
+              toNodeId: candidateNode.id,
+              kind: admission.evidence.disposition === "contradicts" ? "conflicts" : "supports",
+              status: evidenceNodeAdmission.value.status,
+              frontierEntryId: entry.id,
+              actionId: action.id,
+              edgeCost: 0.03,
+              pathCost: entry.pathCost + 0.16,
+            },
+            engine.ids,
+            engine.clock.now(),
+          );
           graph = evidenceCandidateEdge.graph;
           recordSearchEvents(engine, evidenceCandidateEdge.events, spanId);
         }
@@ -1366,22 +1409,27 @@ async function executeActions(
         if (engine.snapshot().findings.length > beforeFindingCount) {
           mutations += 1;
           actionMutations += 1;
-          const findingNodeAdmission = admitGraphNode(graph, {
-            kind: "finding",
-            label: admittedFinding.title,
-            status: "verified",
-            sourceTier: entry.sourceTier,
-            sourceLaneId: entry.sourceLaneId,
-            frontierEntryId: entry.id,
-            actionId: action.id,
-            candidateId: admittedFinding.candidateId,
-            findingId: admittedFinding.id,
-            data: {
-              category: admittedFinding.category,
-              confidence: admittedFinding.confidence.score,
+          const findingNodeAdmission = admitGraphNode(
+            graph,
+            {
+              kind: "finding",
+              label: admittedFinding.title,
+              status: "verified",
+              sourceTier: entry.sourceTier,
+              sourceLaneId: entry.sourceLaneId,
+              frontierEntryId: entry.id,
+              actionId: action.id,
+              candidateId: admittedFinding.candidateId,
+              findingId: admittedFinding.id,
+              data: {
+                category: admittedFinding.category,
+                confidence: admittedFinding.confidence.score,
+              },
+              dedupeEntityKey: `finding:${admittedFinding.id}`,
             },
-            dedupeEntityKey: `finding:${admittedFinding.id}`,
-          }, engine.ids, engine.clock.now());
+            engine.ids,
+            engine.clock.now(),
+          );
           graph = findingNodeAdmission.graph;
           recordSearchEvents(engine, findingNodeAdmission.events, spanId);
           for (const evidenceId of [...admittedFinding.evidenceIds, ...admittedFinding.counterEvidenceIds]) {
@@ -1389,16 +1437,21 @@ async function executeActions(
             // ground a finding: grounds edges must be evidence->finding.
             const evidenceNode = graph.nodes.find((node) => node.kind === "evidence" && node.evidenceId === evidenceId);
             if (!evidenceNode) continue;
-            const findingEdge = admitGraphEdge(graph, {
-              fromNodeId: evidenceNode.id,
-              toNodeId: findingNodeAdmission.value.id,
-              kind: "grounds",
-              status: "verified",
-              frontierEntryId: entry.id,
-              actionId: action.id,
-              edgeCost: 0.03,
-              pathCost: entry.pathCost + 0.19,
-            }, engine.ids, engine.clock.now());
+            const findingEdge = admitGraphEdge(
+              graph,
+              {
+                fromNodeId: evidenceNode.id,
+                toNodeId: findingNodeAdmission.value.id,
+                kind: "grounds",
+                status: "verified",
+                frontierEntryId: entry.id,
+                actionId: action.id,
+                edgeCost: 0.03,
+                pathCost: entry.pathCost + 0.19,
+              },
+              engine.ids,
+              engine.clock.now(),
+            );
             graph = findingEdge.graph;
             recordSearchEvents(engine, findingEdge.events, spanId);
           }
@@ -1415,19 +1468,14 @@ async function executeActions(
     modelAccounting.finalizeOutstanding("action_returned_with_unsettled_model_attempt");
     const accountedModel = modelAccounting.summary();
     const usesAttemptAccounting = accountedModel.llmCalls > 0;
-    const tokens = usesAttemptAccounting
-      ? accountedModel.tokenUsage
-      : zeroSafeTokens(result.tokenUsage);
+    const tokens = usesAttemptAccounting ? accountedModel.tokenUsage : zeroSafeTokens(result.tokenUsage);
     if (!usesAttemptAccounting && Object.keys(tokens).length > 0) engine.recordTokens(tokens);
-    const reportedLlmCalls = usesAttemptAccounting
-      ? accountedModel.llmCalls
-      : result.meta?.llmCalls;
+    const reportedLlmCalls = usesAttemptAccounting ? accountedModel.llmCalls : result.meta?.llmCalls;
     if (!usesAttemptAccounting && reportedLlmCalls !== undefined) {
       engine.recordLlmCalls(reportedLlmCalls);
     }
     const reportedRequests = result.meta?.requests;
-    const chargedRequests =
-      reportedRequests ?? (action.budgetClass === "compute" ? 0 : 1);
+    const chargedRequests = reportedRequests ?? (action.budgetClass === "compute" ? 0 : 1);
     engine.recordToolCall(chargedRequests, action.budgetClass === "search");
     engine.trace.endSpan(spanId, {
       status: actionTraceStatus(result.status),
@@ -1450,21 +1498,18 @@ async function executeActions(
         llmCalls: reportedLlmCalls ?? null,
         toolCalls: 1,
         searchCalls: action.budgetClass === "search" ? 1 : 0,
-        networkRequests: reportedRequests === undefined
-          ? usesAttemptAccounting ? accountedModel.networkRequests : null
-          : reportedRequests + (usesAttemptAccounting ? accountedModel.networkRequests ?? 0 : 0),
+        networkRequests:
+          reportedRequests === undefined
+            ? usesAttemptAccounting
+              ? accountedModel.networkRequests
+              : null
+            : reportedRequests + (usesAttemptAccounting ? (accountedModel.networkRequests ?? 0) : 0),
         bytesRead: result.meta?.bytesRead ?? null,
-        unavailableReason: usesAttemptAccounting
-          ? accountedModel.usageUnavailableReason
-          : undefined,
+        unavailableReason: usesAttemptAccounting ? accountedModel.usageUnavailableReason : undefined,
       },
     });
     const frontierStatus: Extract<SearchGraphStatus, "verified" | "rejected" | "exhausted"> =
-      actionMutations > 0
-        ? "verified"
-        : result.status === "failed"
-          ? "rejected"
-          : "exhausted";
+      actionMutations > 0 ? "verified" : result.status === "failed" ? "rejected" : "exhausted";
     const outcome = recordFrontierOutcome(graph, entry, frontierStatus, engine.clock.now());
     graph = outcome.graph;
     // The tool span is closed above after all tool-derived trust mutations are
@@ -1473,45 +1518,49 @@ async function executeActions(
     recordSearchEvents(engine, outcome.events);
 
     if (actionMutations === 0) {
-      const gapNodeAdmission = admitGraphNode(graph, {
-        kind: "gap",
-        label: result.diagnostics?.[0]?.message ?? `${action.tool} produced no admissible evidence`,
-        status: frontierStatus,
-        sourceTier: entry.sourceTier,
-        sourceLaneId: entry.sourceLaneId,
-        frontierEntryId: entry.id,
-        actionId: action.id,
-        candidateId: action.candidateId ?? null,
-        data: { resultStatus: result.status },
-      }, engine.ids, engine.clock.now());
+      const gapNodeAdmission = admitGraphNode(
+        graph,
+        {
+          kind: "gap",
+          label: result.diagnostics?.[0]?.message ?? `${action.tool} produced no admissible evidence`,
+          status: frontierStatus,
+          sourceTier: entry.sourceTier,
+          sourceLaneId: entry.sourceLaneId,
+          frontierEntryId: entry.id,
+          actionId: action.id,
+          candidateId: action.candidateId ?? null,
+          data: { resultStatus: result.status },
+        },
+        engine.ids,
+        engine.clock.now(),
+      );
       graph = gapNodeAdmission.graph;
       recordSearchEvents(engine, gapNodeAdmission.events);
-      const gapEdgeAdmission = admitGraphEdge(graph, {
-        fromNodeId: actionNodeId,
-        toNodeId: gapNodeAdmission.value.id,
-        kind: "expands",
-        status: frontierStatus,
-        frontierEntryId: entry.id,
-        actionId: action.id,
-        edgeCost: 0.04,
-        pathCost: entry.pathCost + 0.09,
-      }, engine.ids, engine.clock.now());
+      const gapEdgeAdmission = admitGraphEdge(
+        graph,
+        {
+          fromNodeId: actionNodeId,
+          toNodeId: gapNodeAdmission.value.id,
+          kind: "expands",
+          status: frontierStatus,
+          frontierEntryId: entry.id,
+          actionId: action.id,
+          edgeCost: 0.04,
+          pathCost: entry.pathCost + 0.09,
+        },
+        engine.ids,
+        engine.clock.now(),
+      );
       graph = gapEdgeAdmission.graph;
       recordSearchEvents(engine, gapEdgeAdmission.events);
     }
   }
 
-  const mutationParent = executedEntries.find((entry) =>
-    entry.mutation === null
-    && frontierEntryById(graph, entry.id)?.status === "verified");
+  const mutationParent = executedEntries.find(
+    (entry) => entry.mutation === null && frontierEntryById(graph, entry.id)?.status === "verified",
+  );
   if (mutationParent) {
-    const mutation = await proposeBoundedMutation(
-      graph,
-      state.target,
-      mutationParent,
-      engine.ids,
-      engine.clock.now(),
-    );
+    const mutation = await proposeBoundedMutation(graph, state.target, mutationParent, engine.ids, engine.clock.now());
     graph = mutation.graph;
     recordSearchEvents(engine, mutation.events);
   }
@@ -1565,9 +1614,10 @@ async function synthesizeFindings(
     if (result.openQuestions) engine.setOpenQuestions(result.openQuestions);
     modelAccounting.finalizeOutstanding("synthesis_returned_with_unsettled_model_attempt");
     const accounted = modelAccounting.summary();
-    const model = accounted.llmCalls > 0
-      ? accounted
-      : chargeLegacyModelTelemetry(engine, result.modelTelemetry, result.tokenUsage, 1);
+    const model =
+      accounted.llmCalls > 0
+        ? accounted
+        : chargeLegacyModelTelemetry(engine, result.modelTelemetry, result.tokenUsage, 1);
     engine.trace.endSpan(spanId, {
       status: "succeeded",
       payload: {
@@ -1586,9 +1636,7 @@ async function synthesizeFindings(
   } catch (error) {
     modelAccounting.finalizeOutstanding("synthesis_failed_with_unsettled_model_attempt");
     const accounted = modelAccounting.summary();
-    const model = accounted.llmCalls > 0
-      ? accounted
-      : chargeLegacyModelTelemetry(engine, undefined, undefined, 1);
+    const model = accounted.llmCalls > 0 ? accounted : chargeLegacyModelTelemetry(engine, undefined, undefined, 1);
     engine.trace.endSpan(spanId, {
       status: signal?.aborted ? "canceled" : "failed",
       payload: { error: safeError(error) },
@@ -1619,31 +1667,42 @@ function addTerminalReportNode(
 ): SearchGraph {
   let graph = cloneJson(graphValue);
   if (graph.seedNodeId === null) return markSearchGraphTerminal(graph, status, engine.clock.now());
-  const reportNode = admitGraphNode(graph, {
-    kind: "report",
-    label: status === "completed" ? "Completed intelligence report" : "Bounded intelligence report",
-    status: status === "completed" ? "verified" : "exhausted",
-    data: {
-      candidateCount: engine.snapshot().candidates.length,
-      evidenceCount: engine.snapshot().evidence.length,
-      findingCount: engine.snapshot().findings.length,
+  const reportNode = admitGraphNode(
+    graph,
+    {
+      kind: "report",
+      label: status === "completed" ? "Completed intelligence report" : "Bounded intelligence report",
+      status: status === "completed" ? "verified" : "exhausted",
+      data: {
+        candidateCount: engine.snapshot().candidates.length,
+        evidenceCount: engine.snapshot().evidence.length,
+        findingCount: engine.snapshot().findings.length,
+      },
+      dedupeEntityKey: `report:${engine.runId}`,
     },
-    dedupeEntityKey: `report:${engine.runId}`,
-  }, engine.ids, engine.clock.now());
+    engine.ids,
+    engine.clock.now(),
+  );
   graph = reportNode.graph;
   recordSearchEvents(engine, reportNode.events);
-  const includedNodes = graph.nodes.filter((node) =>
-    node.id !== reportNode.value.id
-    && (node.kind === "candidate" || node.kind === "finding" || node.kind === "gap"));
+  const includedNodes = graph.nodes.filter(
+    (node) =>
+      node.id !== reportNode.value.id && (node.kind === "candidate" || node.kind === "finding" || node.kind === "gap"),
+  );
   for (const node of includedNodes) {
-    const edge = admitGraphEdge(graph, {
-      fromNodeId: node.id,
-      toNodeId: reportNode.value.id,
-      kind: "includes",
-      status: node.status,
-      edgeCost: 0.02,
-      pathCost: 0.02 + Math.max(1, node.ordinal) / 1_000_000,
-    }, engine.ids, engine.clock.now());
+    const edge = admitGraphEdge(
+      graph,
+      {
+        fromNodeId: node.id,
+        toNodeId: reportNode.value.id,
+        kind: "includes",
+        status: node.status,
+        edgeCost: 0.02,
+        pathCost: 0.02 + Math.max(1, node.ordinal) / 1_000_000,
+      },
+      engine.ids,
+      engine.clock.now(),
+    );
     graph = edge.graph;
     recordSearchEvents(engine, edge.events);
   }
@@ -1666,25 +1725,27 @@ function terminalizeWithGraph(
   return graph;
 }
 
-function admitMissingFindingNodes(
-  engine: InvestigationEngine,
-  graphValue: SearchGraph,
-): SearchGraph {
+function admitMissingFindingNodes(engine: InvestigationEngine, graphValue: SearchGraph): SearchGraph {
   let graph = cloneJson(graphValue);
   for (const finding of engine.snapshot().findings) {
     if (graph.nodes.some((node) => node.findingId === finding.id)) continue;
-    const findingNode = admitGraphNode(graph, {
-      kind: "finding",
-      label: finding.title,
-      status: "verified",
-      candidateId: finding.candidateId,
-      findingId: finding.id,
-      data: {
-        category: finding.category,
-        confidence: finding.confidence.score,
+    const findingNode = admitGraphNode(
+      graph,
+      {
+        kind: "finding",
+        label: finding.title,
+        status: "verified",
+        candidateId: finding.candidateId,
+        findingId: finding.id,
+        data: {
+          category: finding.category,
+          confidence: finding.confidence.score,
+        },
+        dedupeEntityKey: `finding:${finding.id}`,
       },
-      dedupeEntityKey: `finding:${finding.id}`,
-    }, engine.ids, engine.clock.now());
+      engine.ids,
+      engine.clock.now(),
+    );
     graph = findingNode.graph;
     recordSearchEvents(engine, findingNode.events);
     for (const evidenceId of [...finding.evidenceIds, ...finding.counterEvidenceIds]) {
@@ -1694,14 +1755,19 @@ function admitMissingFindingNodes(
       // source->finding edge.
       const evidenceNode = graph.nodes.find((node) => node.kind === "evidence" && node.evidenceId === evidenceId);
       if (!evidenceNode) continue;
-      const edge = admitGraphEdge(graph, {
-        fromNodeId: evidenceNode.id,
-        toNodeId: findingNode.value.id,
-        kind: "grounds",
-        status: "verified",
-        edgeCost: 0.03,
-        pathCost: 0.03 + Math.max(1, findingNode.value.ordinal) / 1_000_000,
-      }, engine.ids, engine.clock.now());
+      const edge = admitGraphEdge(
+        graph,
+        {
+          fromNodeId: evidenceNode.id,
+          toNodeId: findingNode.value.id,
+          kind: "grounds",
+          status: "verified",
+          edgeCost: 0.03,
+          pathCost: 0.03 + Math.max(1, findingNode.value.ordinal) / 1_000_000,
+        },
+        engine.ids,
+        engine.clock.now(),
+      );
       graph = edge.graph;
       recordSearchEvents(engine, edge.events);
     }
@@ -1758,13 +1824,10 @@ export async function* runResearch(
 
   for (const update of emitPending()) yield update;
 
-  const hasPendingFrontier = (): boolean => graph.frontier.some((entry) =>
-    entry.status === "queued" || entry.status === "mutated");
+  const hasPendingFrontier = (): boolean =>
+    graph.frontier.some((entry) => entry.status === "queued" || entry.status === "mutated");
 
-  const finish = (
-    decision: ReturnType<typeof evaluateStop>,
-    stopOptions: StopEvaluationOptions = {},
-  ): void => {
+  const finish = (decision: ReturnType<typeof evaluateStop>, stopOptions: StopEvaluationOptions = {}): void => {
     graph = terminalizeWithGraph(engine, graph, decision, stopOptions);
   };
 
@@ -1805,13 +1868,7 @@ export async function* runResearch(
       },
 
       seedFrontier: () => {
-        const seeded = seedFrontier(
-          graph,
-          engine.snapshot().target,
-          availableTools,
-          engine.ids,
-          engine.clock.now(),
-        );
+        const seeded = seedFrontier(graph, engine.snapshot().target, availableTools, engine.ids, engine.clock.now());
         graph = seeded.graph;
         recordSearchEvents(engine, seeded.events);
         engine.replaceSearchGraph(graph);
@@ -1838,29 +1895,23 @@ export async function* runResearch(
             engine.transition(next);
             if (engine.phase === "calibrate") return { route: "synthesize" };
           } else {
-            finish(
-              evaluateStop(engine.snapshot(), { noLegalActions: true }),
-              { noLegalActions: true },
-            );
+            finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
             return { route: "terminal", selectedFrontierEntryIds: [] };
           }
         }
 
         const state = engine.snapshot();
         const remainingCalls = Math.max(0, state.budget.limits.maxToolCalls - state.budget.usage.toolCalls);
-        const limit = Math.min(
-          state.budget.limits.maxActionsPerTurn,
-          remainingCalls,
-          MAX_OUTBOUND_CONCURRENCY,
-        );
+        const limit = Math.min(state.budget.limits.maxActionsPerTurn, remainingCalls, MAX_OUTBOUND_CONCURRENCY);
         const selection = selectFrontierBatch(graph, limit, engine.clock.now());
         graph = selection.graph;
         selectedEntries = selection.value;
         recordSearchEvents(engine, selection.events);
 
         if (selectedEntries.length === 0) {
-          const strandedMutations = graph.frontier.filter((entry) =>
-            entry.status === "mutated" || entry.status === "queued");
+          const strandedMutations = graph.frontier.filter(
+            (entry) => entry.status === "mutated" || entry.status === "queued",
+          );
           if (strandedMutations.length > 0) {
             graph = setFrontierStatus(
               graph,
@@ -1882,10 +1933,7 @@ export async function* runResearch(
           if (engine.snapshot().evidence.length > 0 && advanceToCalibrate()) {
             return { route: "synthesize", selectedFrontierEntryIds: [] };
           }
-          finish(
-            evaluateStop(engine.snapshot(), { noLegalActions: true }),
-            { noLegalActions: true },
-          );
+          finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
           return { route: "terminal", selectedFrontierEntryIds: [] };
         }
 
@@ -1903,13 +1951,7 @@ export async function* runResearch(
       },
 
       planExpansion: async () => {
-        plannerDecision = await invokePlanner(
-          engine,
-          dependencies,
-          availableTools,
-          selectedEntries,
-          options.signal,
-        );
+        plannerDecision = await invokePlanner(engine, dependencies, availableTools, selectedEntries, options.signal);
         if (plannerDecision.kind !== "actions") {
           graph = requeueFrontier(
             graph,
@@ -1918,9 +1960,7 @@ export async function* runResearch(
           );
           engine.replaceSearchGraph(graph);
         }
-        const route: FrontierHarnessRoute = plannerDecision.kind === "actions"
-          ? "execute_expansion"
-          : "assess";
+        const route: FrontierHarnessRoute = plannerDecision.kind === "actions" ? "execute_expansion" : "assess";
         return {
           route,
           decision: cloneJson(plannerDecision) as unknown as JsonObject,
@@ -1988,23 +2028,17 @@ export async function* runResearch(
         }
         if (engine.phase === "calibrate") return { route: "synthesize" };
 
-        const requestedNext = plannerDecision?.kind === "advance"
-          ? plannerDecision.nextPhase
-          : undefined;
-        const next = requestedNext
-          && requestedNext !== "terminal"
-          && canTransitionPhase(engine.phase, requestedNext)
-          ? requestedNext
-          : naturalNextPhase(engine.snapshot());
+        const requestedNext = plannerDecision?.kind === "advance" ? plannerDecision.nextPhase : undefined;
+        const next =
+          requestedNext && requestedNext !== "terminal" && canTransitionPhase(engine.phase, requestedNext)
+            ? requestedNext
+            : naturalNextPhase(engine.snapshot());
         if (next && canTransitionPhase(engine.phase, next)) {
           engine.transition(next);
           return { route: next === "calibrate" ? "synthesize" : "select_frontier" };
         }
         if (engine.phase === "report") {
-          finish(
-            evaluateStop(engine.snapshot(), { noLegalActions: true }),
-            { noLegalActions: true },
-          );
+          finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
           return { route: "terminal" };
         }
         return { route: "select_frontier" };
@@ -2012,10 +2046,7 @@ export async function* runResearch(
 
       synthesize: async () => {
         if (!advanceToCalibrate()) {
-          finish(
-            evaluateStop(engine.snapshot(), { noLegalActions: true }),
-            { noLegalActions: true },
-          );
+          finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
           return { route: "terminal" };
         }
         const synthesized = await synthesizeFindings(engine, dependencies, options.signal);
@@ -2041,10 +2072,7 @@ export async function* runResearch(
           }
           return { route: "select_frontier" };
         }
-        finish(
-          evaluateStop(engine.snapshot(), { noLegalActions: true }),
-          { noLegalActions: true },
-        );
+        finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
         return { route: "terminal" };
       },
     });
@@ -2109,10 +2137,7 @@ export async function* runResearch(
           graph = engine.snapshot().searchGraph;
           graph = addTerminalReportNode(engine, graph, "failed");
           engine.replaceSearchGraph(graph);
-          engine.stopExternal(
-            "fatal_error",
-            `Investigation failed: ${(safeError(error).message as string)}`,
-          );
+          engine.stopExternal("fatal_error", `Investigation failed: ${safeError(error).message as string}`);
         }
       }
     }

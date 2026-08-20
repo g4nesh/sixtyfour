@@ -28,11 +28,13 @@ function referenceLinks(refs: readonly string[]): string {
 
 function citedSourceLinks(sources: readonly ReportCitedSource[]): string {
   if (sources.length === 0) return "None";
-  return sources.map((source) => {
-    const target = markdownUrl(source.url);
-    const label = source.title ? `${source.title} — ${source.domain}` : source.domain;
-    return target ? `[${markdownInline(label)}](${target})` : markdownInline(label);
-  }).join(", ");
+  return sources
+    .map((source) => {
+      const target = markdownUrl(source.url);
+      const label = source.title ? `${source.title} — ${source.domain}` : source.domain;
+      return target ? `[${markdownInline(label)}](${target})` : markdownInline(label);
+    })
+    .join(", ");
 }
 
 function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
@@ -42,14 +44,16 @@ function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
     row(["---", "---", "---:", "---", "---", "---"]),
   ];
   for (const candidate of candidates) {
-    lines.push(row([
-      candidate.name,
-      human(candidate.status),
-      percent(candidate.score),
-      candidate.matchedSignals.join(", ") || "None",
-      candidate.conflictingSignals.join(", ") || "None",
-      candidate.independentSourceFamilies.join(", ") || "None",
-    ]));
+    lines.push(
+      row([
+        candidate.name,
+        human(candidate.status),
+        percent(candidate.score),
+        candidate.matchedSignals.join(", ") || "None",
+        candidate.conflictingSignals.join(", ") || "None",
+        candidate.independentSourceFamilies.join(", ") || "None",
+      ]),
+    );
   }
   return lines;
 }
@@ -229,18 +233,29 @@ export function reportViewModelToMarkdown(viewModel: ReportViewModel): string {
     "",
     "### Source ladder",
     "",
-    row(["Tier", "Policy", "Frontier entries", "Verified", "Rejected", "Exhausted", "Admitted evidence", "Source families"]),
+    row([
+      "Tier",
+      "Policy",
+      "Frontier entries",
+      "Verified",
+      "Rejected",
+      "Exhausted",
+      "Admitted evidence",
+      "Source families",
+    ]),
     row(["---:", "---", "---:", "---:", "---:", "---:", "---:", "---"]),
-    ...viewModel.searchStrategy.sourceLadder.map((tier) => row([
-      tier.tier,
-      tier.label,
-      tier.frontierCount,
-      tier.verifiedCount,
-      tier.rejectedCount,
-      tier.exhaustedCount,
-      tier.evidenceCount,
-      tier.sourceFamilies.join(", ") || "None",
-    ])),
+    ...viewModel.searchStrategy.sourceLadder.map((tier) =>
+      row([
+        tier.tier,
+        tier.label,
+        tier.frontierCount,
+        tier.verifiedCount,
+        tier.rejectedCount,
+        tier.exhaustedCount,
+        tier.evidenceCount,
+        tier.sourceFamilies.join(", ") || "None",
+      ]),
+    ),
     "",
     "### Accepted, rejected, and mutation paths",
     "",

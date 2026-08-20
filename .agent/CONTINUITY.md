@@ -2,6 +2,7 @@
 
 ## [PLANS]
 
+- 2026-08-19T23:58:29-07:00 [USER] Make the public GitHub repository production-ready after pulling all remote work, while preserving the current local `main` as the user's test baseline; cover formatting, onboarding, secret/API exposure, README quality, verification, commit, and push.
 - 2026-08-18T18:36:13Z [USER] Build the Sixtyfour People Intelligence take-home end to end: autonomous LLM-guided research, at least one differentiated OSINT tactic, complete traces, auditable structured JSON, a clean visualization, roughly three example runs, and concise setup documentation.
 - 2026-08-18T18:36:13Z [ASSUMPTION] Planned delivery sequence: architecture and threat model; agent/evidence/tool core; live interface; examples and replay; containerized tests and browser QA; independent review; documentation; commit and push.
 - 2026-08-18T21:54:31Z [USER] Supersedes the earlier delivery tail: implementation may be completed and verified locally, but this agent must not commit or push; the root agent will run the external Claude/Fable review and handle publication.
@@ -10,6 +11,9 @@
 
 ## [DECISIONS]
 
+- 2026-08-19T23:58:29-07:00 [CODE] Production work is isolated on `codex/production-ready`; the publication plan is to push its verified commit directly to remote `main`, then switch the local checkout back to unchanged local `main` so the requested local/remote split is preserved.
+- 2026-08-19T23:58:29-07:00 [CODE] Non-local live HTTP research now requires explicit enablement, a provider key, and a server-side bearer token of at least 32 bytes. `npm run dev` and loopback-bound Compose retain a localhost-only bypass; replay remains public and zero-network.
+- 2026-08-19T23:58:29-07:00 [CODE] Prettier 3.9.6 is the canonical repository formatter and is enforced alongside a redacting credential-signature scan in `npm run verify`.
 - 2026-08-18T18:36:13Z [USER] Requested Claude Code Opus 5 or Fable for planning/reasoning/review and Codex 5.6 Sol Ultra for implementation; quality has priority over token efficiency.
 - 2026-08-18T18:36:13Z [TOOL] Claude Code 2.1.220 exposes `fable` and `opus` aliases but is not authenticated; no other callable Fable/Claude surface and no OpenRouter key are currently available. Any temporary planning-model substitution must be disclosed and Claude review retried if credentials become available.
 - 2026-08-18T18:36:13Z [TOOL] The Sites capability-path starter is being used for the interface because the workspace was initially empty and the finished project needs a polished live investigation view.
@@ -32,6 +36,10 @@
 
 ## [PROGRESS]
 
+- 2026-08-19T23:58:29-07:00 [TOOL] Remote reconciliation passed: local `main` and `origin/main` were clean and at `28fb737` with `HEAD...origin/main` equal to `0 0`; a fresh feature branch was created before edits.
+- 2026-08-19T23:58:29-07:00 [CODE] Production hardening added provider-complete CLI/Compose configuration, bearer-gated live ingress, model-free health output, browser security headers, safe-by-default env templates, secret scanning, immutable GitHub Action SHAs, Dependabot, container health/capability controls, repository formatting metadata, SECURITY.md, and rewritten README/architecture/safety/evaluation guidance.
+- 2026-08-19T23:58:29-07:00 [CODE] Direct and toolchain packages were patched, including React 19.2.8, LangGraph 1.4.12, Vinext beta.7, Vite 8.2.2, Cloudflare Vite plugin 1.53.0, and Wrangler 4.124.0; `npm audit` moved from 16 advisories (14 high) to zero.
+- 2026-08-19T23:58:29-07:00 [CODE] Real-browser production QA found and fixed a 390x844 overlap between status, modality, safety, and graph controls; the final measured layout has no horizontal overflow or pairwise control intersections and no browser console warnings/errors.
 - 2026-08-18T18:36:13Z [TOOL] Read the complete take-home brief and the required personal-application and Sites-building instructions. Started the Sites initializer and dependency installation.
 - 2026-08-18T18:36:13Z [TOOL] Brain context retrieval completed for the user request; it supplied voice guidance but no project-specific prior implementation.
 - 2026-08-18T18:59:17Z [CODE] The first product-specific interface slice replaced the starter skeleton with an editorial investigation workspace. Lint, production build, and 2/2 server-render tests passed; the host preview returned HTTP 200 and was opened in Codex.
@@ -52,6 +60,8 @@
 
 ## [DISCOVERIES]
 
+- 2026-08-19T23:58:29-07:00 [TOOL] The GitHub repository is public, default branch `main`, with empty description and no license metadata. Package metadata now explicitly uses `UNLICENSED`; remote repository metadata was not mutated beyond the requested Git push.
+- 2026-08-19T23:58:29-07:00 [TOOL] The upgraded production build retains expected lazy client chunks for React-PDF (~1.2 MB) and ELK (~1.4 MB); focused tests prove both remain absent from the Worker module graph. Docker is still unavailable, so the checked-in container workflow could not be executed locally.
 - 2026-08-18T18:36:13Z [CODE] The repository began with no commits and no project files; all current starter files were generated during this task.
 - 2026-08-18T18:36:13Z [TOOL] The brief explicitly prioritizes identity disambiguation, non-obvious OSINT utility, agentic tool choice, full latency/tool/token traces, auditable source provenance, performance, and scaling reliability.
 - 2026-08-18T18:59:17Z [TOOL] Current GitHub documentation supports unauthenticated public commit search using exact `author-email`; the surface searches default branches, has a stricter unauthenticated search budget, and can report incomplete results. Absence must therefore be phrased as not observed, never as no activity.
@@ -69,6 +79,7 @@
 
 ## [OUTCOMES]
 
+- 2026-08-19T23:58:29-07:00 [TOOL] Production candidate verification passed: `npm run verify` completed formatting, secret scan, TypeScript, ESLint, five-stage Vinext build, and 115 tests (112 pass, 3 intentional skips); `npm run test:pdf` passed 6/6 including PDF bytes; `npm run security:audit` found zero vulnerabilities; two example generations left all 15 artifacts unchanged; diff whitespace, ignored env-file, and secret-file-history checks passed.
 - 2026-08-18T18:36:13Z [ASSUMPTION] UNCONFIRMED: implementation, live examples, verification, deployment, GitHub remote, and publication remain pending.
 - 2026-08-18T13:05:05-07:00 [TOOL] [MILESTONE] Hardening verification passed: `tsc --noEmit`, full ESLint, 59/59 unit tests, and the production Vinext build all completed successfully.
 - 2026-08-18T21:54:31Z [TOOL] [MILESTONE] Local implementation outcome: final `npm run verify` passed with 82/82 tests; the three example bundles regenerated twice byte-identically; built Worker health returned replay-ready/live-disabled; replay CLI/API streams contained 27 contiguous events and exactly one `completed/goal_satisfied` terminal; missing live configuration exited 2 and unsafe input exited 3.

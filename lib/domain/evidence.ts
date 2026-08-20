@@ -13,26 +13,9 @@ import {
   type EvidenceSourceType,
 } from "./types";
 
-const TRACKING_QUERY_KEYS = new Set([
-  "fbclid",
-  "gclid",
-  "mc_cid",
-  "mc_eid",
-  "ref",
-  "ref_src",
-  "source",
-]);
+const TRACKING_QUERY_KEYS = new Set(["fbclid", "gclid", "mc_cid", "mc_eid", "ref", "ref_src", "source"]);
 
-const COMMON_TWO_PART_SUFFIXES = new Set([
-  "co.uk",
-  "org.uk",
-  "ac.uk",
-  "com.au",
-  "net.au",
-  "co.jp",
-  "co.in",
-  "com.br",
-]);
+const COMMON_TWO_PART_SUFFIXES = new Set(["co.uk", "org.uk", "ac.uk", "com.au", "net.au", "co.jp", "co.in", "com.br"]);
 
 const DEFAULT_RELIABILITY: Record<EvidenceSourceType, number> = {
   official_profile: 0.82,
@@ -56,9 +39,7 @@ function registrableFamily(hostname: string): string {
   const labels = host.split(".").filter(Boolean);
   if (labels.length <= 2 || host === "localhost") return host;
   const suffix = labels.slice(-2).join(".");
-  return COMMON_TWO_PART_SUFFIXES.has(suffix)
-    ? labels.slice(-3).join(".")
-    : labels.slice(-2).join(".");
+  return COMMON_TWO_PART_SUFFIXES.has(suffix) ? labels.slice(-3).join(".") : labels.slice(-2).join(".");
 }
 
 function unwrapWayback(url: URL): URL | undefined {
@@ -111,13 +92,12 @@ function decodedUrlContent(rawUrl: string): string {
   return [decodedPath.replaceAll("/", " "), ...queryParts].join(" ");
 }
 
-function decodedUrlContainsRestrictedContent(
-  rawUrl: string,
-  allowedEmails: ReadonlySet<string> | undefined,
-): boolean {
+function decodedUrlContainsRestrictedContent(rawUrl: string, allowedEmails: ReadonlySet<string> | undefined): boolean {
   const content = decodedUrlContent(rawUrl);
-  return containsRestrictedPublicContent(content, { allowedEmails })
-    || /\b(?:call|cell|contact|mobile|phone|tel|telephone)\s+\d{7,15}\b/i.test(content);
+  return (
+    containsRestrictedPublicContent(content, { allowedEmails }) ||
+    /\b(?:call|cell|contact|mobile|phone|tel|telephone)\s+\d{7,15}\b/i.test(content)
+  );
 }
 
 export function inferSourceFamily(rawUrl: string, override?: string): string {
@@ -143,14 +123,10 @@ function stableHash(value: string): string {
 }
 
 function defaultSpoofable(sourceType: EvidenceSourceType): boolean {
-  return ["professional_profile", "code_profile", "code_commit", "search_result"].includes(
-    sourceType,
-  );
+  return ["professional_profile", "code_profile", "code_commit", "search_result"].includes(sourceType);
 }
 
-function defaultVerificationMethod(
-  sourceType: EvidenceSourceType,
-): EvidenceRecord["verificationMethod"] {
+function defaultVerificationMethod(sourceType: EvidenceSourceType): EvidenceRecord["verificationMethod"] {
   if (sourceType === "search_result") return "search_discovery";
   if (sourceType === "keybase_proof") return "cryptographic_proof";
   if (sourceType === "web_archive") return "archive_snapshot";
@@ -165,10 +141,7 @@ export interface EvidenceAdmissionContext {
   allowedEmails?: ReadonlySet<string>;
 }
 
-export function admitEvidence(
-  draft: EvidenceDraft,
-  context: EvidenceAdmissionContext,
-): EvidenceAdmission {
+export function admitEvidence(draft: EvidenceDraft, context: EvidenceAdmissionContext): EvidenceAdmission {
   const proposedClaim = normalizeWhitespace(draft.claim);
   if (!proposedClaim) return { admitted: false, reason: "missing_claim" };
   const excerpt = draft.excerpt ? normalizeWhitespace(draft.excerpt) : "";
@@ -179,22 +152,21 @@ export function admitEvidence(
     return { admitted: false, reason: "unknown_candidate" };
   }
   const textualContent = [proposedClaim, excerpt, draft.title ?? "", draft.publisher ?? ""];
-  if (textualContent.some((value) => containsRestrictedPublicContent(value, {
-    allowedEmails: context.allowedEmails,
-  }))) {
+  if (
+    textualContent.some((value) =>
+      containsRestrictedPublicContent(value, {
+        allowedEmails: context.allowedEmails,
+      }),
+    )
+  ) {
     return { admitted: false, reason: "sensitive_content" };
   }
   if (
-    (draft.canonicalSubset && restrictedJsonContentPaths(
-      draft.canonicalSubset,
-      { allowedEmails: context.allowedEmails },
-      "canonicalSubset",
-    ).length > 0)
-    || (draft.attributes && restrictedJsonContentPaths(
-      draft.attributes,
-      { allowedEmails: context.allowedEmails },
-      "attributes",
-    ).length > 0)
+    (draft.canonicalSubset &&
+      restrictedJsonContentPaths(draft.canonicalSubset, { allowedEmails: context.allowedEmails }, "canonicalSubset")
+        .length > 0) ||
+    (draft.attributes &&
+      restrictedJsonContentPaths(draft.attributes, { allowedEmails: context.allowedEmails }, "attributes").length > 0)
   ) {
     return { admitted: false, reason: "sensitive_content" };
   }
@@ -214,8 +186,8 @@ export function admitEvidence(
     canonicalUrl = canonicalizeSourceUrl(draft.sourceUrl);
     queryUrl = draft.queryUrl ? canonicalizeSourceUrl(draft.queryUrl) : null;
     if (
-      decodedUrlContainsRestrictedContent(draft.sourceUrl, context.allowedEmails)
-      || (draft.queryUrl && decodedUrlContainsRestrictedContent(draft.queryUrl, context.allowedEmails))
+      decodedUrlContainsRestrictedContent(draft.sourceUrl, context.allowedEmails) ||
+      (draft.queryUrl && decodedUrlContainsRestrictedContent(draft.queryUrl, context.allowedEmails))
     ) {
       return { admitted: false, reason: "sensitive_content" };
     }
@@ -260,17 +232,12 @@ export function admitEvidence(
   }
 
   const timestamp = context.clock.now();
-  const disposition =
-    draft.sourceType === "search_result" ? "discovery_only" : draft.disposition ?? "supports";
-  const fingerprint = stableHash(
-    [draft.candidateId, normalizedClaim, canonicalUrl, disposition].join("|"),
-  );
+  const disposition = draft.sourceType === "search_result" ? "discovery_only" : (draft.disposition ?? "supports");
+  const fingerprint = stableHash([draft.candidateId, normalizedClaim, canonicalUrl, disposition].join("|"));
   const canonicalSubset = draft.canonicalSubset ?? null;
   const contentHash =
     draft.contentHash ??
-    (excerpt || canonicalSubset
-      ? `fnv1a32:${stableHash(excerpt || JSON.stringify(canonicalSubset))}`
-      : null);
+    (excerpt || canonicalSubset ? `fnv1a32:${stableHash(excerpt || JSON.stringify(canonicalSubset))}` : null);
   const httpStatus =
     draft.httpStatus !== null &&
     draft.httpStatus !== undefined &&
@@ -306,9 +273,7 @@ export function admitEvidence(
     toolCallId: draft.toolCallId ?? null,
     verificationMethod,
     temporalStatus: draft.temporalStatus ?? "unknown",
-    reliability: Math.round(
-      clamp(draft.reliability ?? DEFAULT_RELIABILITY[draft.sourceType]) * 1000,
-    ) / 1000,
+    reliability: Math.round(clamp(draft.reliability ?? DEFAULT_RELIABILITY[draft.sourceType]) * 1000) / 1000,
     spoofable: draft.spoofable ?? defaultSpoofable(draft.sourceType),
     attributes: draft.attributes ?? {},
     fingerprint,
@@ -323,12 +288,7 @@ export class EvidenceLedger {
   readonly #clock: Clock;
   #records: EvidenceRecord[];
 
-  constructor(
-    records: readonly EvidenceRecord[],
-    candidateIds: ReadonlySet<string>,
-    ids: IdFactory,
-    clock: Clock,
-  ) {
+  constructor(records: readonly EvidenceRecord[], candidateIds: ReadonlySet<string>, ids: IdFactory, clock: Clock) {
     this.#records = [...records];
     this.#candidateIds = candidateIds;
     this.#ids = ids;

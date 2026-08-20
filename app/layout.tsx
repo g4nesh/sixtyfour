@@ -14,20 +14,15 @@ const geistMono = Geist_Mono({
 });
 
 const title = "Atlas — People Intelligence";
-const description =
-  "An autonomous, evidence-led research agent for auditable public-source people intelligence.";
+const description = "An autonomous, evidence-led research agent for auditable public-source people intelligence.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
   const forwardedHost = requestHeaders.get("x-forwarded-host")?.split(",")[0]?.trim();
   const requestHost = forwardedHost ?? requestHeaders.get("host") ?? "localhost:3000";
-  const safeHost = /^[a-z0-9.-]+(?::\d{1,5})?$/i.test(requestHost)
-    ? requestHost
-    : "localhost:3000";
+  const safeHost = /^[a-z0-9.-]+(?::\d{1,5})?$/i.test(requestHost) ? requestHost : "localhost:3000";
   const forwardedProtocol = requestHeaders.get("x-forwarded-proto")?.split(",")[0]?.trim();
-  const protocol = forwardedProtocol === "http" || safeHost.startsWith("localhost")
-    ? "http"
-    : "https";
+  const protocol = forwardedProtocol === "http" || safeHost.startsWith("localhost") ? "http" : "https";
   const origin = `${protocol}://${safeHost}`;
   const image = new URL("/og.png", origin).href;
 
@@ -59,9 +54,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        {children}
-      </body>
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body>
     </html>
   );
 }

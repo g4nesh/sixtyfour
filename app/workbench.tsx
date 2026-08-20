@@ -1,24 +1,9 @@
 "use client";
 
-import {
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { FindingCategory, InvestigationReport } from "../lib/domain/types";
 import type { Report, RunStatus, TraceEvent } from "./atlas-types";
-import {
-  eventType,
-  formatDuration,
-  formatUsage,
-  humanize,
-  traceDuration,
-  traceUsage,
-} from "./atlas-types";
+import { eventType, formatDuration, formatUsage, humanize, traceDuration, traceUsage } from "./atlas-types";
 import {
   eventStableId,
   graphFromReport,
@@ -59,11 +44,13 @@ interface AtlasWorkbenchProps {
 }
 
 function terminalReport(event: TraceEvent): Report | null {
-  return event.report
-    ?? event.result?.report
-    ?? (event.payload?.report as Report | undefined)
-    ?? (event.attributes?.report as Report | undefined)
-    ?? null;
+  return (
+    event.report ??
+    event.result?.report ??
+    (event.payload?.report as Report | undefined) ??
+    (event.attributes?.report as Report | undefined) ??
+    null
+  );
 }
 
 function terminalStatusFor(event: TraceEvent, report: Report | null): string | undefined {
@@ -71,11 +58,12 @@ function terminalStatusFor(event: TraceEvent, report: Report | null): string | u
 }
 
 function runMessage(status: string | undefined): string {
-  if (status === "configuration_error") return "Live mode is not configured on this server. Set OPENAI_API_KEY and ATLAS_LIVE_ENABLED.";
+  if (status === "configuration_error") return "Live mode needs an enabled server-side provider and protected ingress.";
   if (status === "blocked") return "The request was refused by the public-professional safety policy.";
   if (status === "failed") return "The run ended early. Inspect the terminal trace for the recorded boundary.";
   if (status === "canceled") return "The run was canceled. Its partial graph and trace remain inspectable.";
-  if (status === "partial") return "Stopped with partial coverage — the cited sources gathered so far are in the report.";
+  if (status === "partial")
+    return "Stopped with partial coverage — the cited sources gathered so far are in the report.";
   if (status === "ambiguous") return "Identity remained ambiguous; competing candidate branches were not merged.";
   return "Run complete. Every finding links to the public source it was drawn from.";
 }
@@ -153,7 +141,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     setReport(nextReport);
     const nextGraph = graphFromReport(nextReport);
     setGraph(nextGraph);
-    setSelectedNodeId((current) => current && nextGraph?.nodes.some((node) => node.id === current) ? current : null);
+    setSelectedNodeId((current) => (current && nextGraph?.nodes.some((node) => node.id === current) ? current : null));
   }, []);
 
   const toggleModality = useCallback((id: FindingCategory) => {
@@ -170,28 +158,33 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
 
   useEffect(() => {
     void fetch("/api/health", { headers: { accept: "application/json" } })
-      .then(async (response) => response.ok ? (await response.json()) as { liveConfigured?: boolean } : null)
+      .then(async (response) => (response.ok ? ((await response.json()) as { liveConfigured?: boolean }) : null))
       .then((health) => setLiveConfigured(health?.liveConfigured ?? false))
       .catch(() => setLiveConfigured(false));
     return () => abortRef.current?.abort();
   }, []);
 
-  const ingestEvent = useCallback((streamed: TraceEvent): string | undefined => {
-    setTrace((current) => [...current, streamed]);
-    setGraph((current) => mergeGraphEvent(current, streamed));
-    const stableId = eventStableId(streamed);
-    if (stableId) setFocusedStableId(stableId);
-    const nextReport = terminalReport(streamed);
-    if (nextReport) applyReport(nextReport);
-    if (!isTerminalEvent(streamed)) return undefined;
-    const status = terminalStatusFor(streamed, nextReport);
-    setRunStatus(status === "canceled"
-      ? "canceled"
-      : ["failed", "configuration_error", "blocked"].includes(status ?? "")
-        ? "error"
-        : "complete");
-    return status;
-  }, [applyReport]);
+  const ingestEvent = useCallback(
+    (streamed: TraceEvent): string | undefined => {
+      setTrace((current) => [...current, streamed]);
+      setGraph((current) => mergeGraphEvent(current, streamed));
+      const stableId = eventStableId(streamed);
+      if (stableId) setFocusedStableId(stableId);
+      const nextReport = terminalReport(streamed);
+      if (nextReport) applyReport(nextReport);
+      if (!isTerminalEvent(streamed)) return undefined;
+      const status = terminalStatusFor(streamed, nextReport);
+      setRunStatus(
+        status === "canceled"
+          ? "canceled"
+          : ["failed", "configuration_error", "blocked"].includes(status ?? "")
+            ? "error"
+            : "complete",
+      );
+      return status;
+    },
+    [applyReport],
+  );
 
   const startResearch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -237,7 +230,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       }
       if (buffered.trim()) terminalStatus = ingestEvent(JSON.parse(buffered) as TraceEvent) ?? terminalStatus;
       if (abortRef.current !== controller || controller.signal.aborted) return;
-      setRunStatus((current) => current === "running" ? "complete" : current);
+      setRunStatus((current) => (current === "running" ? "complete" : current));
       setMessage(runMessage(terminalStatus));
     } catch (error) {
       if (abortRef.current !== controller) return;
@@ -253,11 +246,14 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     }
   };
 
-  const focusStableId = useCallback((stableId: string | null) => {
-    setFocusedStableId(stableId);
-    const nodeId = stableNodeForEvent(graph, stableId);
-    if (nodeId) setSelectedNodeId(nodeId);
-  }, [graph]);
+  const focusStableId = useCallback(
+    (stableId: string | null) => {
+      setFocusedStableId(stableId);
+      const nodeId = stableNodeForEvent(graph, stableId);
+      if (nodeId) setSelectedNodeId(nodeId);
+    },
+    [graph],
+  );
 
   const requestFit = useCallback(() => {
     setGraphView("graph");
@@ -280,7 +276,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         requestFit();
       } else if (event.key.toLowerCase() === "l") {
         event.preventDefault();
-        setGraphView((current) => current === "graph" ? "list" : "graph");
+        setGraphView((current) => (current === "graph" ? "list" : "graph"));
       } else if (event.key.toLowerCase() === "r" && report) {
         event.preventDefault();
         setReportOpen((current) => !current);
@@ -299,109 +295,190 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
   const usage = report?.usage ?? report?.telemetry?.usage ?? traceUsage(lastTrace);
   const reportStatus = report?.status ?? runStatus;
 
-  const markdownDownload = useCallback(async (nextReport: Report) => {
-    setExporting("markdown");
-    try {
-      await (onDownloadMarkdown ?? defaultMarkdownDownload)(nextReport);
-      setMessage("Markdown intelligence report downloaded.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Markdown export failed.");
-    } finally {
-      setExporting(null);
-    }
-  }, [onDownloadMarkdown]);
+  const markdownDownload = useCallback(
+    async (nextReport: Report) => {
+      setExporting("markdown");
+      try {
+        await (onDownloadMarkdown ?? defaultMarkdownDownload)(nextReport);
+        setMessage("Markdown intelligence report downloaded.");
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Markdown export failed.");
+      } finally {
+        setExporting(null);
+      }
+    },
+    [onDownloadMarkdown],
+  );
 
-  const pdfDownload = useCallback(async (nextReport: Report) => {
-    setExporting("pdf");
-    try {
-      await (onDownloadPdf ?? defaultPdfDownload)(nextReport);
-      setMessage("PDF intelligence report downloaded.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "PDF export failed.");
-    } finally {
-      setExporting(null);
-    }
-  }, [onDownloadPdf]);
+  const pdfDownload = useCallback(
+    async (nextReport: Report) => {
+      setExporting("pdf");
+      try {
+        await (onDownloadPdf ?? defaultPdfDownload)(nextReport);
+        setMessage("PDF intelligence report downloaded.");
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "PDF export failed.");
+      } finally {
+        setExporting(null);
+      }
+    },
+    [onDownloadPdf],
+  );
 
   const idle = runStatus === "idle" && !report;
 
-  return <div className="atlas-shell">
-    <a className="skip-link" href="#graph-workspace">Skip to search graph</a>
-    <header className="command-header">
-      <a className="atlas-wordmark" href="#graph-workspace" aria-label="Atlas home"><span aria-hidden="true">A</span><strong>Atlas</strong></a>
-      <form className="command-search" onSubmit={startResearch} role="search">
-        <label className="sr-only" htmlFor="atlas-query">Public-professional research input</label>
-        <SearchIcon />
-        <input
-          ref={queryRef}
-          id="atlas-query"
-          name="query"
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Name, role, organization, work email, URL, handle, or publication"
-          autoComplete="off"
-          spellCheck="false"
-          aria-describedby="research-scope-note"
-        />
-        <kbd>/</kbd>
-      </form>
-      {runStatus === "running"
-        ? <button className="run-button is-stop" type="button" onClick={() => abortRef.current?.abort()}><StopIcon /><span>Stop</span></button>
-        : <button className="run-button" type="button" onClick={() => document.querySelector<HTMLFormElement>(".command-search")?.requestSubmit()}><PlayIcon /><span>Research</span></button>}
-      <button className="report-button" type="button" onClick={() => setReportOpen(true)} disabled={!report} title="Open intelligence report (R)"><ReportIcon /><span>Report</span>{exporting ? <i aria-label={`Exporting ${exporting}`} /> : null}</button>
-    </header>
+  return (
+    <div className="atlas-shell">
+      <a className="skip-link" href="#graph-workspace">
+        Skip to search graph
+      </a>
+      <header className="command-header">
+        <a className="atlas-wordmark" href="#graph-workspace" aria-label="Atlas home">
+          <span aria-hidden="true">A</span>
+          <strong>Atlas</strong>
+        </a>
+        <form className="command-search" onSubmit={startResearch} role="search">
+          <label className="sr-only" htmlFor="atlas-query">
+            Public-professional research input
+          </label>
+          <SearchIcon />
+          <input
+            ref={queryRef}
+            id="atlas-query"
+            name="query"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Name, role, organization, work email, URL, handle, or publication"
+            autoComplete="off"
+            spellCheck="false"
+            aria-describedby="research-scope-note"
+          />
+          <kbd>/</kbd>
+        </form>
+        {runStatus === "running" ? (
+          <button className="run-button is-stop" type="button" onClick={() => abortRef.current?.abort()}>
+            <StopIcon />
+            <span>Stop</span>
+          </button>
+        ) : (
+          <button
+            className="run-button"
+            type="button"
+            onClick={() => document.querySelector<HTMLFormElement>(".command-search")?.requestSubmit()}
+          >
+            <PlayIcon />
+            <span>Research</span>
+          </button>
+        )}
+        <button
+          className="report-button"
+          type="button"
+          onClick={() => setReportOpen(true)}
+          disabled={!report}
+          title="Open intelligence report (R)"
+        >
+          <ReportIcon />
+          <span>Report</span>
+          {exporting ? <i aria-label={`Exporting ${exporting}`} /> : null}
+        </button>
+      </header>
 
-    <main id="graph-workspace" className="atlas-main">
-      <div className="workspace-status" role="status" aria-live="polite">
-        <span className={`run-status-pip status-${runStatus}`} aria-hidden="true" />
-        <strong>{humanize(reportStatus)}</strong>
-        <span>{message}</span>
-        <div><span>{graphStatusLabel(graph, runStatus)}</span><span>{formatDuration(elapsed)}</span><span>{formatUsage(usage)}</span></div>
-      </div>
+      <main id="graph-workspace" className="atlas-main">
+        <div className="workspace-status" role="status" aria-live="polite">
+          <span className={`run-status-pip status-${runStatus}`} aria-hidden="true" />
+          <strong>{humanize(reportStatus)}</strong>
+          <span>{message}</span>
+          <div>
+            <span>{graphStatusLabel(graph, runStatus)}</span>
+            <span>{formatDuration(elapsed)}</span>
+            <span>{formatUsage(usage)}</span>
+          </div>
+        </div>
 
-      <div className="scope-row">
-        <fieldset className="modality-toggles" aria-label="Research modalities">
-          {MODALITIES.map((modality) => {
-            const active = categories.has(modality.id);
-            return <button
-              key={modality.id}
-              type="button"
-              className={active ? "modality is-on" : "modality"}
-              aria-pressed={active}
-              onClick={() => toggleModality(modality.id)}
-            >{modality.label}</button>;
-          })}
-        </fieldset>
-        <p id="research-scope-note" className="scope-note"><span aria-hidden="true">●</span> Public-professional sources only. Home address, personal phone, and data-broker records are out of scope.</p>
-      </div>
+        <div className="scope-row">
+          <fieldset className="modality-toggles" aria-label="Research modalities">
+            {MODALITIES.map((modality) => {
+              const active = categories.has(modality.id);
+              return (
+                <button
+                  key={modality.id}
+                  type="button"
+                  className={active ? "modality is-on" : "modality"}
+                  aria-pressed={active}
+                  onClick={() => toggleModality(modality.id)}
+                >
+                  {modality.label}
+                </button>
+              );
+            })}
+          </fieldset>
+          <p id="research-scope-note" className="scope-note">
+            <span aria-hidden="true">●</span> Public-professional sources only. Home address, personal phone, and
+            data-broker records are out of scope.
+          </p>
+        </div>
 
-      {idle
-        ? <div className="empty-hint">
+        {idle ? (
+          <div className="empty-hint">
             <p>Try:</p>
             <div className="example-chips">
-              {EXAMPLE_QUERIES.map((example) => <button key={example} type="button" className="example-chip" onClick={() => { setQuery(example); queryRef.current?.focus(); }}>{example}</button>)}
+              {EXAMPLE_QUERIES.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  className="example-chip"
+                  onClick={() => {
+                    setQuery(example);
+                    queryRef.current?.focus();
+                  }}
+                >
+                  {example}
+                </button>
+              ))}
             </div>
-            {liveConfigured === false ? <p className="config-hint">Live mode is not configured on this server yet.</p> : null}
+            {liveConfigured === false ? (
+              <p className="config-hint">Live mode is not configured on this server yet.</p>
+            ) : null}
           </div>
-        : null}
+        ) : null}
 
-      <GraphWorkspace
-        graph={graph}
-        view={graphView}
-        onViewChange={setGraphView}
-        selectedNodeId={selectedNodeId}
-        onSelectNode={setSelectedNodeId}
-        focusedStableId={focusedStableId}
-        fitRequest={fitRequest}
-        onFit={requestFit}
-        runStatus={runStatus}
+        <GraphWorkspace
+          graph={graph}
+          view={graphView}
+          onViewChange={setGraphView}
+          selectedNodeId={selectedNodeId}
+          onSelectNode={setSelectedNodeId}
+          focusedStableId={focusedStableId}
+          fitRequest={fitRequest}
+          onFit={requestFit}
+          runStatus={runStatus}
+        />
+        {graph ? (
+          <SourceLadder
+            graph={graph}
+            collapsed={sourceLadderCollapsed}
+            onToggle={() => setSourceLadderPreference(!sourceLadderCollapsed)}
+          />
+        ) : null}
+        {graph ? <NodeInspector graph={graph} node={activeNode} onClose={() => setSelectedNodeId(null)} /> : null}
+        <TraceRail
+          trace={trace}
+          expanded={traceExpanded}
+          onToggle={() => setTraceExpanded((current) => !current)}
+          focusedStableId={focusedStableId}
+          onFocusStableId={focusStableId}
+        />
+      </main>
+
+      <ReportSheet
+        report={report}
+        trace={trace}
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        onDownloadMarkdown={markdownDownload}
+        onDownloadPdf={pdfDownload}
       />
-      {graph ? <SourceLadder graph={graph} collapsed={sourceLadderCollapsed} onToggle={() => setSourceLadderPreference(!sourceLadderCollapsed)} /> : null}
-      {graph ? <NodeInspector graph={graph} node={activeNode} onClose={() => setSelectedNodeId(null)} /> : null}
-      <TraceRail trace={trace} expanded={traceExpanded} onToggle={() => setTraceExpanded((current) => !current)} focusedStableId={focusedStableId} onFocusStableId={focusStableId} />
-    </main>
-
-    <ReportSheet report={report} trace={trace} open={reportOpen} onClose={() => setReportOpen(false)} onDownloadMarkdown={markdownDownload} onDownloadPdf={pdfDownload} />
-  </div>;
+    </div>
+  );
 }

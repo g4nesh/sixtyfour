@@ -23,7 +23,10 @@ const search = await vite.ssrLoadModule("/lib/search/index.ts");
 const expectedIds = ["chris-anderson-ted", "linus-codegraph", "python-creator"];
 
 function parseNdjson(text) {
-  return text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
 }
 
 function terminalReport(events) {
@@ -75,7 +78,20 @@ function forbiddenTraceKey(value, path = []) {
   if (!value || typeof value !== "object") return null;
   for (const [key, child] of Object.entries(value)) {
     const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (["analysis", "chainofthought", "cot", "hiddenreasoning", "internalmonologue", "reasoning", "reasoningcontent", "scratchpad", "thinking", "thinkingcontent"].includes(normalized)) {
+    if (
+      [
+        "analysis",
+        "chainofthought",
+        "cot",
+        "hiddenreasoning",
+        "internalmonologue",
+        "reasoning",
+        "reasoningcontent",
+        "scratchpad",
+        "thinking",
+        "thinkingcontent",
+      ].includes(normalized)
+    ) {
       return [...path, key].join(".");
     }
     const found = forbiddenTraceKey(child, [...path, key]);
@@ -86,7 +102,13 @@ function forbiddenTraceKey(value, path = []) {
 
 test("repository contains exactly three complete captured replay directories", async () => {
   const entries = await readdir(new URL("../examples/", import.meta.url), { withFileTypes: true });
-  assert.deepEqual(entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort(), expectedIds);
+  assert.deepEqual(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort(),
+    expectedIds,
+  );
   for (const id of expectedIds) {
     const files = await readdir(new URL(`../examples/${id}/`, import.meta.url));
     assert.deepEqual(files.sort(), ["cassette.json", "input.json", "manifest.json", "output.json", "trace.json"]);
@@ -103,12 +125,12 @@ test("example evidence uses only root-verified exact excerpts or canonical API p
   for (const id of expectedIds) {
     const example = replay.getReplayExample(id);
     assert.equal(example.manifest.capturedAt, captureContract.VERIFIED_CAPTURED_AT);
-    const actionCaptureIds = Object.fromEntries(example.cassette.requests.map((request) =>
-      [request.id, request.captureId]));
-    assert.doesNotThrow(() => captureContract.assertVerifiedEvidenceContract(
-      example.output.evidence,
-      actionCaptureIds,
-    ));
+    const actionCaptureIds = Object.fromEntries(
+      example.cassette.requests.map((request) => [request.id, request.captureId]),
+    );
+    assert.doesNotThrow(() =>
+      captureContract.assertVerifiedEvidenceContract(example.output.evidence, actionCaptureIds),
+    );
     for (const evidence of example.output.evidence) {
       const request = example.cassette.requests.find((item) => item.id === evidence.toolCallId);
       assert.ok(request, `${id} evidence ${evidence.id} lacks an action-bound cassette request`);
@@ -138,22 +160,16 @@ test("example evidence uses only root-verified exact excerpts or canonical API p
   }
 
   const codegraph = replay.getReplayExample("linus-codegraph");
-  const searchRequest = codegraph.cassette.requests.find((request) =>
-    request.captureId === "req-github-search");
-  const commitRequest = codegraph.cassette.requests.find((request) =>
-    request.captureId === "req-github-commit");
+  const searchRequest = codegraph.cassette.requests.find((request) => request.captureId === "req-github-search");
+  const commitRequest = codegraph.cassette.requests.find((request) => request.captureId === "req-github-commit");
   const strongestSha = searchRequest.response.canonicalSubset.strongest_sha;
   assert.equal(strongestSha, captureContract.VERIFIED_GITHUB_STRONGEST_SHA);
   assert.equal(commitRequest.response.canonicalSubset.sha, strongestSha);
   assert.match(commitRequest.fingerprint, new RegExp(`/commits/${strongestSha} `));
-  const commitEvidence = codegraph.output.evidence.find((evidence) =>
-    evidence.toolCallId === commitRequest.id);
+  const commitEvidence = codegraph.output.evidence.find((evidence) => evidence.toolCallId === commitRequest.id);
   assert.equal(commitEvidence.canonicalSubset.sha, strongestSha);
   assert.equal(commitEvidence.sourceUrl, `https://github.com/torvalds/linux/commit/${strongestSha}`);
-  assert.equal(
-    commitEvidence.queryUrl,
-    `https://api.github.com/repos/torvalds/linux/commits/${strongestSha}`,
-  );
+  assert.equal(commitEvidence.queryUrl, `https://api.github.com/repos/torvalds/linux/commits/${strongestSha}`);
 });
 
 test("replays are canonical byte-stable and require no outbound fetch", () => {
@@ -182,17 +198,10 @@ test("synchronous replay SHA-256 draws equal independent Web Crypto digests", as
     "replay-linus-codegraph-v2|torvalds@linux-foundation.org|action_fixture|0|strategy",
     "Atlas deterministic mutation draw — UTF-8",
   ]) {
-    const digest = new Uint8Array(await globalThis.crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(seed),
-    ));
-    const high = (digest[0] * 0x1000000)
-      + (digest[1] << 16)
-      + (digest[2] << 8)
-      + digest[3];
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed)));
+    const high = digest[0] * 0x1000000 + (digest[1] << 16) + (digest[2] << 8) + digest[3];
     const low = ((digest[4] << 16) | (digest[5] << 8) | digest[6]) >>> 0;
-    const expected = (high * 0x200000 + (low & 0x1fffff) + 0.5)
-      / 0x20000000000000;
+    const expected = (high * 0x200000 + (low & 0x1fffff) + 0.5) / 0x20000000000000;
     assert.equal(search.deterministicSha256UnitSync(seed), expected);
   }
 });
@@ -258,12 +267,12 @@ test("replays retain the canonical best-first execution graph and source hierarc
   assert.equal(linus.output.searchGraph.telemetry.mutationToolCalls, 0);
   const acceptedMutation = linus.output.searchGraph.frontier.find((entry) => entry.mutation);
   assert.equal(acceptedMutation.status, "mutated");
-  assert.equal(linus.trace.some((event) =>
-    event.kind === "span_start" && event.payload.actionId === acceptedMutation.id), false);
-  for (const toolSpan of linus.trace.filter((event) =>
-    event.kind === "span_start" && event.name.startsWith("tool."))) {
-    const entry = linus.output.searchGraph.frontier.find((item) =>
-      item.id === toolSpan.payload.actionId);
+  assert.equal(
+    linus.trace.some((event) => event.kind === "span_start" && event.payload.actionId === acceptedMutation.id),
+    false,
+  );
+  for (const toolSpan of linus.trace.filter((event) => event.kind === "span_start" && event.name.startsWith("tool."))) {
+    const entry = linus.output.searchGraph.frontier.find((item) => item.id === toolSpan.payload.actionId);
     assert.ok(entry.allowedTools.includes(toolSpan.name.slice("tool.".length)));
   }
 
@@ -283,20 +292,25 @@ test("replays retain the canonical best-first execution graph and source hierarc
 
   const python = replay.getReplayExample("python-creator").output;
   assert.equal(python.target.kind, "role_query");
-  assert.deepEqual(
-    [...new Set(python.searchGraph.frontier.map((entry) => entry.sourceLaneId))].sort(),
-    ["t1.first_party", "t3.institutional", "t6.general_discovery"],
-  );
+  assert.deepEqual([...new Set(python.searchGraph.frontier.map((entry) => entry.sourceLaneId))].sort(), [
+    "t1.first_party",
+    "t3.institutional",
+    "t6.general_discovery",
+  ]);
 });
 
 test("schema guards reject invalid report enums, identity objects, trace phases, and usage", () => {
   const example = replay.getReplayExample("python-creator");
   assert.equal(validation.isInvestigationReport(example.output), true);
-  const allowedEmails = new Set(example.output.target.identifiers
-    .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
-    .map((identifier) => identifier.normalizedValue));
-  assert.equal(example.trace.every((event) =>
-    traceContract.isTraceEvent(event, { allowedEmails })), true);
+  const allowedEmails = new Set(
+    example.output.target.identifiers
+      .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
+      .map((identifier) => identifier.normalizedValue),
+  );
+  assert.equal(
+    example.trace.every((event) => traceContract.isTraceEvent(event, { allowedEmails })),
+    true,
+  );
 
   const invalidReportStatus = structuredClone(example.output);
   invalidReportStatus.status = "banana";
@@ -371,14 +385,54 @@ test("schema guards reject invalid report enums, identity objects, trace phases,
   assert.equal(traceContract.isTraceEvent(credentialUrlTrace), false);
 
   for (const [label, mutate] of [
-    ["top-level event ID email", (event) => { event.eventId = "private-contact@example.net"; }],
-    ["top-level run ID address", (event) => { event.runId = "123 Main Street Phoenix AZ 85001"; }],
-    ["event name email", (event) => { event.name = "private-contact@example.net"; }],
-    ["timestamp address", (event) => { event.timestamp = "123 Main Street Phoenix AZ 85001"; }],
-    ["usage reason phone", (event) => { event.usage.unavailableReason = "+1 (602) 555-0199"; }],
-    ["payload candidate ID email", (event) => { event.payload.candidateId = "private-contact@example.net"; }],
-    ["payload evidence ID phone", (event) => { event.payload.evidenceId = "+1 (602) 555-0199"; }],
-    ["payload structural timestamp address", (event) => { event.payload.at = "123 Main Street Phoenix AZ 85001"; }],
+    [
+      "top-level event ID email",
+      (event) => {
+        event.eventId = "private-contact@example.net";
+      },
+    ],
+    [
+      "top-level run ID address",
+      (event) => {
+        event.runId = "123 Main Street Phoenix AZ 85001";
+      },
+    ],
+    [
+      "event name email",
+      (event) => {
+        event.name = "private-contact@example.net";
+      },
+    ],
+    [
+      "timestamp address",
+      (event) => {
+        event.timestamp = "123 Main Street Phoenix AZ 85001";
+      },
+    ],
+    [
+      "usage reason phone",
+      (event) => {
+        event.usage.unavailableReason = "+1 (602) 555-0199";
+      },
+    ],
+    [
+      "payload candidate ID email",
+      (event) => {
+        event.payload.candidateId = "private-contact@example.net";
+      },
+    ],
+    [
+      "payload evidence ID phone",
+      (event) => {
+        event.payload.evidenceId = "+1 (602) 555-0199";
+      },
+    ],
+    [
+      "payload structural timestamp address",
+      (event) => {
+        event.payload.at = "123 Main Street Phoenix AZ 85001";
+      },
+    ],
   ]) {
     const mutated = structuredClone(example.trace[0]);
     mutate(mutated);
@@ -395,8 +449,9 @@ test("replay hydration fails closed on report graph, run, sequence, and span cor
   const example = replay.getReplayExample("python-creator");
 
   const missingDirectExcerpt = rawReplay(example);
-  const directFetch = missingDirectExcerpt.output.evidence.find((evidence) =>
-    evidence.verificationMethod === "direct_fetch");
+  const directFetch = missingDirectExcerpt.output.evidence.find(
+    (evidence) => evidence.verificationMethod === "direct_fetch",
+  );
   assert.ok(directFetch);
   directFetch.excerpt = null;
   syncTerminalReport(missingDirectExcerpt);
@@ -415,26 +470,17 @@ test("replay hydration fails closed on report graph, run, sequence, and span cor
 
   const run = rawReplay(example);
   run.trace[0].runId = "foreign_run";
-  assert.throws(
-    () => replay.validateReplayBundle("python-creator", run),
-    /foreign runId/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("python-creator", run), /foreign runId/i);
 
   const sequence = rawReplay(example);
   sequence.trace[1].seq += 1;
-  assert.throws(
-    () => replay.validateReplayBundle("python-creator", sequence),
-    /sequence is not contiguous/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("python-creator", sequence), /sequence is not contiguous/i);
 
   const span = rawReplay(example);
   const spanEnd = span.trace.find((event) => event.kind === "span_end");
   assert.ok(spanEnd);
   spanEnd.spanId = "span_without_start";
-  assert.throws(
-    () => replay.validateReplayBundle("python-creator", span),
-    /ends without one open start/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("python-creator", span), /ends without one open start/i);
 
   const target = rawReplay(example);
   target.output.target.identifiers.push({
@@ -453,20 +499,19 @@ test("replay hydration fails closed on report graph, run, sequence, and span cor
   const selfAuthorizedTrace = rawReplay(example);
   selfAuthorizedTrace.trace[0].payload.report = {
     target: {
-      identifiers: [{
-        kind: "email",
-        value: "private-contact@example.net",
-        normalizedValue: "private-contact@example.net",
-        assurance: "self_asserted",
-        provenance: "user_input",
-      }],
+      identifiers: [
+        {
+          kind: "email",
+          value: "private-contact@example.net",
+          normalizedValue: "private-contact@example.net",
+          assurance: "self_asserted",
+          provenance: "user_input",
+        },
+      ],
     },
     decisionSummary: "Found private-contact@example.net.",
   };
-  assert.throws(
-    () => replay.validateReplayBundle("python-creator", selfAuthorizedTrace),
-    /invalid TraceEvent/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("python-creator", selfAuthorizedTrace), /invalid TraceEvent/i);
 
   const nestedEvidenceLeak = rawReplay(example);
   nestedEvidenceLeak.output.evidence[0].attributes.hostile = {
@@ -474,31 +519,52 @@ test("replay hydration fails closed on report graph, run, sequence, and span cor
     phone: "+1 (602) 555-0199",
   };
   syncTerminalReport(nestedEvidenceLeak);
-  assert.throws(
-    () => replay.validateReplayBundle("python-creator", nestedEvidenceLeak),
-    /restricted public content/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("python-creator", nestedEvidenceLeak), /restricted public content/i);
 
   for (const [label, mutate] of [
-    ["event ID email", (bundle) => { bundle.trace[0].eventId = "private-contact@example.net"; }],
-    ["event name email", (bundle) => { bundle.trace[0].name = "private-contact@example.net"; }],
-    ["usage reason phone", (bundle) => { bundle.trace[0].usage.unavailableReason = "+1 (602) 555-0199"; }],
-    ["payload ID email", (bundle) => { bundle.trace[0].payload.candidateId = "private-contact@example.net"; }],
-    ["payload timestamp address", (bundle) => { bundle.trace[0].payload.at = "123 Main Street Phoenix AZ 85001"; }],
-    ["matched span IDs phone", (bundle) => {
-      const start = bundle.trace.find((event) => event.kind === "span_start");
-      const end = bundle.trace.find((event) => event.kind === "span_end" && event.spanId === start.spanId);
-      start.spanId = "+1 (602) 555-0199";
-      end.spanId = start.spanId;
-    }],
+    [
+      "event ID email",
+      (bundle) => {
+        bundle.trace[0].eventId = "private-contact@example.net";
+      },
+    ],
+    [
+      "event name email",
+      (bundle) => {
+        bundle.trace[0].name = "private-contact@example.net";
+      },
+    ],
+    [
+      "usage reason phone",
+      (bundle) => {
+        bundle.trace[0].usage.unavailableReason = "+1 (602) 555-0199";
+      },
+    ],
+    [
+      "payload ID email",
+      (bundle) => {
+        bundle.trace[0].payload.candidateId = "private-contact@example.net";
+      },
+    ],
+    [
+      "payload timestamp address",
+      (bundle) => {
+        bundle.trace[0].payload.at = "123 Main Street Phoenix AZ 85001";
+      },
+    ],
+    [
+      "matched span IDs phone",
+      (bundle) => {
+        const start = bundle.trace.find((event) => event.kind === "span_start");
+        const end = bundle.trace.find((event) => event.kind === "span_end" && event.spanId === start.spanId);
+        start.spanId = "+1 (602) 555-0199";
+        end.spanId = start.spanId;
+      },
+    ],
   ]) {
     const mutated = rawReplay(example);
     mutate(mutated);
-    assert.throws(
-      () => replay.validateReplayBundle("python-creator", mutated),
-      /invalid TraceEvent/i,
-      label,
-    );
+    assert.throws(() => replay.validateReplayBundle("python-creator", mutated), /invalid TraceEvent/i, label);
   }
 });
 
@@ -514,24 +580,22 @@ test("replay hydration rejects execution-graph cost, tier, mutation, candidate, 
   );
 
   const forgedCost = rawReplay(python);
-  const leaf = forgedCost.output.searchGraph.frontier.find((entry) =>
-    entry.sourceLaneId === "t6.general_discovery");
-  const expansion = forgedCost.output.searchGraph.edges.find((edge) =>
-    edge.frontierEntryId === leaf.id && edge.toNodeId === leaf.nodeId);
+  const leaf = forgedCost.output.searchGraph.frontier.find((entry) => entry.sourceLaneId === "t6.general_discovery");
+  const expansion = forgedCost.output.searchGraph.edges.find(
+    (edge) => edge.frontierEntryId === leaf.id && edge.toNodeId === leaf.nodeId,
+  );
   leaf.edgeCost += 0.125;
   leaf.pathCost += 0.125;
   expansion.edgeCost = leaf.edgeCost;
   expansion.pathCost = leaf.pathCost;
   syncTerminalReport(forgedCost);
-  assert.throws(
-    () => replay.validateReplayBundle("python-creator", forgedCost),
-    /forged edge cost|schema v2/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("python-creator", forgedCost), /forged edge cost|schema v2/i);
 
   const tierSkip = rawReplay(replay.getReplayExample("linus-codegraph"));
   const firstSelection = tierSkip.trace.find((event) => event.name === "frontier.selected");
-  const skippedTo = tierSkip.output.searchGraph.frontier.find((entry) =>
-    entry.sourceLaneId === "t1.first_party" && entry.parentFrontierEntryId === null);
+  const skippedTo = tierSkip.output.searchGraph.frontier.find(
+    (entry) => entry.sourceLaneId === "t1.first_party" && entry.parentFrontierEntryId === null,
+  );
   firstSelection.payload.frontierEntryId = skippedTo.id;
   firstSelection.payload.actionId = skippedTo.id;
   firstSelection.payload.sourceTier = skippedTo.sourceTier;
@@ -563,28 +627,28 @@ test("replay hydration rejects execution-graph cost, tier, mutation, candidate, 
 
   const chris = rawReplay(replay.getReplayExample("chris-anderson-ted"));
   const selectedCandidateId = chris.output.identity.selectedCandidateId;
-  const decoyCandidateId = chris.output.candidates.find((candidate) =>
-    candidate.id !== selectedCandidateId).id;
-  const selectedEvidenceNode = chris.output.searchGraph.nodes.find((node) =>
-    node.kind === "evidence" && node.candidateId === selectedCandidateId);
-  const selectedCandidateNode = chris.output.searchGraph.nodes.find((node) =>
-    node.kind === "candidate" && node.candidateId === selectedCandidateId);
-  const decoyCandidateNode = chris.output.searchGraph.nodes.find((node) =>
-    node.kind === "candidate" && node.candidateId === decoyCandidateId);
-  const crossCandidateEdge = chris.output.searchGraph.edges.find((edge) =>
-    edge.fromNodeId === selectedEvidenceNode.id && edge.toNodeId === selectedCandidateNode.id);
+  const decoyCandidateId = chris.output.candidates.find((candidate) => candidate.id !== selectedCandidateId).id;
+  const selectedEvidenceNode = chris.output.searchGraph.nodes.find(
+    (node) => node.kind === "evidence" && node.candidateId === selectedCandidateId,
+  );
+  const selectedCandidateNode = chris.output.searchGraph.nodes.find(
+    (node) => node.kind === "candidate" && node.candidateId === selectedCandidateId,
+  );
+  const decoyCandidateNode = chris.output.searchGraph.nodes.find(
+    (node) => node.kind === "candidate" && node.candidateId === decoyCandidateId,
+  );
+  const crossCandidateEdge = chris.output.searchGraph.edges.find(
+    (edge) => edge.fromNodeId === selectedEvidenceNode.id && edge.toNodeId === selectedCandidateNode.id,
+  );
   crossCandidateEdge.toNodeId = decoyCandidateNode.id;
   syncTerminalReport(chris);
-  assert.throws(
-    () => replay.validateReplayBundle("chris-anderson-ted", chris),
-    /crosses candidate ledgers|schema v2/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("chris-anderson-ted", chris), /crosses candidate ledgers|schema v2/i);
 
   const actionMismatch = rawReplay(python);
-  const evidenceNode = actionMismatch.output.searchGraph.nodes.find((node) =>
-    node.kind === "evidence");
-  evidenceNode.actionId = actionMismatch.output.searchGraph.frontier.find((entry) =>
-    entry.id !== evidenceNode.actionId).id;
+  const evidenceNode = actionMismatch.output.searchGraph.nodes.find((node) => node.kind === "evidence");
+  evidenceNode.actionId = actionMismatch.output.searchGraph.frontier.find(
+    (entry) => entry.id !== evidenceNode.actionId,
+  ).id;
   syncTerminalReport(actionMismatch);
   assert.throws(
     () => replay.validateReplayBundle("python-creator", actionMismatch),
@@ -599,23 +663,23 @@ test("replay hydration recomputes mutation draws and transformations instead of 
   const drawEntry = forgedDraw.output.searchGraph.frontier.find((entry) => entry.mutation);
   const forgedU = drawEntry.mutation.deterministicU === 0.25 ? 0.5 : 0.25;
   drawEntry.mutation.deterministicU = forgedU;
-  for (const event of forgedDraw.trace.filter((item) =>
-    ["mutation.proposed", "mutation.accepted", "mutation.rejected"].includes(item.name)
-    && (item.payload.frontierEntryId === drawEntry.id
-      || item.payload.parentFrontierEntryId === drawEntry.mutation.parentFrontierEntryId))) {
+  for (const event of forgedDraw.trace.filter(
+    (item) =>
+      ["mutation.proposed", "mutation.accepted", "mutation.rejected"].includes(item.name) &&
+      (item.payload.frontierEntryId === drawEntry.id ||
+        item.payload.parentFrontierEntryId === drawEntry.mutation.parentFrontierEntryId),
+  )) {
     event.payload.deterministicU = forgedU;
   }
   syncTerminalReport(forgedDraw);
-  assert.throws(
-    () => replay.validateReplayBundle("python-creator", forgedDraw),
-    /canonical deterministic proposal/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("python-creator", forgedDraw), /canonical deterministic proposal/i);
 
   const forgedStrategy = rawReplay(example);
   const strategyEntry = forgedStrategy.output.searchGraph.frontier.find((entry) => entry.mutation);
   strategyEntry.mutation.strategy = "random_magic";
   for (const event of forgedStrategy.trace.filter((item) =>
-    ["mutation.proposed", "mutation.accepted", "mutation.rejected"].includes(item.name))) {
+    ["mutation.proposed", "mutation.accepted", "mutation.rejected"].includes(item.name),
+  )) {
     event.payload.strategy = "random_magic";
   }
   syncTerminalReport(forgedStrategy);
@@ -627,8 +691,9 @@ test("replay hydration recomputes mutation draws and transformations instead of 
   const forgedTransformation = rawReplay(example);
   const transformedEntry = forgedTransformation.output.searchGraph.frontier.find((entry) => entry.mutation);
   transformedEntry.queryHint = "unrelated query chosen after seeing the replay";
-  const transformedNode = forgedTransformation.output.searchGraph.nodes.find((node) =>
-    node.id === transformedEntry.nodeId);
+  const transformedNode = forgedTransformation.output.searchGraph.nodes.find(
+    (node) => node.id === transformedEntry.nodeId,
+  );
   transformedNode.data.queryHint = transformedEntry.queryHint;
   syncTerminalReport(forgedTransformation);
   assert.throws(
@@ -639,16 +704,11 @@ test("replay hydration recomputes mutation draws and transformations instead of 
 
 test("replay hydration requires every frontier-linked tool span to be lane-allowed", () => {
   const forged = rawReplay(replay.getReplayExample("python-creator"));
-  const start = forged.trace.find((event) =>
-    event.kind === "span_start" && event.name.startsWith("tool."));
-  const end = forged.trace.find((event) =>
-    event.kind === "span_end" && event.spanId === start.spanId);
+  const start = forged.trace.find((event) => event.kind === "span_start" && event.name.startsWith("tool."));
+  const end = forged.trace.find((event) => event.kind === "span_end" && event.spanId === start.spanId);
   start.name = "tool.mutation_frontier_policy";
   end.name = start.name;
-  assert.throws(
-    () => replay.validateReplayBundle("python-creator", forged),
-    /outside frontier .* allowedTools/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("python-creator", forged), /outside frontier .* allowedTools/i);
 });
 
 test("replay hydration enforces goal legality, empty gaps, and canonical terminal status", () => {
@@ -656,10 +716,7 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
 
   const withGap = rawReplay(example);
   withGap.output.coverage.gaps = ["Unresolved identity question"];
-  withGap.output.limitations = [
-    ...withGap.output.limitations,
-    "Unresolved identity question",
-  ].sort();
+  withGap.output.limitations = [...withGap.output.limitations, "Unresolved identity question"].sort();
   syncTerminalReport(withGap);
   assert.throws(
     () => replay.validateReplayBundle("python-creator", withGap),
@@ -698,8 +755,9 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
     }
   }
   for (const finding of illegalAnchor.output.findings) {
-    const records = [...finding.evidenceIds, ...finding.counterEvidenceIds]
-      .map((id) => illegalAnchor.output.evidence.find((item) => item.id === id));
+    const records = [...finding.evidenceIds, ...finding.counterEvidenceIds].map((id) =>
+      illegalAnchor.output.evidence.find((item) => item.id === id),
+    );
     finding.confidence = domain.assessConfidence(records);
   }
   // Once the sole anchor is spoofable the identity no longer resolves; keep the
@@ -710,17 +768,15 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
     illegalAnchor.output.evidence,
   );
   syncTerminalReport(illegalAnchor);
-  assert.throws(
-    () => replay.validateReplayBundle("chris-anderson-ted", illegalAnchor),
-    /stop-illegal/i,
-  );
+  assert.throws(() => replay.validateReplayBundle("chris-anderson-ted", illegalAnchor), /stop-illegal/i);
 
   const forgedFamily = rawReplay(example);
   forgedFamily.output.evidence[0].sourceFamily = "attacker.example";
   forgedFamily.output.sources = domain.summarizeSources(forgedFamily.output.evidence);
   for (const finding of forgedFamily.output.findings) {
-    const records = [...finding.evidenceIds, ...finding.counterEvidenceIds]
-      .map((evidenceId) => forgedFamily.output.evidence.find((item) => item.id === evidenceId));
+    const records = [...finding.evidenceIds, ...finding.counterEvidenceIds].map((evidenceId) =>
+      forgedFamily.output.evidence.find((item) => item.id === evidenceId),
+    );
     finding.confidence = domain.assessConfidence(records);
   }
   syncTerminalReport(forgedFamily);
@@ -752,8 +808,7 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
   forgedEvidence.claim = "Guido van Rossum won a Nobel Prize and is Python's creator.";
   forgedEvidence.excerpt = forgedEvidence.claim;
   forgedEvidence.normalizedClaim = domain.normalizeComparable(forgedEvidence.claim);
-  const forgedFinding = forgedQuote.output.findings.find((finding) =>
-    finding.evidenceIds.includes(forgedEvidence.id));
+  const forgedFinding = forgedQuote.output.findings.find((finding) => finding.evidenceIds.includes(forgedEvidence.id));
   forgedFinding.description = forgedEvidence.excerpt;
   syncTerminalReport(forgedQuote);
   assert.throws(
@@ -784,11 +839,15 @@ test("trace sanitation preserves validated UUID-shaped structural identifiers", 
   const prefixedPhone = structuredClone(event);
   prefixedPhone.eventId = "event_602-555-0199";
   assert.equal(traceContract.isTraceEvent(prefixedPhone), false);
-  assert.throws(() => new traceContract.TraceRecorder(
-    "private-contact@example.net",
-    domain.createSequenceClock("2026-08-18T23:00:00.000Z", 1),
-    domain.createDeterministicIdFactory("invalid-trace"),
-  ), /safe machine identifier/i);
+  assert.throws(
+    () =>
+      new traceContract.TraceRecorder(
+        "private-contact@example.net",
+        domain.createSequenceClock("2026-08-18T23:00:00.000Z", 1),
+        domain.createDeterministicIdFactory("invalid-trace"),
+      ),
+    /safe machine identifier/i,
+  );
   assert.deepEqual(
     traceContract.sanitizeTraceValue({
       candidateId: "private-contact@example.net",
@@ -822,7 +881,23 @@ test("every replay report and trace preserve graph and append-only integrity", (
     const evidenceById = new Map(example.output.evidence.map((item) => [item.id, item]));
     for (const evidence of example.output.evidence) {
       assert.ok(candidates.has(evidence.candidateId));
-      for (const field of ["sourceUrl", "queryUrl", "publisher", "sourceFamily", "sourceType", "retrievedAt", "observedAt", "httpStatus", "contentHash", "excerpt", "canonicalSubset", "toolCallId", "verificationMethod", "temporalStatus", "spoofable"]) {
+      for (const field of [
+        "sourceUrl",
+        "queryUrl",
+        "publisher",
+        "sourceFamily",
+        "sourceType",
+        "retrievedAt",
+        "observedAt",
+        "httpStatus",
+        "contentHash",
+        "excerpt",
+        "canonicalSubset",
+        "toolCallId",
+        "verificationMethod",
+        "temporalStatus",
+        "spoofable",
+      ]) {
         assert.ok(Object.hasOwn(evidence, field), `${id} evidence ${evidence.id} missing ${field}`);
       }
     }
@@ -863,8 +938,7 @@ test("same-name replay quarantines decoy evidence and Git replay preserves spoof
   assert.deepEqual(sameName.coverage.coveredCategories, ["employment", "identity"]);
   assert.equal(sameName.coverage.independentSourceFamilyCount, 1);
   assert.equal(new Set(sameName.findings.flatMap((finding) => finding.evidenceIds)).size, 2);
-  const bioPhrase = sameName.identity.selectedCandidate.signals.find((signal) =>
-    signal.kind === "bio_phrase");
+  const bioPhrase = sameName.identity.selectedCandidate.signals.find((signal) => signal.kind === "bio_phrase");
   assert.equal(bioPhrase.value, "became the curator of the TED Conference in 2002");
   assert.equal(bioPhrase.sourceFamily, "ted.com");
 
@@ -890,21 +964,17 @@ test("health and example APIs expose replay readiness without leaking configurat
     replayReady: true,
     exampleCount: 3,
     liveConfigured: false,
-    model: null,
   });
-  const keyOnlyHealth = await api.handleApiRequest(
-    new Request("https://atlas.test/api/health"),
-    { OPENROUTER_API_KEY: "server-secret" },
-  );
+  const keyOnlyHealth = await api.handleApiRequest(new Request("https://atlas.test/api/health"), {
+    OPENROUTER_API_KEY: "server-secret",
+  });
   assert.equal((await keyOnlyHealth.json()).liveConfigured, false);
-  const enabledHealth = await api.handleApiRequest(
-    new Request("https://atlas.test/api/health"),
-    {
-      ATLAS_LIVE_ENABLED: "true",
-      OPENROUTER_API_KEY: "server-secret",
-      OPENROUTER_MODEL: "test/model",
-    },
-  );
+  const enabledHealth = await api.handleApiRequest(new Request("https://atlas.test/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    OPENROUTER_API_KEY: "server-secret",
+    OPENROUTER_MODEL: "test/model",
+    ATLAS_API_TOKEN: "a".repeat(32),
+  });
   assert.deepEqual(await enabledHealth.json(), {
     schemaVersion: 2,
     status: "ok",
@@ -912,8 +982,18 @@ test("health and example APIs expose replay readiness without leaking configurat
     replayReady: true,
     exampleCount: 3,
     liveConfigured: true,
-    model: "test/model",
   });
+  const unprotectedHealth = await api.handleApiRequest(new Request("https://atlas.test/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    OPENROUTER_API_KEY: "server-secret",
+  });
+  assert.equal((await unprotectedHealth.json()).liveConfigured, false);
+  const localHealth = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    OPENROUTER_API_KEY: "server-secret",
+  });
+  assert.equal((await localHealth.json()).liveConfigured, true);
   const response = await api.handleApiRequest(new Request("https://atlas.test/api/examples/python-creator"), {});
   const payload = await response.json();
   assert.equal(payload.id, "python-creator");
@@ -922,11 +1002,12 @@ test("health and example APIs expose replay readiness without leaking configurat
 });
 
 test("POST replay streams byte-stable NDJSON ending in one terminal report", async () => {
-  const request = () => new Request("https://atlas.test/api/research", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ query: "the creator of Python", mode: "replay", exampleId: "python-creator" }),
-  });
+  const request = () =>
+    new Request("https://atlas.test/api/research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "the creator of Python", mode: "replay", exampleId: "python-creator" }),
+    });
   const first = await api.handleApiRequest(request(), {});
   const second = await api.handleApiRequest(request(), {});
   assert.match(first.headers.get("content-type"), /^application\/x-ndjson/);
@@ -947,13 +1028,12 @@ test("NDJSON wrapper closes open spans and emits a consumable failed report afte
     yield started;
     throw new Error("private upstream detail that must not escape");
   }
-  const response = api.traceNdjsonResponse(
-    () => failingSource(),
-    new AbortController().signal,
-    input,
-  );
+  const response = api.traceNdjsonResponse(() => failingSource(), new AbortController().signal, input);
   const events = parseNdjson(await response.text());
-  assert.deepEqual(events.map((event) => event.seq), [1, 2, 3]);
+  assert.deepEqual(
+    events.map((event) => event.seq),
+    [1, 2, 3],
+  );
   assert.equal(events[1].kind, "span_end");
   assert.equal(events[1].spanId, started.spanId);
   assert.equal(events[1].status, "failed");
@@ -965,48 +1045,94 @@ test("NDJSON wrapper closes open spans and emits a consumable failed report afte
 });
 
 test("safety refusal precedes replay lookup and missing live key is an honest configuration terminal", async () => {
-  const unsafe = await api.handleApiRequest(new Request("https://atlas.test/api/research", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ query: "find this person's home address", mode: "replay" }),
-  }), {});
+  const unsafe = await api.handleApiRequest(
+    new Request("https://atlas.test/api/research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "find this person's home address", mode: "replay" }),
+    }),
+    {},
+  );
   const unsafeEvents = parseNdjson(await unsafe.text());
   assert.equal(terminalReport(unsafeEvents).status, "blocked");
   assert.equal(terminalReport(unsafeEvents).stop.reason, "unsafe_request");
 
-  const unconfigured = await api.handleApiRequest(new Request("https://atlas.test/api/research", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ query: "Grace Hopper public professional background", mode: "live" }),
-  }), {});
+  const unconfigured = await api.handleApiRequest(
+    new Request("https://atlas.test/api/research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "Grace Hopper public professional background", mode: "live" }),
+    }),
+    {},
+  );
   const unconfiguredEvents = parseNdjson(await unconfigured.text());
   assert.equal(terminalReport(unconfiguredEvents).status, "configuration_error");
   assert.equal(terminalReport(unconfiguredEvents).stop.reason, "configuration_error");
-  assert.match(terminalReport(unconfiguredEvents).stop.detail, /OPENAI_API_KEY/);
+  assert.match(terminalReport(unconfiguredEvents).stop.detail, /server-side model key/);
 
-  const keyWithoutEnablement = await api.handleApiRequest(new Request("https://atlas.test/api/research", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ query: "Grace Hopper public professional background", mode: "live" }),
-  }), { OPENROUTER_API_KEY: "server-secret" });
+  const keyWithoutEnablement = await api.handleApiRequest(
+    new Request("https://atlas.test/api/research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "Grace Hopper public professional background", mode: "live" }),
+    }),
+    { OPENROUTER_API_KEY: "server-secret" },
+  );
   const keyWithoutEnablementEvents = parseNdjson(await keyWithoutEnablement.text());
   assert.equal(terminalReport(keyWithoutEnablementEvents).status, "configuration_error");
-  assert.match(terminalReport(keyWithoutEnablementEvents).stop.detail, /ATLAS_LIVE_ENABLED=true/);
+  assert.match(terminalReport(keyWithoutEnablementEvents).stop.detail, /explicit enablement/);
+});
+
+test("live HTTP ingress fails closed without the configured bearer token", async () => {
+  const environment = {
+    ATLAS_LIVE_ENABLED: "true",
+    OPENROUTER_API_KEY: "server-secret",
+    ATLAS_API_TOKEN: "a".repeat(32),
+  };
+  const request = (authorization) =>
+    new Request("https://atlas.test/api/research", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(authorization ? { authorization } : {}),
+      },
+      body: JSON.stringify({
+        query: "Grace Hopper public professional background",
+        mode: "live",
+      }),
+    });
+
+  const missing = await api.handleApiRequest(request(), environment);
+  assert.equal(missing.status, 401);
+  assert.equal(missing.headers.get("www-authenticate"), 'Bearer realm="atlas-live"');
+  assert.deepEqual(await missing.json(), {
+    error: "unauthorized",
+    message: "Valid live research authorization is required.",
+  });
+
+  const wrong = await api.handleApiRequest(request("Bearer wrong-token"), environment);
+  assert.equal(wrong.status, 401);
 });
 
 test("API rejects malformed and unmatched requests without starting synthetic research", async () => {
-  const malformed = await api.handleApiRequest(new Request("https://atlas.test/api/research", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: "{not-json",
-  }), {});
+  const malformed = await api.handleApiRequest(
+    new Request("https://atlas.test/api/research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not-json",
+    }),
+    {},
+  );
   assert.equal(malformed.status, 400);
 
-  const unmatched = await api.handleApiRequest(new Request("https://atlas.test/api/research", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ query: "Ada Lovelace", mode: "replay" }),
-  }), {});
+  const unmatched = await api.handleApiRequest(
+    new Request("https://atlas.test/api/research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "Ada Lovelace", mode: "replay" }),
+    }),
+    {},
+  );
   assert.equal(unmatched.status, 422);
   assert.equal((await unmatched.json()).error, "replay_not_found");
 });

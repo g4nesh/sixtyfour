@@ -88,10 +88,7 @@ export interface ReportFindingView {
   caveats: string[];
 }
 
-export type EvidenceContentLabel =
-  | "Exact source excerpt"
-  | "Structured API claim"
-  | "Admitted source claim";
+export type EvidenceContentLabel = "Exact source excerpt" | "Structured API claim" | "Admitted source claim";
 
 export interface ReportEvidenceView {
   ref: string;

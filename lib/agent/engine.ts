@@ -20,11 +20,7 @@ import {
 import { classifySafety } from "../domain/safety";
 import { containsRestrictedPublicContent } from "../domain/content-policy";
 import { assertPhaseTransition } from "../domain/state-machine";
-import {
-  evaluateStop,
-  terminalStatusForStop,
-  type StopEvaluationOptions,
-} from "../domain/stopping";
+import { evaluateStop, terminalStatusForStop, type StopEvaluationOptions } from "../domain/stopping";
 import { parseTarget } from "../domain/target";
 import {
   SCHEMA_VERSION,
@@ -79,16 +75,16 @@ function evidenceCarriesIdentityLabels(
   subject: string,
   organization: string,
 ): boolean {
-  const subjectLabel = typeof evidence.attributes.extractedSubjectLabel === "string"
-    ? evidence.attributes.extractedSubjectLabel
-    : subject;
-  const organizationLabel = typeof evidence.attributes.extractedOrganizationLabel === "string"
-    ? evidence.attributes.extractedOrganizationLabel
-    : organization;
+  const subjectLabel =
+    typeof evidence.attributes.extractedSubjectLabel === "string" ? evidence.attributes.extractedSubjectLabel : subject;
+  const organizationLabel =
+    typeof evidence.attributes.extractedOrganizationLabel === "string"
+      ? evidence.attributes.extractedOrganizationLabel
+      : organization;
   return Boolean(
-    evidence.excerpt
-    && labelOccursAsTokenPhrase(evidence.excerpt, subjectLabel)
-    && labelOccursAsTokenPhrase(evidence.excerpt, organizationLabel),
+    evidence.excerpt &&
+    labelOccursAsTokenPhrase(evidence.excerpt, subjectLabel) &&
+    labelOccursAsTokenPhrase(evidence.excerpt, organizationLabel),
   );
 }
 
@@ -125,9 +121,11 @@ export class InvestigationEngine {
     const target = parseTarget(input);
     this.#budget = new BudgetLedger(limits, this.clock.monotonicMs());
     this.trace = new TraceRecorder(runId, this.clock, this.ids, {
-      allowedEmails: new Set(target.identifiers
-        .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
-        .map((identifier) => identifier.normalizedValue)),
+      allowedEmails: new Set(
+        target.identifiers
+          .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
+          .map((identifier) => identifier.normalizedValue),
+      ),
     });
     this.#state = {
       schemaVersion: SCHEMA_VERSION,
@@ -201,9 +199,11 @@ export class InvestigationEngine {
   } {
     const currentYear = new Date(this.#state.startedAt).getUTCFullYear();
     return {
-      allowedEmails: new Set(this.#state.target.identifiers
-        .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
-        .map((identifier) => identifier.normalizedValue)),
+      allowedEmails: new Set(
+        this.#state.target.identifiers
+          .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
+          .map((identifier) => identifier.normalizedValue),
+      ),
       ...(Number.isInteger(currentYear) ? { currentYear } : {}),
     };
   }
@@ -244,35 +244,31 @@ export class InvestigationEngine {
   addCandidate(draft: CandidateDraft): CandidateMutation {
     this.#ensureRunning();
     if (
-      containsRestrictedPublicContent(draft.displayName, this.#publicContentOptions())
-      || draft.signals?.some((signal) =>
-        containsRestrictedPublicContent(signal.value, this.#publicContentOptions()))
+      containsRestrictedPublicContent(draft.displayName, this.#publicContentOptions()) ||
+      draft.signals?.some((signal) => containsRestrictedPublicContent(signal.value, this.#publicContentOptions()))
     ) {
       throw new TypeError("candidate contains restricted personal content");
     }
     if (draft.signals?.some((signal) => signal.kind === "cross_source_match")) {
       throw new TypeError("cross_source_match signals are derived only by the evidence kernel");
     }
-    if (draft.signals?.some((signal) =>
-      signal.sourceEvidenceId
-      || signal.kind === "conflict"
-      || signal.assurance === "verified"
-      || signal.assurance === "corroborated")) {
+    if (
+      draft.signals?.some(
+        (signal) =>
+          signal.sourceEvidenceId ||
+          signal.kind === "conflict" ||
+          signal.assurance === "verified" ||
+          signal.assurance === "corroborated",
+      )
+    ) {
       throw new TypeError("new candidate identity signals cannot claim unadmitted high-assurance evidence");
     }
     const candidateDraft: CandidateDraft = {
       ...draft,
-      ...(draft.signals
-        ? { signals: draft.signals.map(withoutUnverifiedSourceProvenance) }
-        : {}),
+      ...(draft.signals ? { signals: draft.signals.map(withoutUnverifiedSourceProvenance) } : {}),
     };
     const timestamp = this.clock.now();
-    const proposed = createCandidate(
-      candidateDraft,
-      this.#state.target,
-      this.ids.next("candidate"),
-      timestamp,
-    );
+    const proposed = createCandidate(candidateDraft, this.#state.target, this.ids.next("candidate"), timestamp);
     for (let index = 0; index < this.#state.candidates.length; index += 1) {
       const existing = this.#state.candidates[index];
       const decision = canMergeCandidates(existing, proposed);
@@ -311,12 +307,7 @@ export class InvestigationEngine {
     const index = this.#state.candidates.findIndex((candidate) => candidate.id === candidateId);
     if (index < 0) throw new Error(`unknown candidate ${candidateId}`);
     const timestamp = this.clock.now();
-    const updated = appendCandidateSignals(
-      this.#state.candidates[index],
-      signals,
-      this.#state.target,
-      timestamp,
-    );
+    const updated = appendCandidateSignals(this.#state.candidates[index], signals, this.#state.target, timestamp);
     this.#state.candidates[index] = updated;
     this.#touch(timestamp);
     this.trace.record("candidate.scored", {
@@ -333,8 +324,7 @@ export class InvestigationEngine {
   }
 
   addCandidateSignals(candidateId: string, signals: readonly IdentitySignal[]): Candidate {
-    if (signals.some((signal) =>
-      containsRestrictedPublicContent(signal.value, this.#publicContentOptions()))) {
+    if (signals.some((signal) => containsRestrictedPublicContent(signal.value, this.#publicContentOptions()))) {
       throw new TypeError("candidate signal contains restricted personal content");
     }
     if (signals.some((signal) => signal.kind === "cross_source_match")) {
@@ -342,21 +332,13 @@ export class InvestigationEngine {
     }
     const canonicalSignals = signals.map((signal) => {
       if (!signal.sourceEvidenceId) {
-        if (
-          signal.kind === "conflict"
-          || signal.assurance === "verified"
-          || signal.assurance === "corroborated"
-        ) {
+        if (signal.kind === "conflict" || signal.assurance === "verified" || signal.assurance === "corroborated") {
           throw new TypeError("high-assurance identity signals require admitted evidence");
         }
         return withoutUnverifiedSourceProvenance(signal);
       }
       const evidence = this.#state.evidence.find((record) => record.id === signal.sourceEvidenceId);
-      if (
-        !evidence
-        || evidence.candidateId !== candidateId
-        || !identitySignalGroundedByEvidence(signal, evidence)
-      ) {
+      if (!evidence || evidence.candidateId !== candidateId || !identitySignalGroundedByEvidence(signal, evidence)) {
         throw new TypeError("identity signal evidence provenance does not match its candidate, family, and value");
       }
       return signal;
@@ -364,53 +346,60 @@ export class InvestigationEngine {
     return this.#applyCandidateSignals(candidateId, canonicalSignals);
   }
 
-  #reconcileCrossSourceIdentity(
-    record: InvestigationState["evidence"][number],
-  ): void {
+  #reconcileCrossSourceIdentity(record: InvestigationState["evidence"][number]): void {
     if (
-      record.disposition !== "supports"
-      || record.verificationMethod !== "direct_fetch"
-      || record.attributes.untrustedContent !== true
-    ) return;
+      record.disposition !== "supports" ||
+      record.verificationMethod !== "direct_fetch" ||
+      record.attributes.untrustedContent !== true
+    )
+      return;
     const subject = evidenceIdentityAttribute(record, "extractedSubjectName");
     const organization = evidenceIdentityAttribute(record, "extractedOrganization");
     if (!subject || !organization) return;
     const candidate = this.#state.candidates.find((item) => item.id === record.candidateId);
     if (
-      !candidate
-      || candidate.signals.some((signal) => signal.kind === "conflict" && signal.strength === "strong")
-      || normalizeLabelTokens(candidate.displayName) !== normalizeLabelTokens(subject)
-      || !evidenceCarriesIdentityLabels(record, subject, organization)
-    ) return;
+      !candidate ||
+      candidate.signals.some((signal) => signal.kind === "conflict" && signal.strength === "strong") ||
+      normalizeLabelTokens(candidate.displayName) !== normalizeLabelTokens(subject) ||
+      !evidenceCarriesIdentityLabels(record, subject, organization)
+    )
+      return;
 
     const organizationKey = normalizeOrganizationIdentity(organization);
-    const prior = this.#state.evidence.find((item) =>
-      item.id !== record.id
-      && item.candidateId === record.candidateId
-      && item.disposition === "supports"
-      && item.verificationMethod === "direct_fetch"
-      && item.attributes.untrustedContent === true
-      && item.sourceFamily !== record.sourceFamily
-      && evidenceIdentityAttribute(item, "extractedSubjectName") === subject
-      && normalizeOrganizationIdentity(
-        evidenceIdentityAttribute(item, "extractedOrganization") ?? "",
-      ) === organizationKey
-      && evidenceCarriesIdentityLabels(item, subject, organization));
+    const prior = this.#state.evidence.find(
+      (item) =>
+        item.id !== record.id &&
+        item.candidateId === record.candidateId &&
+        item.disposition === "supports" &&
+        item.verificationMethod === "direct_fetch" &&
+        item.attributes.untrustedContent === true &&
+        item.sourceFamily !== record.sourceFamily &&
+        evidenceIdentityAttribute(item, "extractedSubjectName") === subject &&
+        normalizeOrganizationIdentity(evidenceIdentityAttribute(item, "extractedOrganization") ?? "") ===
+          organizationKey &&
+        evidenceCarriesIdentityLabels(item, subject, organization),
+    );
     if (!prior) return;
 
     const families = [prior.sourceFamily, record.sourceFamily].sort();
     const normalizedValue = `${normalizeComparable(subject)}|${organizationKey}|${families.join("|")}`;
-    if (candidate.signals.some((signal) =>
-      signal.kind === "cross_source_match" && signal.normalizedValue === normalizedValue)) return;
-    this.#applyCandidateSignals(record.candidateId, [{
-      kind: "cross_source_match",
-      value: `${subject} at ${organization} is independently quoted by ${families.join(" and ")}`,
-      normalizedValue,
-      strength: "strong",
-      assurance: "corroborated",
-      sourceFamily: `cross-source:${families.join("+")}`,
-      sourceEvidenceId: record.id,
-    }]);
+    if (
+      candidate.signals.some(
+        (signal) => signal.kind === "cross_source_match" && signal.normalizedValue === normalizedValue,
+      )
+    )
+      return;
+    this.#applyCandidateSignals(record.candidateId, [
+      {
+        kind: "cross_source_match",
+        value: `${subject} at ${organization} is independently quoted by ${families.join(" and ")}`,
+        normalizedValue,
+        strength: "strong",
+        assurance: "corroborated",
+        sourceFamily: `cross-source:${families.join("+")}`,
+        sourceEvidenceId: record.id,
+      },
+    ]);
     this.trace.record("candidate.cross_source_reconciled", {
       phase: this.#state.phase,
       payload: {
@@ -426,21 +415,23 @@ export class InvestigationEngine {
     const canAttempt = this.#budget.canAttemptEvidence(this.clock.monotonicMs());
     this.#budget.recordEvidenceAttempt(this.clock.monotonicMs());
     this.#syncBudget();
-    const result: EvidenceAdmission = canAttempt ? evaluateEvidenceAdmission(draft, {
-      candidateIds: new Set(this.#state.candidates.map((candidate) => candidate.id)),
-      existing: this.#state.evidence,
-      ids: this.ids,
-      clock: this.clock,
-      allowedEmails: new Set(this.#state.target.identifiers
-        .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
-        .map((identifier) => identifier.normalizedValue)),
-    }) : { admitted: false, reason: "budget_exhausted" };
+    const result: EvidenceAdmission = canAttempt
+      ? evaluateEvidenceAdmission(draft, {
+          candidateIds: new Set(this.#state.candidates.map((candidate) => candidate.id)),
+          existing: this.#state.evidence,
+          ids: this.ids,
+          clock: this.clock,
+          allowedEmails: new Set(
+            this.#state.target.identifiers
+              .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
+              .map((identifier) => identifier.normalizedValue),
+          ),
+        })
+      : { admitted: false, reason: "budget_exhausted" };
     if (result.admitted && result.evidence) {
       const record = result.evidence;
       this.#state.evidence.push(record);
-      const candidateIndex = this.#state.candidates.findIndex(
-        (candidate) => candidate.id === record.candidateId,
-      );
+      const candidateIndex = this.#state.candidates.findIndex((candidate) => candidate.id === record.candidateId);
       const candidate = this.#state.candidates[candidateIndex];
       this.#state.candidates[candidateIndex] = {
         ...candidate,
@@ -482,19 +473,21 @@ export class InvestigationEngine {
       this.#state.evidence,
       this.ids,
       this.clock,
-      new Set(this.#state.target.identifiers
-        .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
-        .map((identifier) => identifier.normalizedValue)),
+      new Set(
+        this.#state.target.identifiers
+          .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
+          .map((identifier) => identifier.normalizedValue),
+      ),
       this.#state.findings,
     );
     const duplicate = this.#state.findings.find(
       (current) =>
-        current.candidateId === finding.candidateId
-        && current.category === finding.category
-        && normalizeComparable(current.title) === normalizeComparable(finding.title)
-        && normalizeComparable(current.description) === normalizeComparable(finding.description)
-        && current.evidenceIds.join("|") === finding.evidenceIds.join("|")
-        && current.counterEvidenceIds.join("|") === finding.counterEvidenceIds.join("|"),
+        current.candidateId === finding.candidateId &&
+        current.category === finding.category &&
+        normalizeComparable(current.title) === normalizeComparable(finding.title) &&
+        normalizeComparable(current.description) === normalizeComparable(finding.description) &&
+        current.evidenceIds.join("|") === finding.evidenceIds.join("|") &&
+        current.counterEvidenceIds.join("|") === finding.counterEvidenceIds.join("|"),
     );
     if (duplicate) return cloneJson(duplicate);
     this.#state.findings.push(finding);
@@ -516,13 +509,18 @@ export class InvestigationEngine {
   setOpenQuestions(questions: readonly string[]): void {
     this.#ensureRunning();
     const contentOptions = this.#publicContentOptions();
-    this.#state.openQuestions = [...new Set(questions
-      .map((question) => question.trim())
-      .filter(Boolean)
-      .map((question) => containsRestrictedPublicContent(question, contentOptions)
-        ? "A proposed open question was removed by the public-professional safety policy."
-        : question))]
-      .sort();
+    this.#state.openQuestions = [
+      ...new Set(
+        questions
+          .map((question) => question.trim())
+          .filter(Boolean)
+          .map((question) =>
+            containsRestrictedPublicContent(question, contentOptions)
+              ? "A proposed open question was removed by the public-professional safety policy."
+              : question,
+          ),
+      ),
+    ].sort();
     this.#touch();
   }
 
@@ -591,9 +589,7 @@ export class InvestigationEngine {
       ? "Terminal detail was removed by the public-professional safety policy."
       : detail;
     if (status !== undefined && status !== canonicalStatus) {
-      throw new Error(
-        `terminal status ${status} is invalid for ${reason}; expected ${canonicalStatus}`,
-      );
+      throw new Error(`terminal status ${status} is invalid for ${reason}; expected ${canonicalStatus}`);
     }
     if (this.#state.phase !== "terminal") {
       assertPhaseTransition(this.#state.phase, "terminal");
@@ -607,24 +603,24 @@ export class InvestigationEngine {
     // canonical graph status to match the report status. An unseeded graph may
     // only become blocked/canceled/failed; exhausted/completed require a seeded
     // graph, which the runner has already finalized on those paths.
-    const graphStatus = reason === "goal_satisfied"
-      ? "completed"
-      : reason === "unsafe_request"
-        ? "blocked"
-        : reason === "cancelled"
-          ? "canceled"
-          : reason === "fatal_error" || reason === "configuration_error"
-            ? "failed"
-            : "exhausted";
+    const graphStatus =
+      reason === "goal_satisfied"
+        ? "completed"
+        : reason === "unsafe_request"
+          ? "blocked"
+          : reason === "cancelled"
+            ? "canceled"
+            : reason === "fatal_error" || reason === "configuration_error"
+              ? "failed"
+              : "exhausted";
     const unseededTerminal = graphStatus === "blocked" || graphStatus === "canceled" || graphStatus === "failed";
-    if (this.#state.searchGraph.status === "active"
-      || (this.#state.searchGraph.status === "empty" && unseededTerminal)) {
-      this.#state.searchGraph = markSearchGraphTerminal(
-        this.#state.searchGraph,
-        graphStatus,
-        timestamp,
-        { preserveQueued: reason === "goal_satisfied" },
-      );
+    if (
+      this.#state.searchGraph.status === "active" ||
+      (this.#state.searchGraph.status === "empty" && unseededTerminal)
+    ) {
+      this.#state.searchGraph = markSearchGraphTerminal(this.#state.searchGraph, graphStatus, timestamp, {
+        preserveQueued: reason === "goal_satisfied",
+      });
     }
     this.#state.stop = { reason, detail: safeDetail, at: timestamp };
     this.#touch(timestamp);
@@ -648,9 +644,7 @@ export class InvestigationEngine {
     }
     const verified = evaluateStop(this.#state, options);
     if (!verified.allowed || verified.reason !== decision.reason) {
-      throw new Error(
-        `stop decision ${decision.reason} is not valid for current state: ${verified.detail}`,
-      );
+      throw new Error(`stop decision ${decision.reason} is not valid for current state: ${verified.detail}`);
     }
     this.#commitStop(decision.reason, decision.detail, status);
   }
@@ -672,9 +666,7 @@ export class InvestigationEngine {
     if (["cancelled", "configuration_error", "fatal_error", "no_legal_actions"].includes(reason)) {
       throw new Error(`${reason} requires stopExternal or stopDecision with an explicit witness`);
     }
-    const options: StopEvaluationOptions = reason === "planner_requested"
-      ? { plannerRequested: true }
-      : {};
+    const options: StopEvaluationOptions = reason === "planner_requested" ? { plannerRequested: true } : {};
     const decision = evaluateStop(this.#state, options);
     if (!decision.allowed || decision.reason !== reason) {
       throw new Error(`stop reason ${reason} is not valid for current state: ${decision.detail}`);

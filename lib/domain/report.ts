@@ -38,29 +38,26 @@ const UNIQUE_ANCHOR_SIGNAL_KINDS = new Set([
  * verified/corroborated merge-grade identity signal. This is the same anchor
  * quality the completion policy accepts in place of two independent families.
  */
-export function candidateHasUniqueOfficialAnchor(
-  candidate: Candidate,
-  evidence: readonly EvidenceRecord[],
-): boolean {
+export function candidateHasUniqueOfficialAnchor(candidate: Candidate, evidence: readonly EvidenceRecord[]): boolean {
   if (candidate.score.conflictingSignals.length > 0) return false;
-  return evidence.some((record) =>
-    record.candidateId === candidate.id
-    && record.disposition === "supports"
-    && UNIQUE_ANCHOR_SOURCE_TYPES.has(record.sourceType)
-    && !record.spoofable
-    && record.reliability >= 0.8
-    && candidate.signals.some((signal) =>
-      signal.sourceEvidenceId === record.id
-      && UNIQUE_ANCHOR_SIGNAL_KINDS.has(signal.kind)
-      && signal.strength === "strong"
-      && (signal.assurance === "verified" || signal.assurance === "corroborated")));
+  return evidence.some(
+    (record) =>
+      record.candidateId === candidate.id &&
+      record.disposition === "supports" &&
+      UNIQUE_ANCHOR_SOURCE_TYPES.has(record.sourceType) &&
+      !record.spoofable &&
+      record.reliability >= 0.8 &&
+      candidate.signals.some(
+        (signal) =>
+          signal.sourceEvidenceId === record.id &&
+          UNIQUE_ANCHOR_SIGNAL_KINDS.has(signal.kind) &&
+          signal.strength === "strong" &&
+          (signal.assurance === "verified" || signal.assurance === "corroborated"),
+      ),
+  );
 }
 
-export const DEFAULT_REQUESTED_CATEGORIES: FindingCategory[] = [
-  "identity",
-  "employment",
-  "online_presence",
-];
+export const DEFAULT_REQUESTED_CATEGORIES: FindingCategory[] = ["identity", "employment", "online_presence"];
 
 export function requestedCategoriesForInput(
   input: Pick<InvestigationState["input"], "requestedCategories">,
@@ -72,22 +69,19 @@ export function resolveIdentity(
   candidates: readonly Candidate[],
   evidence: readonly EvidenceRecord[] = [],
 ): IdentityResolution {
-  const ranked = [...candidates]
-    .sort((left, right) => right.score.total - left.score.total || left.id.localeCompare(right.id));
+  const ranked = [...candidates].sort(
+    (left, right) => right.score.total - left.score.total || left.id.localeCompare(right.id),
+  );
   const eligible = ranked.filter((candidate) => candidate.status !== "rejected");
   const selected = eligible[0];
   // A rejected/quarantined same-name candidate must remain visible as the
   // comparison point. Excluding it would manufacture a margin against zero
   // precisely where the report is meant to demonstrate disambiguation.
-  const runnerUp = selected
-    ? ranked.find((candidate) => candidate.id !== selected.id)
-    : undefined;
+  const runnerUp = selected ? ranked.find((candidate) => candidate.id !== selected.id) : undefined;
   const selectedScore = selected?.score.total ?? 0;
   const runnerUpScore = runnerUp?.score.total ?? 0;
   const runnerUpMargin = roundScore(selectedScore - runnerUpScore);
-  const resolvedByDiversity =
-    selected?.status === "resolved" &&
-    selectedScore >= IDENTITY_RESOLUTION_THRESHOLD;
+  const resolvedByDiversity = selected?.status === "resolved" && selectedScore >= IDENTITY_RESOLUTION_THRESHOLD;
   // A unique official anchor substitutes for family diversity: it resolves a
   // clearly-leading candidate whose score sits below the diversity threshold
   // because its corroboration comes from one authoritative source rather than
@@ -98,9 +92,7 @@ export function resolveIdentity(
     selectedScore >= UNIQUE_ANCHOR_RESOLUTION_FLOOR &&
     candidateHasUniqueOfficialAnchor(selected!, evidence);
   const resolved =
-    Boolean(selected) &&
-    (resolvedByDiversity || resolvedByAnchor) &&
-    runnerUpMargin >= IDENTITY_MARGIN_THRESHOLD;
+    Boolean(selected) && (resolvedByDiversity || resolvedByAnchor) && runnerUpMargin >= IDENTITY_MARGIN_THRESHOLD;
   const ambiguous =
     !resolved &&
     Boolean(selected) &&
@@ -156,15 +148,11 @@ export function summarizeCoverage(
     : [];
   const requested = [...new Set(requestedCategories)].sort();
   const covered = requested.filter((category) =>
-    selectedFindings.some(
-      (finding) => finding.category === category && finding.confidence.score >= 0.45,
-    ),
+    selectedFindings.some((finding) => finding.category === category && finding.confidence.score >= 0.45),
   );
   const missing = requested.filter((category) => !covered.includes(category));
   const independentFamilies = new Set(
-    selectedEvidence
-      .filter((item) => item.disposition === "supports")
-      .map((item) => item.sourceFamily),
+    selectedEvidence.filter((item) => item.disposition === "supports").map((item) => item.sourceFamily),
   );
   const categoryScore = requested.length > 0 ? covered.length / requested.length : 1;
   const sourceScore = Math.min(1, independentFamilies.size / 3);
@@ -175,10 +163,8 @@ export function summarizeCoverage(
     requestedCategories: requested,
     coveredCategories: covered,
     missingCategories: missing,
-    supportedFindingCount: selectedFindings.filter((finding) => finding.confidence.score >= 0.45)
-      .length,
-    highConfidenceFindingCount: selectedFindings.filter((finding) => finding.confidence.score >= 0.75)
-      .length,
+    supportedFindingCount: selectedFindings.filter((finding) => finding.confidence.score >= 0.45).length,
+    highConfidenceFindingCount: selectedFindings.filter((finding) => finding.confidence.score >= 0.75).length,
     independentSourceFamilyCount: independentFamilies.size,
     gaps: [...new Set([...missing.map((category) => `No supported ${category} finding`), ...state.openQuestions])]
       .filter(Boolean)
@@ -191,19 +177,19 @@ export function reportTelemetry(
 ): ReportTelemetry {
   return {
     candidateCount: state.candidates.length,
-    resolvedCandidateCount: state.candidates.filter((candidate) => candidate.status === "resolved")
-      .length,
+    resolvedCandidateCount: state.candidates.filter((candidate) => candidate.status === "resolved").length,
     evidence: { ...state.evidenceTelemetry },
     findingCount: state.findings.length,
-    highConfidenceFindingCount: state.findings.filter((finding) => finding.confidence.score >= 0.75)
-      .length,
+    highConfidenceFindingCount: state.findings.filter((finding) => finding.confidence.score >= 0.75).length,
   };
 }
 
 export function restrictedReportContentPaths(report: InvestigationReport): string[] {
-  const allowedEmails = new Set(report.target.identifiers
-    .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
-    .map((identifier) => identifier.normalizedValue));
+  const allowedEmails = new Set(
+    report.target.identifiers
+      .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
+      .map((identifier) => identifier.normalizedValue),
+  );
   const currentYear = new Date(report.generatedAt).getUTCFullYear();
   const options = {
     allowedEmails,
@@ -215,8 +201,9 @@ export function restrictedReportContentPaths(report: InvestigationReport): strin
     ...report.coverage.gaps.map((value, index) => [`coverage.gaps[${index}]`, value] as const),
     ...report.candidates.flatMap((candidate, candidateIndex) => [
       [`candidates[${candidateIndex}].displayName`, candidate.displayName] as const,
-      ...candidate.signals.map((signal, signalIndex) =>
-        [`candidates[${candidateIndex}].signals[${signalIndex}].value`, signal.value] as const),
+      ...candidate.signals.map(
+        (signal, signalIndex) => [`candidates[${candidateIndex}].signals[${signalIndex}].value`, signal.value] as const,
+      ),
     ]),
     ...report.evidence.flatMap((evidence, evidenceIndex) => [
       [`evidence[${evidenceIndex}].claim`, evidence.claim] as const,
@@ -227,8 +214,9 @@ export function restrictedReportContentPaths(report: InvestigationReport): strin
     ...report.findings.flatMap((finding, findingIndex) => [
       [`findings[${findingIndex}].title`, finding.title] as const,
       [`findings[${findingIndex}].description`, finding.description] as const,
-      ...finding.caveats.map((value, caveatIndex) =>
-        [`findings[${findingIndex}].caveats[${caveatIndex}]`, value] as const),
+      ...finding.caveats.map(
+        (value, caveatIndex) => [`findings[${findingIndex}].caveats[${caveatIndex}]`, value] as const,
+      ),
     ]),
   ];
   const prosePaths = values
@@ -238,44 +226,31 @@ export function restrictedReportContentPaths(report: InvestigationReport): strin
   const arbitraryJsonPaths = report.evidence.flatMap((evidence, evidenceIndex) => [
     ...(evidence.canonicalSubset === null
       ? []
-      : restrictedJsonContentPaths(
-        evidence.canonicalSubset,
-        options,
-        `evidence[${evidenceIndex}].canonicalSubset`,
-      )),
-    ...restrictedJsonContentPaths(
-      evidence.attributes,
-      options,
-      `evidence[${evidenceIndex}].attributes`,
-    ),
+      : restrictedJsonContentPaths(evidence.canonicalSubset, options, `evidence[${evidenceIndex}].canonicalSubset`)),
+    ...restrictedJsonContentPaths(evidence.attributes, options, `evidence[${evidenceIndex}].attributes`),
   ]);
-  const graphPaths = restrictedJsonContentPaths(
-    report.searchGraph as unknown as JsonValue,
-    options,
-    "searchGraph",
-  );
+  const graphPaths = restrictedJsonContentPaths(report.searchGraph as unknown as JsonValue, options, "searchGraph");
   return [...new Set([...prosePaths, ...arbitraryJsonPaths, ...graphPaths])].sort();
 }
 
-export function buildInvestigationReport(
-  state: InvestigationState,
-  clock: Clock,
-): InvestigationReport {
+export function buildInvestigationReport(state: InvestigationState, clock: Clock): InvestigationReport {
   if (state.status === "running" || state.phase !== "terminal" || !state.stop) {
     throw new Error("a report can be built only from a terminal investigation state");
   }
   const identity = resolveIdentity(state.candidates, state.evidence);
   const coverage = summarizeCoverage(state, requestedCategoriesForInput(state.input));
-  const limitations = [...new Set([
-    ...coverage.gaps,
-    ...(identity.status === "ambiguous"
-      ? ["Identity remained ambiguous; candidates were not merged without a strong identifier."]
-      : []),
-    ...(state.evidence.some((item) => item.spoofable)
-      ? ["Self-asserted or spoofable sources were confidence-capped unless independently corroborated."]
-      : []),
-    "Only auditable public professional sources were considered.",
-  ])].sort();
+  const limitations = [
+    ...new Set([
+      ...coverage.gaps,
+      ...(identity.status === "ambiguous"
+        ? ["Identity remained ambiguous; candidates were not merged without a strong identifier."]
+        : []),
+      ...(state.evidence.some((item) => item.spoofable)
+        ? ["Self-asserted or spoofable sources were confidence-capped unless independently corroborated."]
+        : []),
+      "Only auditable public professional sources were considered.",
+    ]),
+  ].sort();
 
   const report: InvestigationReport = {
     schemaVersion: SCHEMA_VERSION,

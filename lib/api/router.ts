@@ -4,7 +4,14 @@ import { classifySafety } from "../domain/safety";
 import { evaluateStop } from "../domain/stopping";
 import { parseTarget } from "../domain/target";
 import { createDeterministicIdFactory, type Clock, type IdFactory } from "../domain/runtime";
-import { SCHEMA_VERSION, type FindingCategory, type InvestigationInput, type JsonObject, type ResearchDepth, type TerminalStatus } from "../domain/types";
+import {
+  SCHEMA_VERSION,
+  type FindingCategory,
+  type InvestigationInput,
+  type JsonObject,
+  type ResearchDepth,
+  type TerminalStatus,
+} from "../domain/types";
 import { isInvestigationReport, parseInvestigationInput } from "../domain/validation";
 import { streamLiveResearch } from "../live/orchestrator";
 import { createDohResolver } from "../tools/doh-resolver";
@@ -12,6 +19,10 @@ import { findReplayForQuery, getReplayExample, listReplayExamples } from "../rep
 
 export interface ApiEnvironment {
   ATLAS_LIVE_ENABLED?: string;
+  /** Bearer token required by non-local live HTTP ingress. Keep server-side. */
+  ATLAS_API_TOKEN?: string;
+  /** Local development escape hatch. Never enable on public ingress. */
+  ATLAS_ALLOW_UNAUTHENTICATED_LOCAL?: string;
   /** Force a provider: "gemini" | "openai" | "openrouter" (otherwise auto-detected). */
   LIVE_PROVIDER?: string;
   OPENAI_API_KEY?: string;
@@ -24,6 +35,49 @@ export interface ApiEnvironment {
   OPENROUTER_MODEL?: string;
   OPENROUTER_SITE_URL?: string;
   OPENROUTER_APP_NAME?: string;
+}
+
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const MINIMUM_API_TOKEN_BYTES = 32;
+
+function localBypassEnabled(url: URL, environment: ApiEnvironment): boolean {
+  return (
+    environment.ATLAS_ALLOW_UNAUTHENTICATED_LOCAL?.trim() === "true" && LOCAL_HOSTNAMES.has(url.hostname.toLowerCase())
+  );
+}
+
+function configuredApiToken(environment: ApiEnvironment): string | null {
+  const token = environment.ATLAS_API_TOKEN?.trim();
+  if (!token || new TextEncoder().encode(token).byteLength < MINIMUM_API_TOKEN_BYTES) return null;
+  return token;
+}
+
+function liveIngressConfigured(url: URL, environment: ApiEnvironment): boolean {
+  return localBypassEnabled(url, environment) || configuredApiToken(environment) !== null;
+}
+
+async function tokensMatch(left: string, right: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [leftDigest, rightDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(left)),
+    crypto.subtle.digest("SHA-256", encoder.encode(right)),
+  ]);
+  const leftBytes = new Uint8Array(leftDigest);
+  const rightBytes = new Uint8Array(rightDigest);
+  let difference = leftBytes.length ^ rightBytes.length;
+  for (let index = 0; index < Math.max(leftBytes.length, rightBytes.length); index += 1) {
+    difference |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
+  }
+  return difference === 0;
+}
+
+async function liveRequestAuthorized(request: Request, url: URL, environment: ApiEnvironment): Promise<boolean> {
+  if (localBypassEnabled(url, environment)) return true;
+  const expected = configuredApiToken(environment);
+  if (!expected) return false;
+  const authorization = request.headers.get("authorization")?.trim() ?? "";
+  const match = /^Bearer ([^\s]{1,4096})$/i.exec(authorization);
+  return Boolean(match && (await tokensMatch(match[1], expected)));
 }
 
 interface ResolvedLiveProvider {
@@ -106,7 +160,14 @@ function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider 
 }
 
 const FINDING_CATEGORIES: readonly FindingCategory[] = [
-  "identity", "employment", "education", "project", "publication", "online_presence", "timeline", "other",
+  "identity",
+  "employment",
+  "education",
+  "project",
+  "publication",
+  "online_presence",
+  "timeline",
+  "other",
 ];
 
 interface ResearchRequestBody {
@@ -147,19 +208,20 @@ function parseResearchBody(value: unknown): ResearchRequestBody {
   if (requestedDepth !== undefined && !["quick", "standard", "deep"].includes(String(requestedDepth))) {
     throw new TypeError("requestedDepth must be quick, standard, or deep.");
   }
-  const objective = typeof record.objective === "string" && record.objective.trim()
-    ? record.objective.trim().slice(0, 2_000)
-    : undefined;
-  const exampleId = typeof record.exampleId === "string" && record.exampleId.trim()
-    ? record.exampleId.trim()
-    : undefined;
+  const objective =
+    typeof record.objective === "string" && record.objective.trim()
+      ? record.objective.trim().slice(0, 2_000)
+      : undefined;
+  const exampleId =
+    typeof record.exampleId === "string" && record.exampleId.trim() ? record.exampleId.trim() : undefined;
   let requestedCategories: FindingCategory[] | undefined;
   if (record.requestedCategories !== undefined) {
     if (!Array.isArray(record.requestedCategories)) {
       throw new TypeError("requestedCategories must be an array of report categories.");
     }
-    const filtered = [...new Set(record.requestedCategories)]
-      .filter((item): item is FindingCategory => FINDING_CATEGORIES.includes(item as FindingCategory));
+    const filtered = [...new Set(record.requestedCategories)].filter((item): item is FindingCategory =>
+      FINDING_CATEGORIES.includes(item as FindingCategory),
+    );
     if (filtered.length > 0) requestedCategories = filtered;
   }
   return {
@@ -221,9 +283,13 @@ export function immediateTerminalTrace(
 ): TraceEvent[] {
   const clock = dependencies.clock ?? runtimeClock();
   const ids = dependencies.ids ?? runtimeIds();
-  const engine = new InvestigationEngine(input, { clock, ids }, {
-    ...(dependencies.runId ? { runId: dependencies.runId } : {}),
-  });
+  const engine = new InvestigationEngine(
+    input,
+    { clock, ids },
+    {
+      ...(dependencies.runId ? { runId: dependencies.runId } : {}),
+    },
+  );
   engine.transition("classify");
   if (status === "blocked") {
     engine.stopDecision(evaluateStop(engine.snapshot()), {}, "blocked");
@@ -231,11 +297,7 @@ export function immediateTerminalTrace(
     engine.transition("plan");
     engine.setOpenQuestions([detail]);
     engine.stopExternal(
-      status === "configuration_error"
-        ? "configuration_error"
-        : status === "canceled"
-          ? "cancelled"
-          : "fatal_error",
+      status === "configuration_error" ? "configuration_error" : status === "canceled" ? "cancelled" : "fatal_error",
       detail,
       status,
     );
@@ -343,9 +405,11 @@ export function traceNdjsonResponse(
   let last: TraceEvent | null = null;
   let terminalSeen = false;
   const openSpans = new Map<string, StreamSpan>();
-  const allowedEmails = new Set(parseTarget(input).identifiers
-    .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
-    .map((identifier) => identifier.normalizedValue));
+  const allowedEmails = new Set(
+    parseTarget(input)
+      .identifiers.filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
+      .map((identifier) => identifier.normalizedValue),
+  );
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
@@ -414,17 +478,14 @@ export function traceNdjsonResponse(
   });
 }
 
-export async function handleApiRequest(
-  request: Request,
-  environment: ApiEnvironment,
-): Promise<Response | null> {
+export async function handleApiRequest(request: Request, environment: ApiEnvironment): Promise<Response | null> {
   const url = new URL(request.url);
 
   if (url.pathname === "/api/health") {
     if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "GET" });
     const provider = resolveLiveProvider(environment);
-    const liveConfigured = environment.ATLAS_LIVE_ENABLED?.trim() === "true"
-      && Boolean(provider);
+    const liveConfigured =
+      environment.ATLAS_LIVE_ENABLED?.trim() === "true" && Boolean(provider) && liveIngressConfigured(url, environment);
     return jsonResponse({
       schemaVersion: SCHEMA_VERSION,
       status: "ok",
@@ -432,7 +493,6 @@ export async function handleApiRequest(
       replayReady: true,
       exampleCount: listReplayExamples().length,
       liveConfigured,
-      model: liveConfigured && provider ? provider.model : null,
     });
   }
 
@@ -446,14 +506,16 @@ export async function handleApiRequest(
       return jsonResponse({ error: "invalid_example_id" }, 400);
     }
     const example = getReplayExample(id);
-    if (!example) return jsonResponse({ error: "example_not_found", available: listReplayExamples().map((item) => item.id) }, 404);
+    if (!example)
+      return jsonResponse({ error: "example_not_found", available: listReplayExamples().map((item) => item.id) }, 404);
     return jsonResponse(example);
   }
 
   if (url.pathname !== "/api/research") return null;
   if (request.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "POST" });
   const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-  if (contentType !== "application/json") return jsonResponse({ error: "unsupported_media_type", message: "Use application/json." }, 415);
+  if (contentType !== "application/json")
+    return jsonResponse({ error: "unsupported_media_type", message: "Use application/json." }, 415);
 
   let body: ResearchRequestBody;
   let input: InvestigationInput;
@@ -462,12 +524,22 @@ export async function handleApiRequest(
     input = requestInput(body);
   } catch (error) {
     const tooLarge = error instanceof RangeError;
-    return jsonResponse({ error: tooLarge ? "request_too_large" : "invalid_request", message: error instanceof Error ? error.message : "Invalid request." }, tooLarge ? 413 : 400);
+    return jsonResponse(
+      {
+        error: tooLarge ? "request_too_large" : "invalid_request",
+        message: error instanceof Error ? error.message : "Invalid request.",
+      },
+      tooLarge ? 413 : 400,
+    );
   }
 
   const safety = classifySafety(input);
   if (safety.level === "block") {
-    const events = immediateTerminalTrace(input, "blocked", "The request is outside Atlas's public-professional safety scope.");
+    const events = immediateTerminalTrace(
+      input,
+      "blocked",
+      "The request is outside Atlas's public-professional safety scope.",
+    );
     return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
   }
   if (request.signal.aborted) {
@@ -477,39 +549,56 @@ export async function handleApiRequest(
 
   if (body.mode === "replay") {
     const example = body.exampleId ? getReplayExample(body.exampleId) : findReplayForQuery(body.query);
-    if (!example || example.input.query.trim().toLocaleLowerCase("en-US") !== body.query.trim().toLocaleLowerCase("en-US")) {
-      return jsonResponse({
-        error: "replay_not_found",
-        message: "Replay mode accepts one of the captured example queries. Choose an example or use configured live mode.",
-        examples: listReplayExamples(),
-      }, 422);
+    if (
+      !example ||
+      example.input.query.trim().toLocaleLowerCase("en-US") !== body.query.trim().toLocaleLowerCase("en-US")
+    ) {
+      return jsonResponse(
+        {
+          error: "replay_not_found",
+          message:
+            "Replay mode accepts one of the captured example queries. Choose an example or use configured live mode.",
+          examples: listReplayExamples(),
+        },
+        422,
+      );
     }
     return traceNdjsonResponse(() => replayEvents(example.trace), request.signal, input);
   }
 
   const liveEnabled = environment.ATLAS_LIVE_ENABLED?.trim() === "true";
   const provider = resolveLiveProvider(environment);
-  if (!liveEnabled || !provider) {
-    const events = immediateTerminalTrace(input, "configuration_error", "Live HTTP research requires ATLAS_LIVE_ENABLED=true and a server-side model key (OPENAI_API_KEY or GEMINI_API_KEY).");
+  if (!liveEnabled || !provider || !liveIngressConfigured(url, environment)) {
+    const events = immediateTerminalTrace(
+      input,
+      "configuration_error",
+      "Live HTTP research requires explicit enablement, a server-side model key, and protected ingress.",
+    );
     return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
   }
+  if (!(await liveRequestAuthorized(request, url, environment))) {
+    return jsonResponse({ error: "unauthorized", message: "Valid live research authorization is required." }, 401, {
+      "www-authenticate": 'Bearer realm="atlas-live"',
+    });
+  }
   return traceNdjsonResponse(
-    (signal) => streamLiveResearch(input, {
-      provider: provider.provider,
-      apiKey: provider.apiKey,
-      model: provider.model,
-      ...(provider.searchModel ? { searchModel: provider.searchModel } : {}),
-      ...(provider.endpoint ? { endpoint: provider.endpoint } : {}),
-      ...(provider.siteUrl ? { siteUrl: provider.siteUrl } : {}),
-      ...(provider.appName ? { appName: provider.appName } : {}),
-      ...(provider.searchProvider ? { searchProvider: provider.searchProvider } : {}),
-      ...(provider.searchApiKey ? { searchApiKey: provider.searchApiKey } : {}),
-      ...(provider.searchEndpoint ? { searchEndpoint: provider.searchEndpoint } : {}),
-      // Injected DNS validation lets public-source fetches resolve arbitrary
-      // hosts while the hardened fetch still rejects private/loopback answers.
-      resolveHostname: createDohResolver(),
-      signal,
-    }),
+    (signal) =>
+      streamLiveResearch(input, {
+        provider: provider.provider,
+        apiKey: provider.apiKey,
+        model: provider.model,
+        ...(provider.searchModel ? { searchModel: provider.searchModel } : {}),
+        ...(provider.endpoint ? { endpoint: provider.endpoint } : {}),
+        ...(provider.siteUrl ? { siteUrl: provider.siteUrl } : {}),
+        ...(provider.appName ? { appName: provider.appName } : {}),
+        ...(provider.searchProvider ? { searchProvider: provider.searchProvider } : {}),
+        ...(provider.searchApiKey ? { searchApiKey: provider.searchApiKey } : {}),
+        ...(provider.searchEndpoint ? { searchEndpoint: provider.searchEndpoint } : {}),
+        // Injected DNS validation lets public-source fetches resolve arbitrary
+        // hosts while the hardened fetch still rejects private/loopback answers.
+        resolveHostname: createDohResolver(),
+        signal,
+      }),
     request.signal,
     input,
   );

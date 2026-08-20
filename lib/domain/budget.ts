@@ -61,9 +61,7 @@ export function resolveBudgetLimits(
   return parseBudgetLimits({
     ...preset,
     ...overrides,
-    phaseCaps: overrides.phaseCaps
-      ? { ...overrides.phaseCaps }
-      : { ...preset.phaseCaps },
+    phaseCaps: overrides.phaseCaps ? { ...overrides.phaseCaps } : { ...preset.phaseCaps },
   });
 }
 
@@ -91,10 +89,7 @@ function finiteIncrement(value: number, label: string): number {
   return value;
 }
 
-export function exhaustedBudgetDimensions(
-  limits: BudgetLimits,
-  usage: BudgetUsage,
-): string[] {
+export function exhaustedBudgetDimensions(limits: BudgetLimits, usage: BudgetUsage): string[] {
   const exhausted: string[] = [];
   if (usage.turns >= limits.maxTurns) exhausted.push("turns");
   if (usage.llmCalls >= limits.maxLlmCalls) exhausted.push("llm_calls");
@@ -110,11 +105,7 @@ export function exhaustedBudgetDimensions(
   return exhausted;
 }
 
-export function phaseCapReached(
-  limits: BudgetLimits,
-  usage: BudgetUsage,
-  phase: ResearchPhase,
-): boolean {
+export function phaseCapReached(limits: BudgetLimits, usage: BudgetUsage, phase: ResearchPhase): boolean {
   const cap = limits.phaseCaps[phase];
   return cap !== undefined && (usage.phaseTurns[phase] ?? 0) >= cap;
 }
@@ -124,11 +115,7 @@ export class BudgetLedger {
   readonly #startedMonotonicMs: number;
   #usage: BudgetUsage;
 
-  constructor(
-    limits: BudgetLimits,
-    startedMonotonicMs: number,
-    initialUsage: BudgetUsage = EMPTY_BUDGET_USAGE,
-  ) {
+  constructor(limits: BudgetLimits, startedMonotonicMs: number, initialUsage: BudgetUsage = EMPTY_BUDGET_USAGE) {
     this.limits = parseBudgetLimits(limits);
     this.#startedMonotonicMs = startedMonotonicMs;
     this.#usage = { ...initialUsage, phaseTurns: { ...initialUsage.phaseTurns } };
@@ -187,17 +174,12 @@ export class BudgetLedger {
   }
 
   endTurn(madeProgress: boolean, nowMonotonicMs: number): void {
-    this.#usage.consecutiveNoProgress = madeProgress
-      ? 0
-      : this.#usage.consecutiveNoProgress + 1;
+    this.#usage.consecutiveNoProgress = madeProgress ? 0 : this.#usage.consecutiveNoProgress + 1;
     this.updateElapsed(nowMonotonicMs);
   }
 
   updateElapsed(nowMonotonicMs: number): void {
-    const elapsed = finiteIncrement(
-      nowMonotonicMs - this.#startedMonotonicMs,
-      "elapsedMs",
-    );
+    const elapsed = finiteIncrement(nowMonotonicMs - this.#startedMonotonicMs, "elapsedMs");
     this.#usage.elapsedMs = Math.max(this.#usage.elapsedMs, Math.round(elapsed));
   }
 

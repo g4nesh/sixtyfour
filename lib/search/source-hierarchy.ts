@@ -1,10 +1,5 @@
 import { normalizeComparable, normalizeWhitespace } from "../domain/runtime";
-import type {
-  EvidenceSourceType,
-  ParsedTarget,
-  SourceTier,
-  TargetKind,
-} from "../domain/types";
+import type { EvidenceSourceType, ParsedTarget, SourceTier, TargetKind } from "../domain/types";
 
 export type SourceAdmission = "admissible_after_fetch" | "discovery_only";
 
@@ -64,7 +59,8 @@ export const SOURCE_HIERARCHY: readonly SourceLane[] = [
     id: "t0.explicit_identifier",
     tier: 0,
     label: "Exact supplied public identifier",
-    description: "Search only the exact domain, repository, DOI, ORCID, package, or platform handle supplied by the user.",
+    description:
+      "Search only the exact domain, repository, DOI, ORCID, package, or platform handle supplied by the user.",
     allowedTools: ["search_web"],
     targetKinds: ["domain", "repository", "publication", "package", "platform_handle"],
     identifierKinds: ["domain", "repository", "doi", "orcid", "package", "platform_handle"],
@@ -289,8 +285,10 @@ export function isDeniedResearchTool(value: string): boolean {
   return decodedTextVariants(value).some((variant) => {
     if (DENIED_SOURCE_TEXT.test(variant)) return true;
     const compact = variant.toLocaleLowerCase("en-US").replace(/[^a-z0-9]+/g, "");
-    return DENIED_COMPACT_MARKERS.some((marker) => compact.includes(marker))
-      || /(?:^|lookup)411(?:com|lookup|$)/.test(compact);
+    return (
+      DENIED_COMPACT_MARKERS.some((marker) => compact.includes(marker)) ||
+      /(?:^|lookup)411(?:com|lookup|$)/.test(compact)
+    );
   });
 }
 
@@ -299,8 +297,10 @@ export function isDeniedResearchSource(value: string): boolean {
   try {
     const url = new URL(value);
     const host = url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "");
-    return DENIED_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))
-      || isDeniedResearchTool(`${url.pathname} ${url.search}`);
+    return (
+      DENIED_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`)) ||
+      isDeniedResearchTool(`${url.pathname} ${url.search}`)
+    );
   } catch {
     return false;
   }
@@ -308,11 +308,12 @@ export function isDeniedResearchSource(value: string): boolean {
 
 function genericSourceLane(tool: string): SourceLane | undefined {
   if (
-    !tool
-    || tool !== tool.trim()
-    || isDeniedResearchTool(tool)
-    || SOURCE_HIERARCHY.some((lane) => lane.allowedTools.includes(tool))
-  ) return undefined;
+    !tool ||
+    tool !== tool.trim() ||
+    isDeniedResearchTool(tool) ||
+    SOURCE_HIERARCHY.some((lane) => lane.allowedTools.includes(tool))
+  )
+    return undefined;
   const slug = normalizeComparable(tool).replace(/\s+/g, "_");
   if (!slug) return undefined;
   const requiresCandidate = /(?:fetch|verify|corroborate|profile|company)/i.test(tool);
@@ -347,19 +348,19 @@ export function sourceLaneForFrontierEntry(entry: {
 }): SourceLane | undefined {
   const registered = sourceLaneById(entry.sourceLaneId);
   if (registered) {
-    return registered.tier === entry.sourceTier
-      && entry.allowedTools.length > 0
-      && entry.allowedTools.every((tool) => registered.allowedTools.includes(tool))
-      && registered.requiresCandidate === (entry.candidateId !== null)
+    return registered.tier === entry.sourceTier &&
+      entry.allowedTools.length > 0 &&
+      entry.allowedTools.every((tool) => registered.allowedTools.includes(tool)) &&
+      registered.requiresCandidate === (entry.candidateId !== null)
       ? registered
       : undefined;
   }
   if (entry.allowedTools.length !== 1) return undefined;
   const generic = genericSourceLane(entry.allowedTools[0]);
-  return generic
-    && generic.id === entry.sourceLaneId
-    && generic.tier === entry.sourceTier
-    && generic.requiresCandidate === (entry.candidateId !== null)
+  return generic &&
+    generic.id === entry.sourceLaneId &&
+    generic.tier === entry.sourceTier &&
+    generic.requiresCandidate === (entry.candidateId !== null)
     ? generic
     : undefined;
 }
@@ -376,8 +377,9 @@ export interface SourceTierContext {
 }
 
 function hostMatchesFirstPartyContext(host: string, context: SourceTierContext): boolean {
-  const normalizedHosts = (context.firstPartyHosts ?? [])
-    .map((value) => value.toLocaleLowerCase("en-US").replace(/^www\./, ""));
+  const normalizedHosts = (context.firstPartyHosts ?? []).map((value) =>
+    value.toLocaleLowerCase("en-US").replace(/^www\./, ""),
+  );
   if (normalizedHosts.some((value) => host === value || host.endsWith(`.${value}`))) return true;
   const labels = host.split(".").map((label) => label.replace(/[^a-z0-9]+/g, ""));
   return (context.organizationNames ?? []).some((name) => {
@@ -397,33 +399,30 @@ export function sourceTierForUrl(
   if (sourceType === "web_archive") return 5;
   if (sourceType === "search_result") return 6;
   if (
-    sourceType === "professional_profile"
-    || sourceType === "code_profile"
-    || sourceType === "code_commit"
-    || sourceType === "keybase_proof"
-  ) return 2;
+    sourceType === "professional_profile" ||
+    sourceType === "code_profile" ||
+    sourceType === "code_commit" ||
+    sourceType === "keybase_proof"
+  )
+    return 2;
   let host = "";
   try {
     host = new URL(value).hostname.toLocaleLowerCase("en-US").replace(/^www\./, "");
   } catch {
     return null;
   }
+  if (host.endsWith(".gov") || host === "sec.gov" || host === "companieshouse.gov.uk" || host === "uspto.gov") return 2;
   if (
-    host.endsWith(".gov")
-    || host === "sec.gov"
-    || host === "companieshouse.gov.uk"
-    || host === "uspto.gov"
-  ) return 2;
-  if (
-    host === "github.com"
-    || host.endsWith(".github.io")
-    || host === "orcid.org"
-    || host === "doi.org"
-    || host === "openalex.org"
-    || host === "crossref.org"
-    || host === "patentsview.org"
-    || host === "npmjs.com"
-  ) return 2;
+    host === "github.com" ||
+    host.endsWith(".github.io") ||
+    host === "orcid.org" ||
+    host === "doi.org" ||
+    host === "openalex.org" ||
+    host === "crossref.org" ||
+    host === "patentsview.org" ||
+    host === "npmjs.com"
+  )
+    return 2;
   if (host.endsWith(".edu") || sourceType === "public_document") return 3;
   if (sourceType === "news") return 4;
   if (sourceType === "official_profile" || sourceType === "company_page") {
@@ -435,8 +434,9 @@ export function sourceTierForUrl(
 function laneMatchesTarget(lane: SourceLane, target: ParsedTarget): boolean {
   if (!lane.targetKinds.includes(target.kind)) return false;
   if (lane.identifierKinds.length === 0) return true;
-  return target.identifiers.some((identifier) =>
-    identifier.provenance === "user_input" && lane.identifierKinds.includes(identifier.kind));
+  return target.identifiers.some(
+    (identifier) => identifier.provenance === "user_input" && lane.identifierKinds.includes(identifier.kind),
+  );
 }
 
 export function sourceLanesForTarget(
@@ -447,13 +447,10 @@ export function sourceLanesForTarget(
   const suppliedValues = target.identifiers
     .filter((identifier) => identifier.provenance === "user_input")
     .map((identifier) => identifier.value);
-  if (
-    isDeniedResearchSource(target.normalizedQuery)
-    || suppliedValues.some((value) => isDeniedResearchSource(value))
-  ) return [];
+  if (isDeniedResearchSource(target.normalizedQuery) || suppliedValues.some((value) => isDeniedResearchSource(value)))
+    return [];
   const toolSet = new Set(availableTools);
-  const registered = SOURCE_HIERARCHY
-    .filter((lane) => laneMatchesTarget(lane, target))
+  const registered = SOURCE_HIERARCHY.filter((lane) => laneMatchesTarget(lane, target))
     .filter((lane) => Boolean(options.candidateId) === lane.requiresCandidate || !lane.requiresCandidate)
     .map((lane) => ({ ...lane, allowedTools: lane.allowedTools.filter((tool) => toolSet.has(tool)) }))
     .filter((lane) => lane.allowedTools.length > 0);
@@ -463,17 +460,15 @@ export function sourceLanesForTarget(
     .filter((tool) => !knownTools.has(tool))
     .map(genericSourceLane)
     .filter((lane): lane is SourceLane => Boolean(lane))
-    .filter((lane) => lane.requiresCandidate
-      ? Boolean(options.candidateId)
-      : !options.candidateId);
+    .filter((lane) => (lane.requiresCandidate ? Boolean(options.candidateId) : !options.candidateId));
 
-  return [...registered, ...generic]
-    .sort((left, right) => left.tier - right.tier || left.id.localeCompare(right.id));
+  return [...registered, ...generic].sort((left, right) => left.tier - right.tier || left.id.localeCompare(right.id));
 }
 
 export function sourceLaneQueryHint(target: ParsedTarget, lane: SourceLane): string {
-  const explicit = target.identifiers.find((identifier) =>
-    identifier.provenance === "user_input" && lane.identifierKinds.includes(identifier.kind));
+  const explicit = target.identifiers.find(
+    (identifier) => identifier.provenance === "user_input" && lane.identifierKinds.includes(identifier.kind),
+  );
   const base = explicit?.value ?? target.normalizedQuery;
   return normalizeWhitespace(base).slice(0, 320);
 }

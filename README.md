@@ -1,32 +1,32 @@
-# Atlas — People Intelligence 
+# Atlas — People Intelligence
 
 Atlas is an auditable public-source research agent for resolving professional identities. Its live scheduler performs a visible best-first search over a canonical execution graph: it expands the lowest-cost legal source frontier first, keeps rejected and ambiguous branches, and reserves a small deterministic Metropolis-Hastings mutation lane for useful adjacent exploration. It separates same-name candidates, attaches every finding to direct evidence, exposes the full execution trace, and stops honestly when identity or coverage is insufficient.
 
-The default experience is a deterministic, zero-network replay. Live research is an explicit server-side mode backed by OpenRouter; no provider key is required to evaluate the three included runs.
+The repository ships three deterministic, zero-network replay bundles for evaluation and a live graph-first workbench for credentialed local research. Live planning can use OpenAI, Gemini, or OpenRouter, but provider credentials remain server-side and non-local live HTTP ingress is bearer-protected. No provider key is required to inspect or verify the included runs.
 
 ![Atlas People Intelligence workbench](public/og.png)
 
-## Five-minute replay
+## Quick start
 
 Requirements: Node.js `>=22.13.0` and npm.
 
+### Zero-network evaluation
+
 ```bash
 npm ci --ignore-scripts
-npm run dev
-```
-
-Open `http://localhost:3000`, select a verified capture, and run it. The black graph workspace shows every queued, selected, verified, exhausted, mutated, and rejected path; the source ladder groups retained frontier state and admitted evidence by website tier while execution telemetry reports actual tool calls; the trace remains append-only; and the final report can be downloaded as deterministic Markdown or a polished client-rendered PDF. The replay path performs no outbound requests.
-
-The same artifacts are available from the CLI:
-
-```bash
 npm run atlas -- examples
 npm run atlas -- replay linus-codegraph
 npm run atlas -- trace chris-anderson-ted
 npm run atlas -- research --mode replay --example python-creator "the creator of Python"
 ```
 
-Or through the Worker API:
+Replay validates the checked-in provenance contract and never performs an outbound request. To exercise the Worker API, start the app in a second terminal:
+
+```bash
+npm run dev
+```
+
+Then call the replay endpoints:
 
 ```bash
 curl --fail http://localhost:3000/api/health
@@ -39,44 +39,61 @@ curl --fail \
 
 `POST /api/research` returns `application/x-ndjson`. Every stream ends in one terminal event, including refusals, cancellation, configuration errors, partial results, and failures.
 
+### Local graph workbench
+
+The browser workbench is live-first: it visualizes the canonical graph as the run proceeds and does not fabricate a graph from replay prose. Copy one ignored environment template, enable live mode, and set one provider key:
+
+```bash
+cp .env.example .env
+# Edit .env: set ATLAS_LIVE_ENABLED=true and one provider key.
+npm run dev
+```
+
+Open `http://localhost:3000`. The black graph workspace shows queued, selected, verified, exhausted, mutated, conflicting, and rejected paths; the source ladder groups retained frontier state and admitted evidence by website tier; the trace is append-only; and the final report can be downloaded as Markdown, structured JSON/NDJSON, or a polished client-rendered PDF.
+
+`npm run dev` enables unauthenticated live calls only for loopback URLs so local testing stays frictionless. It does not weaken a production start or deployment.
+
 ## Included evidence runs
 
 The example evidence projections and raw-response SHA-256 hashes were manually captured from public sources at `2026-08-18T22:08:17Z`. Each bundle is labeled `source_verified_scripted_reconstruction`: it is a deterministic reconstruction with `scripted_local_policy` decisions, not a replayed live execution or a captured LLM run. Full response bodies are intentionally not committed, so the static bundle cannot re-execute or independently re-hash those network responses. Cassette v2 instead binds each root-verified raw-body hash to the exact admitted source excerpt or canonical API subset.
 
-| Example | Input shape | What it demonstrates |
-| --- | --- | --- |
-| `linus-codegraph` | Exact user-supplied public email | Lowest-cost exact-identifier and first-party paths, a bounded GitHub public-commit codegraph, immutable commit/account edges, signature inspection, an explicit spoofable-Git cap, and one accepted mutation retained as a deferred, unexecuted branch |
-| `chris-anderson-ted` | Name + organization | Selection of the TED leader while a same-name former WIRED editor/3DR executive and a rejected organization-anchor mutation remain visible and isolated |
-| `python-creator` | Role only | Resolution of Guido van Rossum from first-party and structured professional sources, with the unused accepted mutation branch retained rather than erased |
+| Example              | Input shape                      | What it demonstrates                                                                                                                                                                                                                                   |
+| -------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `linus-codegraph`    | Exact user-supplied public email | Lowest-cost exact-identifier and first-party paths, a bounded GitHub public-commit codegraph, immutable commit/account edges, signature inspection, an explicit spoofable-Git cap, and one accepted mutation retained as a deferred, unexecuted branch |
+| `chris-anderson-ted` | Name + organization              | Selection of the TED leader while a same-name former WIRED editor/3DR executive and a rejected organization-anchor mutation remain visible and isolated                                                                                                |
+| `python-creator`     | Role only                        | Resolution of Guido van Rossum from first-party and structured professional sources, with the unused accepted mutation branch retained rather than erased                                                                                              |
 
 Each directory in `examples/` contains `input.json`, `output.json`, `trace.json`, `cassette.json`, and `manifest.json`. Direct-fetch evidence is an exact captured source excerpt; structured API evidence has no quote and is rendered as a labeled canonical API claim. Repeated replays are canonical byte-stable and fail tests if they attempt a network request.
 
-## Live research
+## Live provider configuration
 
-Copy `.dev.vars.example` to `.dev.vars` for local Worker development, then set the server-side key:
+Provider selection is explicit through `LIVE_PROVIDER` or automatically chooses Gemini, then OpenAI, then OpenRouter based on available keys.
 
-```dotenv
-ATLAS_LIVE_ENABLED=true
-OPENROUTER_API_KEY=your_server_side_key
-OPENROUTER_MODEL=openai/gpt-5.4
-OPENROUTER_SITE_URL=http://localhost:3000
-OPENROUTER_APP_NAME=Atlas People Intelligence
-```
+| Provider   | Required binding     | Optional bindings                                                | Discovery behavior                                                           |
+| ---------- | -------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| OpenAI     | `OPENAI_API_KEY`     | `OPENAI_MODEL`, `OPENAI_SEARCH_MODEL`, `OPENAI_BASE_URL`         | OpenAI Responses `web_search`                                                |
+| Gemini     | `GEMINI_API_KEY`     | `GEMINI_MODEL`; optional `OPENAI_API_KEY`                        | Gemini planning; delegates discovery to OpenAI when an OpenAI key is present |
+| OpenRouter | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL`, `OPENROUTER_SITE_URL`, `OPENROUTER_APP_NAME` | OpenRouter server-side web search                                            |
 
-Never use a `NEXT_PUBLIC_*` variable for the key. HTTP live mode is fail-closed unless both the explicit enablement flag and key are present; the CLI's explicit `--mode live` choice supplies the local enablement signal itself. With live mode configured:
+Never use a `NEXT_PUBLIC_*` name for a key. `.env` and `.dev.vars` are ignored, excluded from the Docker build context, and represented only by empty-value templates. The CLI's explicit `--mode live` choice supplies local enablement and does not require the HTTP bearer token:
 
 ```bash
 npm run atlas -- research --mode live --depth standard "Grace Hopper public professional background"
-
-curl --fail \
-  -H 'content-type: application/json' \
-  -d '{"query":"Grace Hopper public professional background","mode":"live","requestedDepth":"standard"}' \
-  http://localhost:3000/api/research
 ```
 
-Live mode calls OpenRouter Chat Completions directly with custom function schemas, `tool_choice: "auto"`, one expected structured function submission per provider turn, and the current `openrouter:web_search` server tool. The kernel may execute an approved action batch concurrently (maximum four); provider-side parallel function submission is deliberately disabled so every returned tool call is closed deterministically. Search annotations are provider-attested discovery leads only. A claim receives zero final weight until a direct source or specialist tool admits a bounded evidence record. General-purpose `fetch_public_source` fails closed unless the server injects a trusted hostname resolver or controlled egress proxy; the shipped API leaves that path disabled by default, while fixed-provider specialist tools remain available.
+For non-local HTTP live research, configure an `ATLAS_API_TOKEN` containing at least 32 random bytes and send it as a bearer token:
 
-The included Sites configuration is replay-only: it contains no provider key and reports `liveConfigured: false`. Do not expose a key-backed live endpoint on unauthenticated public ingress. A production operator must add Cloudflare Access or equivalent authentication plus per-principal request, token, and cost limits before setting `ATLAS_LIVE_ENABLED=true`.
+```bash
+curl --fail \
+  -H "authorization: Bearer $ATLAS_API_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"query":"Grace Hopper public professional background","mode":"live","requestedDepth":"standard"}' \
+  https://atlas.example/api/research
+```
+
+Live mode uses custom function schemas, `tool_choice: "auto"`, and one expected structured function submission per provider turn. The kernel may execute an approved action batch concurrently (maximum four); provider-side parallel function submission is disabled so every returned tool call is closed deterministically. Search annotations are provider-attested discovery leads only. A claim receives zero final weight until a direct source or specialist tool admits a bounded evidence record. General-purpose `fetch_public_source` requires the injected DNS resolver and remains subject to HTTPS, redirect, address, MIME, byte, timeout, and candidate-linkage gates.
+
+The checked-in hosting configuration is replay-only: it contains no provider key and reports `liveConfigured: false`. The API refuses non-local live execution unless explicit enablement, a provider key, and protected ingress are all configured. The bearer guard protects the application boundary; production operators should also add Cloudflare Access or an equivalent identity-aware gateway with per-principal request, token, and cost limits.
 
 Provider `reasoning_details`, when present, are retained only as opaque continuation data required by the provider. They are never logged or streamed. Atlas exposes only normalized usage and a provider-reported reasoning-token count; unavailable values remain `null` with a reason. Missing configuration returns a `configuration_error`, never fabricated live research.
 
@@ -104,15 +121,15 @@ One seeded proposal slot per batch may use a finite neighboring policy. The acce
 
 The kernel searches the strongest legal public-professional tier before broader discovery:
 
-| Tier | Source class | Admission rule |
-| --- | --- | --- |
-| T0 | Exact user-supplied HTTPS URL, domain/repository/DOI/ORCID/package/handle, or exact email codegraph | Exact-input only; direct content still passes hardened evidence admission |
-| T1 | First-party organization pages, official biographies, explicit personal sites | Direct fetch required for evidence |
-| T2 | Code/publication indexes, patents, official organization filings, public proof systems | Candidate-bound where required; structured claims remain labeled |
-| T3 | Universities, conferences, and primary publishers | Direct source required |
-| T4 | Reputable reporting and named interviews | Corroboration and timeline context |
-| T5 | Candidate-linked Wayback history | Exact already-bound HTTPS URL only |
-| T6 | General web discovery | Discovery leads only; snippets have zero finding weight |
+| Tier | Source class                                                                                        | Admission rule                                                            |
+| ---- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| T0   | Exact user-supplied HTTPS URL, domain/repository/DOI/ORCID/package/handle, or exact email codegraph | Exact-input only; direct content still passes hardened evidence admission |
+| T1   | First-party organization pages, official biographies, explicit personal sites                       | Direct fetch required for evidence                                        |
+| T2   | Code/publication indexes, patents, official organization filings, public proof systems              | Candidate-bound where required; structured claims remain labeled          |
+| T3   | Universities, conferences, and primary publishers                                                   | Direct source required                                                    |
+| T4   | Reputable reporting and named interviews                                                            | Corroboration and timeline context                                        |
+| T5   | Candidate-linked Wayback history                                                                    | Exact already-bound HTTPS URL only                                        |
+| T6   | General web discovery                                                                               | Discovery leads only; snippets have zero finding weight                   |
 
 People-search sites, reverse-phone services, data brokers, residential/property/tax-assessor surfaces, family mapping, credentials, and private contact enrichment are denied before frontier creation. Official organization filings are allowed only for public-professional organization context.
 
@@ -149,10 +166,13 @@ Atlas is not a background-check service and must not be used for employment, hou
 ## Verification
 
 ```bash
+npm run format:check
+npm run security:secrets
 npm run typecheck
 npm run lint
 npm test          # production build, then all Node tests
-npm run verify    # typecheck + lint + production build + all tests
+npm run verify    # formatting + secret scan + typecheck + lint + build + tests
+npm run security:audit  # current npm advisory check, also run by CI
 npm run test:pdf  # opt-in React-PDF byte smoke
 npm run report:example  # write matching PDF and Markdown reports under output/
 ```
@@ -166,7 +186,32 @@ docker build --target verifier -t atlas-verify .
 docker compose up --build
 ```
 
-The app remains Cloudflare Sites/Vinext compatible. `worker/index.ts` handles the API routes before the Vinext handler; `.openai/hosting.json` intentionally declares no D1 or R2 binding.
+Compose publishes only to `127.0.0.1`, drops Linux capabilities, sets `no-new-privileges`, runs as the unprivileged Node user, and includes a health check. The app remains Cloudflare Sites/Vinext compatible. `worker/index.ts` handles API routes before the Vinext handler, applies browser security headers to every response, and `.openai/hosting.json` intentionally declares no D1 or R2 binding.
+
+## Production checklist
+
+1. Run `npm ci --ignore-scripts`, `npm run verify`, `npm run security:audit`, and the optional PDF smoke.
+2. Keep `ATLAS_LIVE_ENABLED=false` for any public replay-only deployment.
+3. If live mode is required, store the provider key and 32-byte-or-longer `ATLAS_API_TOKEN` in the platform secret manager. Never commit either value or use a `NEXT_PUBLIC_*` binding.
+4. Put public live ingress behind an identity-aware gateway and enforce per-principal request, token, and cost limits. Do not enable `ATLAS_ALLOW_UNAUTHENTICATED_LOCAL` outside local development.
+5. Preserve HTTPS end to end. The Worker emits CSP, frame, referrer, permissions, cross-origin, MIME-sniffing, and HTTPS transport headers.
+6. Verify `/api/health`, one replay stream, an unauthorized live request (`401`), an authorized bounded live request, cancellation, and report downloads in the target environment.
+
+CI uses read-only GitHub permissions, immutable action SHAs, formatting and secret gates, the full release suite, and an npm advisory gate. Dependabot tracks npm, Docker, and GitHub Actions updates. See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
+
+## Repository map
+
+| Path                                        | Purpose                                                                                     |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `app/`                                      | Live graph-first React interface and client-only report downloads                           |
+| `worker/` and `lib/api/`                    | Cloudflare/Vinext entry point, security headers, health, replay, and guarded live streaming |
+| `lib/agent/`, `lib/search/`, `lib/harness/` | LangGraph control flow and deterministic frontier kernel                                    |
+| `lib/domain/`                               | Safety, candidates, evidence, confidence, budgets, integrity, and report contracts          |
+| `lib/providers/` and `lib/tools/`           | Provider protocol, web discovery, specialist OSINT tools, and hardened fetch                |
+| `lib/replay/` and `examples/`               | Zero-network capture catalog and three provenance-bound bundles                             |
+| `lib/report-export/`                        | Shared Markdown/PDF-safe report view model                                                  |
+| `tests/`                                    | Domain, adversarial, API, UI, CLI, tool, replay, and export coverage                        |
+| `docs/`                                     | Architecture, safety model, and evaluation methodology                                      |
 
 ## Limits and scaling path
 

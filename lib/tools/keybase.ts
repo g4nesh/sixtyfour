@@ -137,12 +137,23 @@ export async function lookupKeybaseGithub(
   const startedAt = now();
   const githubHandle = githubHandleInput.trim();
   if (!/^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/.test(githubHandle)) {
-    return finish(startedAt, now, "skipped", null, [{
-      code: "invalid_github_handle",
-      severity: "warning",
-      message: "Keybase lookup was skipped because the GitHub handle is invalid.",
-      retryable: false,
-    }], 0, 0, false);
+    return finish(
+      startedAt,
+      now,
+      "skipped",
+      null,
+      [
+        {
+          code: "invalid_github_handle",
+          severity: "warning",
+          message: "Keybase lookup was skipped because the GitHub handle is invalid.",
+          retryable: false,
+        },
+      ],
+      0,
+      0,
+      false,
+    );
   }
   const maxResponseBytes = bounded(options.maxResponseBytes, 256_000, 1_024, 1_000_000);
   const url = new URL("https://keybase.io/_/api/1.0/user/lookup.json");
@@ -159,11 +170,12 @@ export async function lookupKeybaseGithub(
     maxRetryAfterMs: 3_000,
     fetch: context.fetch,
     clock: now,
-    beforeRequest: () => reserveToolBudget(context, {
-      tool: "keybase_github_proof",
-      networkRequests: 1,
-      expectedBytes: maxResponseBytes,
-    }),
+    beforeRequest: () =>
+      reserveToolBudget(context, {
+        tool: "keybase_github_proof",
+        networkRequests: 1,
+        expectedBytes: maxResponseBytes,
+      }),
   });
 
   let response;
@@ -172,50 +184,110 @@ export async function lookupKeybaseGithub(
   } catch (error) {
     const retryable = error instanceof HardenedFetchError && error.retryable;
     const budgetExhausted = error instanceof HardenedFetchError && error.code === "budget_exhausted";
-    return finish(startedAt, now, budgetExhausted ? "skipped" : "failed", null, [{
-      code: error instanceof HardenedFetchError ? error.code : "keybase_unavailable",
-      severity: budgetExhausted ? "info" : "warning",
-      message: budgetExhausted
-        ? "Keybase lookup was skipped because the network budget was exhausted."
-        : "The optional Keybase proof lookup was unavailable.",
-      retryable,
-    }], error instanceof HardenedFetchError ? error.requests : 0, 0, true);
+    return finish(
+      startedAt,
+      now,
+      budgetExhausted ? "skipped" : "failed",
+      null,
+      [
+        {
+          code: error instanceof HardenedFetchError ? error.code : "keybase_unavailable",
+          severity: budgetExhausted ? "info" : "warning",
+          message: budgetExhausted
+            ? "Keybase lookup was skipped because the network budget was exhausted."
+            : "The optional Keybase proof lookup was unavailable.",
+          retryable,
+        },
+      ],
+      error instanceof HardenedFetchError ? error.requests : 0,
+      0,
+      true,
+    );
   }
   if (response.response.status === 429) {
-    return finish(startedAt, now, "rate_limited", null, [{
-      code: "keybase_rate_limited",
-      severity: "warning",
-      message: "Keybase rate-limited the optional proof lookup.",
-      retryable: true,
-    }], response.requests, response.bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "rate_limited",
+      null,
+      [
+        {
+          code: "keybase_rate_limited",
+          severity: "warning",
+          message: "Keybase rate-limited the optional proof lookup.",
+          retryable: true,
+        },
+      ],
+      response.requests,
+      response.bytesRead,
+      true,
+    );
   }
   if (!response.response.ok) {
-    return finish(startedAt, now, "failed", null, [{
-      code: "keybase_http_error",
-      severity: "warning",
-      message: `Keybase returned HTTP ${response.response.status}.`,
-      retryable: response.response.status >= 500,
-    }], response.requests, response.bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [
+        {
+          code: "keybase_http_error",
+          severity: "warning",
+          message: `Keybase returned HTTP ${response.response.status}.`,
+          retryable: response.response.status >= 500,
+        },
+      ],
+      response.requests,
+      response.bytesRead,
+      true,
+    );
   }
 
   let payload: unknown;
   try {
     payload = await response.response.json();
   } catch {
-    return finish(startedAt, now, "failed", null, [{
-      code: "keybase_invalid_json",
-      severity: "warning",
-      message: "Keybase returned malformed JSON.",
-      retryable: true,
-    }], response.requests, response.bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [
+        {
+          code: "keybase_invalid_json",
+          severity: "warning",
+          message: "Keybase returned malformed JSON.",
+          retryable: true,
+        },
+      ],
+      response.requests,
+      response.bytesRead,
+      true,
+    );
   }
-  if (!isRecord(payload) || !isRecord(payload.status) || Number(payload.status.code) !== 0 || !Array.isArray(payload.them)) {
-    return finish(startedAt, now, "failed", null, [{
-      code: "keybase_invalid_response",
-      severity: "warning",
-      message: "Keybase returned an unexpected proof response.",
-      retryable: false,
-    }], response.requests, response.bytesRead, true);
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.status) ||
+    Number(payload.status.code) !== 0 ||
+    !Array.isArray(payload.them)
+  ) {
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [
+        {
+          code: "keybase_invalid_response",
+          severity: "warning",
+          message: "Keybase returned an unexpected proof response.",
+          retryable: false,
+        },
+      ],
+      response.requests,
+      response.bytesRead,
+      true,
+    );
   }
 
   const observedAtMs = now();
@@ -272,29 +344,32 @@ export async function lookupKeybaseGithub(
 
   const mismatches = proofs.filter((proof) => proof.status === "mismatch").length;
   const stale = proofs.filter((proof) => proof.status === "stale").length;
-  if (mismatches) diagnostics.push({
-    code: "keybase_handle_mismatch",
-    severity: "warning",
-    message: "Keybase returned proof records whose GitHub handle did not match the queried account.",
-    retryable: false,
-    details: { count: mismatches },
-  });
-  if (stale) diagnostics.push({
-    code: "keybase_stale_proof",
-    severity: "info",
-    message: "Some Keybase proof records are old and must not be treated as fresh corroboration.",
-    retryable: false,
-    details: { count: stale },
-  });
+  if (mismatches)
+    diagnostics.push({
+      code: "keybase_handle_mismatch",
+      severity: "warning",
+      message: "Keybase returned proof records whose GitHub handle did not match the queried account.",
+      retryable: false,
+      details: { count: mismatches },
+    });
+  if (stale)
+    diagnostics.push({
+      code: "keybase_stale_proof",
+      severity: "info",
+      message: "Some Keybase proof records are old and must not be treated as fresh corroboration.",
+      retryable: false,
+      details: { count: stale },
+    });
   const usernames = new Set(proofs.map((proof) => proof.keybaseUsername.toLowerCase()));
   const ambiguous = usernames.size > 1;
-  if (ambiguous) diagnostics.push({
-    code: "multiple_keybase_accounts",
-    severity: "warning",
-    message: "Multiple Keybase accounts reference the same GitHub handle; no account was selected automatically.",
-    retryable: false,
-    details: { count: usernames.size },
-  });
+  if (ambiguous)
+    diagnostics.push({
+      code: "multiple_keybase_accounts",
+      severity: "warning",
+      message: "Multiple Keybase accounts reference the same GitHub handle; no account was selected automatically.",
+      retryable: false,
+      details: { count: usernames.size },
+    });
 
   const data = { githubHandle, proofs, ambiguous };
   return finish(

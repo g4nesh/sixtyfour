@@ -59,11 +59,7 @@ export type IdentifierKind =
   | "keybase_proof"
   | "other";
 
-export type IdentifierAssurance =
-  | "verified"
-  | "corroborated"
-  | "self_asserted"
-  | "spoofable";
+export type IdentifierAssurance = "verified" | "corroborated" | "self_asserted" | "spoofable";
 
 export interface TargetIdentifier {
   kind: IdentifierKind;
@@ -291,14 +287,7 @@ export interface EvidenceAdmission {
 }
 
 export type FindingCategory =
-  | "identity"
-  | "employment"
-  | "education"
-  | "project"
-  | "publication"
-  | "online_presence"
-  | "timeline"
-  | "other";
+  "identity" | "employment" | "education" | "project" | "publication" | "online_presence" | "timeline" | "other";
 
 export type ConfidenceLabel = "low" | "moderate" | "high" | "very_high";
 
@@ -349,13 +338,7 @@ export type ResearchPhase =
   | "terminal";
 
 export type TerminalStatus =
-  | "completed"
-  | "partial"
-  | "ambiguous"
-  | "blocked"
-  | "configuration_error"
-  | "canceled"
-  | "failed";
+  "completed" | "partial" | "ambiguous" | "blocked" | "configuration_error" | "canceled" | "failed";
 
 export type InvestigationStatus = "running" | TerminalStatus;
 
@@ -431,33 +414,12 @@ export const SEARCH_GRAPH_SCHEMA_VERSION = 2 as const;
 export type SourceTier = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 export type SearchGraphNodeKind =
-  | "seed"
-  | "pivot"
-  | "action"
-  | "source"
-  | "evidence"
-  | "candidate"
-  | "finding"
-  | "gap"
-  | "report";
+  "seed" | "pivot" | "action" | "source" | "evidence" | "candidate" | "finding" | "gap" | "report";
 
-export type SearchGraphStatus =
-  | "queued"
-  | "selected"
-  | "running"
-  | "verified"
-  | "rejected"
-  | "exhausted"
-  | "mutated";
+export type SearchGraphStatus = "queued" | "selected" | "running" | "verified" | "rejected" | "exhausted" | "mutated";
 
 export type SearchGraphEdgeKind =
-  | "expands"
-  | "mutates"
-  | "supports"
-  | "conflicts"
-  | "separates"
-  | "grounds"
-  | "includes";
+  "expands" | "mutates" | "supports" | "conflicts" | "separates" | "grounds" | "includes";
 
 export interface SearchUtilityComponents {
   relevance: number;

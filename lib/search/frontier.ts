@@ -157,35 +157,24 @@ export function defaultUtilityForLane(
 }
 
 /** Search utility affects traversal cost only; it is never an evidence confidence input. */
-export function calculateEdgeCost(
-  tier: SourceTier,
-  depth: number,
-  utility: SearchUtilityComponents,
-): number {
+export function calculateEdgeCost(tier: SourceTier, depth: number, utility: SearchUtilityComponents): number {
   for (const [key, value] of Object.entries(utility)) score(value, key);
   if (!Number.isInteger(depth) || depth < 0) throw new TypeError("depth must be a non-negative integer");
   const benefit =
-    utility.relevance * 0.32
-    + utility.novelty * 0.18
-    + utility.informationGain * 0.3
-    + utility.sourceTrust * 0.2;
+    utility.relevance * 0.32 + utility.novelty * 0.18 + utility.informationGain * 0.3 + utility.sourceTrust * 0.2;
   const burden =
-    utility.executionCost * 0.34
-    + utility.policyRisk * 0.3
-    + utility.repetition * 0.2
-    + utility.depthPenalty * 0.16;
+    utility.executionCost * 0.34 + utility.policyRisk * 0.3 + utility.repetition * 0.2 + utility.depthPenalty * 0.16;
   return positiveCost(0.18 + tier * 0.72 + depth * 0.31 + (1 - benefit) + burden, "edgeCost");
 }
 
-export function compareFrontierEntries(
-  left: SearchFrontierEntry,
-  right: SearchFrontierEntry,
-): number {
-  return left.pathCost - right.pathCost
-    || left.sourceTier - right.sourceTier
-    || left.depth - right.depth
-    || left.ordinal - right.ordinal
-    || left.id.localeCompare(right.id);
+export function compareFrontierEntries(left: SearchFrontierEntry, right: SearchFrontierEntry): number {
+  return (
+    left.pathCost - right.pathCost ||
+    left.sourceTier - right.sourceTier ||
+    left.depth - right.depth ||
+    left.ordinal - right.ordinal ||
+    left.id.localeCompare(right.id)
+  );
 }
 
 function nodeEvent(node: SearchGraphNode): SearchKernelEvent {
@@ -278,11 +267,13 @@ export function admitGraphEdge(
   if (!graph.nodes.some((node) => node.id === options.toNodeId)) {
     throw new Error(`unknown graph edge target ${options.toNodeId}`);
   }
-  const existing = graph.edges.find((edge) =>
-    edge.fromNodeId === options.fromNodeId
-    && edge.toNodeId === options.toNodeId
-    && edge.kind === options.kind
-    && edge.actionId === (options.actionId ?? null));
+  const existing = graph.edges.find(
+    (edge) =>
+      edge.fromNodeId === options.fromNodeId &&
+      edge.toNodeId === options.toNodeId &&
+      edge.kind === options.kind &&
+      edge.actionId === (options.actionId ?? null),
+  );
   if (existing) return { graph, value: existing, events: [] };
   const edge: SearchGraphEdge = {
     schemaVersion: SEARCH_GRAPH_SCHEMA_VERSION,
@@ -316,55 +307,62 @@ export function enqueueFrontier(
   const utility = defaultUtilityForLane(options.lane, depth, options.utility);
   const edgeCost = calculateEdgeCost(options.lane.tier, depth, utility);
   const pathCost = positiveCost((parent?.pathCost ?? 0) + edgeCost, "pathCost");
-  const queryHint = normalizeWhitespace(options.queryHint ?? sourceLaneQueryHint(options.target, options.lane)).slice(0, 320);
+  const queryHint = normalizeWhitespace(options.queryHint ?? sourceLaneQueryHint(options.target, options.lane)).slice(
+    0,
+    320,
+  );
   const candidateId = options.candidateId ?? null;
-  const dedupeKey = canonicalDedupe([
-    options.lane.id,
-    candidateId ?? "unbound",
-    queryHint,
-    options.mutation?.strategy ?? "base",
-  ].join("|"));
-  const dominant = graph.frontier.find((entry) =>
-    entry.dedupeKey === dedupeKey
-    && entry.status !== "rejected"
-    && entry.status !== "exhausted"
-    && entry.pathCost <= pathCost);
+  const dedupeKey = canonicalDedupe(
+    [options.lane.id, candidateId ?? "unbound", queryHint, options.mutation?.strategy ?? "base"].join("|"),
+  );
+  const dominant = graph.frontier.find(
+    (entry) =>
+      entry.dedupeKey === dedupeKey &&
+      entry.status !== "rejected" &&
+      entry.status !== "exhausted" &&
+      entry.pathCost <= pathCost,
+  );
   if (dominant) {
     graph.telemetry.pruned += 1;
     graph.updatedAt = timestamp;
     return {
       graph,
       value: null,
-      events: [{
-        name: "frontier.pruned",
-        payload: {
-          dedupeKey,
-          dominatedByFrontierEntryId: dominant.id,
-          proposedPathCost: pathCost,
-          dominantPathCost: dominant.pathCost,
+      events: [
+        {
+          name: "frontier.pruned",
+          payload: {
+            dedupeKey,
+            dominatedByFrontierEntryId: dominant.id,
+            proposedPathCost: pathCost,
+            dominantPathCost: dominant.pathCost,
+          },
         },
-      }],
+      ],
     };
   }
 
   const stableId = ids.next("action");
-  const nodeAdmission = admitGraphNode(graph, {
-    kind: "pivot",
-    label: options.candidateLabel
-      ? `${options.lane.label}: ${options.candidateLabel}`
-      : options.lane.label,
-    status: options.status ?? "queued",
-    sourceTier: options.lane.tier,
-    sourceLaneId: options.lane.id,
-    frontierEntryId: stableId,
-    actionId: stableId,
-    candidateId,
-    data: {
-      intent: normalizeWhitespace(options.intent ?? options.lane.description).slice(0, 320),
-      queryHint,
-      admission: options.lane.admission,
+  const nodeAdmission = admitGraphNode(
+    graph,
+    {
+      kind: "pivot",
+      label: options.candidateLabel ? `${options.lane.label}: ${options.candidateLabel}` : options.lane.label,
+      status: options.status ?? "queued",
+      sourceTier: options.lane.tier,
+      sourceLaneId: options.lane.id,
+      frontierEntryId: stableId,
+      actionId: stableId,
+      candidateId,
+      data: {
+        intent: normalizeWhitespace(options.intent ?? options.lane.description).slice(0, 320),
+        queryHint,
+        admission: options.lane.admission,
+      },
     },
-  }, ids, timestamp);
+    ids,
+    timestamp,
+  );
   graph = nodeAdmission.graph;
   const node = nodeAdmission.value;
   const entry: SearchFrontierEntry = {
@@ -395,16 +393,21 @@ export function enqueueFrontier(
   graph.nextOrdinal += 1;
   graph.frontier.push(entry);
   graph.telemetry.enqueued += 1;
-  const edgeAdmission = admitGraphEdge(graph, {
-    fromNodeId: options.parentNodeId,
-    toNodeId: node.id,
-    kind: options.mutation ? "mutates" : "expands",
-    status: entry.status,
-    frontierEntryId: stableId,
-    actionId: stableId,
-    edgeCost,
-    pathCost,
-  }, ids, timestamp);
+  const edgeAdmission = admitGraphEdge(
+    graph,
+    {
+      fromNodeId: options.parentNodeId,
+      toNodeId: node.id,
+      kind: options.mutation ? "mutates" : "expands",
+      status: entry.status,
+      frontierEntryId: stableId,
+      actionId: stableId,
+      edgeCost,
+      pathCost,
+    },
+    ids,
+    timestamp,
+  );
   graph = edgeAdmission.graph;
   const events = [
     ...nodeAdmission.events,
@@ -439,13 +442,18 @@ export function seedFrontier(
   }
   let graph = cloneJson(graphValue);
   graph.seed = target.normalizedQuery.slice(0, 500);
-  const seedAdmission = admitGraphNode(graph, {
-    kind: "seed",
-    label: target.normalizedQuery,
-    status: "verified",
-    data: { targetKind: target.kind },
-    dedupeEntityKey: `seed:${graph.runId}`,
-  }, ids, timestamp);
+  const seedAdmission = admitGraphNode(
+    graph,
+    {
+      kind: "seed",
+      label: target.normalizedQuery,
+      status: "verified",
+      data: { targetKind: target.kind },
+      dedupeEntityKey: `seed:${graph.runId}`,
+    },
+    ids,
+    timestamp,
+  );
   graph = seedAdmission.graph;
   graph.seedNodeId = seedAdmission.value.id;
   graph.status = "active";
@@ -453,11 +461,16 @@ export function seedFrontier(
   const seeded: SearchFrontierEntry[] = [];
   for (const lane of sourceLanesForTarget(target, availableTools)) {
     if (lane.requiresCandidate) continue;
-    const enqueued = enqueueFrontier(graph, {
-      lane,
-      target,
-      parentNodeId: seedAdmission.value.id,
-    }, ids, timestamp);
+    const enqueued = enqueueFrontier(
+      graph,
+      {
+        lane,
+        target,
+        parentNodeId: seedAdmission.value.id,
+      },
+      ids,
+      timestamp,
+    );
     graph = enqueued.graph;
     events.push(...enqueued.events);
     if (enqueued.value) seeded.push(enqueued.value);
@@ -493,15 +506,20 @@ export function enqueueCandidateFrontier(
     // enqueued from a name/org query hint; they are opened later, only once an
     // admitted source has bound a concrete HTTPS URL to this candidate.
     if (lane.requiresExactCandidateUrl) continue;
-    const enqueued = enqueueFrontier(graph, {
-      lane,
-      target,
-      parentNodeId,
-      parentFrontierEntry: parentEntry,
-      candidateId: candidate.id,
-      candidateLabel: candidate.displayName,
-      queryHint: `${candidate.displayName} ${target.organizationHints.map((item) => item.name).join(" ")}`,
-    }, ids, timestamp);
+    const enqueued = enqueueFrontier(
+      graph,
+      {
+        lane,
+        target,
+        parentNodeId,
+        parentFrontierEntry: parentEntry,
+        candidateId: candidate.id,
+        candidateLabel: candidate.displayName,
+        queryHint: `${candidate.displayName} ${target.organizationHints.map((item) => item.name).join(" ")}`,
+      },
+      ids,
+      timestamp,
+    );
     graph = enqueued.graph;
     events.push(...enqueued.events);
     if (enqueued.value) entries.push(enqueued.value);
@@ -534,18 +552,18 @@ export function selectFrontierBatch(
   // The cursor is monotonic: entries below the current tier (e.g. a candidate
   // lane opened after the run already advanced) are not revisited downward.
   const tierFloor = graph.currentSourceTier ?? 0;
-  const initiallyExecutable = queued.filter((entry) =>
-    entry.sourceTier >= tierFloor
-    && (entry.mutation === null || mutationSelectionLegal(graph)));
-  const minimumEligibleTier = initiallyExecutable.length > 0
-    ? initiallyExecutable.reduce<SourceTier>(
-      (value, entry) => Math.min(value, entry.sourceTier) as SourceTier,
-      initiallyExecutable[0].sourceTier,
-    )
-    : null;
-  const eligible = minimumEligibleTier === null
-    ? []
-    : queued.filter((entry) => entry.sourceTier === minimumEligibleTier);
+  const initiallyExecutable = queued.filter(
+    (entry) => entry.sourceTier >= tierFloor && (entry.mutation === null || mutationSelectionLegal(graph)),
+  );
+  const minimumEligibleTier =
+    initiallyExecutable.length > 0
+      ? initiallyExecutable.reduce<SourceTier>(
+          (value, entry) => Math.min(value, entry.sourceTier) as SourceTier,
+          initiallyExecutable[0].sourceTier,
+        )
+      : null;
+  const eligible =
+    minimumEligibleTier === null ? [] : queued.filter((entry) => entry.sourceTier === minimumEligibleTier);
   const selected: SearchFrontierEntry[] = [];
   let selectedMutations = 0;
   const selectedIds = new Set<string>();
@@ -562,12 +580,12 @@ export function selectFrontierBatch(
     if (entry.mutation !== null) selectedMutations += 1;
   }
 
-  graph.frontier = graph.frontier.map((entry) => selectedIds.has(entry.id)
-    ? { ...entry, status: "selected", updatedAt: timestamp }
-    : entry);
-  graph.nodes = graph.nodes.map((node) => selected.some((entry) => entry.nodeId === node.id)
-    ? { ...node, status: "selected", updatedAt: timestamp }
-    : node);
+  graph.frontier = graph.frontier.map((entry) =>
+    selectedIds.has(entry.id) ? { ...entry, status: "selected", updatedAt: timestamp } : entry,
+  );
+  graph.nodes = graph.nodes.map((node) =>
+    selected.some((entry) => entry.nodeId === node.id) ? { ...node, status: "selected", updatedAt: timestamp } : node,
+  );
   graph.selectedFrontierEntryIds = selected.map((entry) => entry.id);
   graph.telemetry.selected += selected.length;
   graph.updatedAt = timestamp;
@@ -612,15 +630,14 @@ export function setFrontierStatus(
 ): SearchGraph {
   const graph = cloneJson(graphValue);
   const ids = new Set(frontierEntryIds);
-  graph.frontier = graph.frontier.map((entry) => ids.has(entry.id)
-    ? { ...entry, status, updatedAt: timestamp }
-    : entry);
+  graph.frontier = graph.frontier.map((entry) =>
+    ids.has(entry.id) ? { ...entry, status, updatedAt: timestamp } : entry,
+  );
   graph.nodes = graph.nodes.map((node) =>
-    (node.kind === "pivot" || node.kind === "action")
-      && node.frontierEntryId
-      && ids.has(node.frontierEntryId)
-    ? { ...node, status, updatedAt: timestamp }
-    : node);
+    (node.kind === "pivot" || node.kind === "action") && node.frontierEntryId && ids.has(node.frontierEntryId)
+      ? { ...node, status, updatedAt: timestamp }
+      : node,
+  );
   if (!["selected", "running"].includes(status)) {
     graph.selectedFrontierEntryIds = graph.selectedFrontierEntryIds.filter((id) => !ids.has(id));
   }
@@ -655,16 +672,18 @@ export function recordFrontierOutcome(
   return {
     graph,
     value: undefined,
-    events: [{
-      name,
-      payload: {
-        frontierEntryId: entry.id,
-        actionId: entry.actionId,
-        status,
-        sourceTier: entry.sourceTier,
-        sourceLaneId: entry.sourceLaneId,
+    events: [
+      {
+        name,
+        payload: {
+          frontierEntryId: entry.id,
+          actionId: entry.actionId,
+          status,
+          sourceTier: entry.sourceTier,
+          sourceLaneId: entry.sourceLaneId,
+        },
       },
-    }],
+    ],
   };
 }
 
@@ -677,16 +696,15 @@ export const FRONTIER_MUTATION_STRATEGIES = [
   "source_adjacent",
 ] as const satisfies readonly MutationStrategy[];
 
-function adjacentSourceLaneForMutation(
-  entry: SearchFrontierEntry,
-  target: ParsedTarget,
-): SourceLane | null {
+function adjacentSourceLaneForMutation(entry: SearchFrontierEntry, target: ParsedTarget): SourceLane | null {
   const candidateBound = entry.candidateId !== null;
-  return sourceLanesForTarget(target, entry.allowedTools, { candidateId: entry.candidateId })
-    .filter((lane) => lane.id !== entry.sourceLaneId)
-    .filter((lane) => lane.tier > entry.sourceTier)
-    .filter((lane) => lane.requiresCandidate === candidateBound)
-    .sort((left, right) => left.tier - right.tier || left.id.localeCompare(right.id))[0] ?? null;
+  return (
+    sourceLanesForTarget(target, entry.allowedTools, { candidateId: entry.candidateId })
+      .filter((lane) => lane.id !== entry.sourceLaneId)
+      .filter((lane) => lane.tier > entry.sourceTier)
+      .filter((lane) => lane.requiresCandidate === candidateBound)
+      .sort((left, right) => left.tier - right.tier || left.id.localeCompare(right.id))[0] ?? null
+  );
 }
 
 function mutationStrategies(entry: SearchFrontierEntry, target: ParsedTarget): MutationStrategy[] {
@@ -715,20 +733,14 @@ function mutatedIntent(
   }
 }
 
-function mutatedQueryHint(
-  strategy: MutationStrategy,
-  entry: SearchFrontierEntry,
-  target: ParsedTarget,
-): string {
+function mutatedQueryHint(strategy: MutationStrategy, entry: SearchFrontierEntry, target: ParsedTarget): string {
   switch (strategy) {
     case "exact_phrase": {
       const exact = entry.queryHint.replace(/^"+|"+$/g, "").slice(0, 316);
       return `"${exact}"`;
     }
     case "role_anchor":
-      return normalizeWhitespace(
-        `${entry.queryHint} "${target.roleHints.join(" / ")}"`,
-      ).slice(0, 320);
+      return normalizeWhitespace(`${entry.queryHint} "${target.roleHints.join(" / ")}"`).slice(0, 320);
     case "organization_anchor":
       return normalizeWhitespace(
         `${entry.queryHint} "${target.organizationHints.map((item) => item.name).join(" / ")}"`,
@@ -739,19 +751,18 @@ function mutatedQueryHint(
 }
 
 const SHA256_INITIAL_STATE = [
-  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-  0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ] as const;
 
 const SHA256_ROUND_CONSTANTS = [
-  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98,
+  0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+  0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8,
+  0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819,
+  0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+  0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+  0xc67178f2,
 ] as const;
 
 function rotateRight(value: number, bits: number): number {
@@ -820,7 +831,7 @@ function sha256Bytes(value: string): Uint8Array {
 export function deterministicSha256UnitSync(seed: string): number {
   const digest = sha256Bytes(seed);
   // A 53-bit integer maps exactly into a JavaScript double mantissa.
-  const high = (digest[0] * 0x1000000) + (digest[1] << 16) + (digest[2] << 8) + digest[3];
+  const high = digest[0] * 0x1000000 + (digest[1] << 16) + (digest[2] << 8) + digest[3];
   const low = ((digest[4] << 16) | (digest[5] << 8) | digest[6]) >>> 0;
   const integer = high * 0x200000 + (low & 0x1fffff);
   return (integer + 0.5) / 0x20000000000000;
@@ -862,8 +873,8 @@ export function metropolisHastingsAcceptance(options: {
   }
   // Uniform finite-neighbor proposal: q(parent|candidate) / q(candidate|parent) = N_parent/N_candidate.
   const logAcceptanceRatio = rounded(
-    -((candidateCost - parentCost) / temperature)
-    + Math.log(options.parentNeighborCount / options.candidateNeighborCount),
+    -((candidateCost - parentCost) / temperature) +
+      Math.log(options.parentNeighborCount / options.candidateNeighborCount),
   );
   return {
     logAcceptanceRatio,
@@ -902,13 +913,9 @@ export function deriveMutationProposal(
   if (!lane || parent.mutation || !Number.isInteger(proposalIndex) || proposalIndex < 0) return null;
   const strategies = mutationStrategies(parent, target);
   if (strategies.length === 0) return null;
-  const selector = deterministicSha256UnitSync(
-    `${graph.runId}|${graph.seed}|${parent.id}|${proposalIndex}|strategy`,
-  );
+  const selector = deterministicSha256UnitSync(`${graph.runId}|${graph.seed}|${parent.id}|${proposalIndex}|strategy`);
   const strategy = strategies[Math.min(strategies.length - 1, Math.floor(selector * strategies.length))];
-  const candidateLane = strategy === "source_adjacent"
-    ? adjacentSourceLaneForMutation(parent, target)
-    : lane;
+  const candidateLane = strategy === "source_adjacent" ? adjacentSourceLaneForMutation(parent, target) : lane;
   if (!candidateLane) return null;
   const candidateState = {
     ...parent,
@@ -935,9 +942,9 @@ export function deriveMutationProposal(
     parentNeighborCount: strategies.length,
     candidateNeighborCount,
   });
-  const deterministicU = rounded(deterministicSha256UnitSync(
-    `${graph.runId}|${graph.seed}|${parent.id}|${proposalIndex}|${strategy}|accept`,
-  ));
+  const deterministicU = rounded(
+    deterministicSha256UnitSync(`${graph.runId}|${graph.seed}|${parent.id}|${proposalIndex}|${strategy}|accept`),
+  );
   return {
     strategy,
     candidateLane,
@@ -1013,18 +1020,23 @@ export async function proposeBoundedMutation(
       candidateNeighborCount,
     },
   };
-  const enqueued = enqueueFrontier(graph, {
-    lane: candidateLane,
-    target,
-    parentNodeId: parent.nodeId,
-    parentFrontierEntry: parent,
-    candidateId: parent.candidateId,
-    intent,
-    queryHint,
-    status: accepted ? "mutated" : "rejected",
-    mutation,
-    utility,
-  }, ids, timestamp);
+  const enqueued = enqueueFrontier(
+    graph,
+    {
+      lane: candidateLane,
+      target,
+      parentNodeId: parent.nodeId,
+      parentFrontierEntry: parent,
+      candidateId: parent.candidateId,
+      intent,
+      queryHint,
+      status: accepted ? "mutated" : "rejected",
+      mutation,
+      utility,
+    },
+    ids,
+    timestamp,
+  );
   graph = enqueued.graph;
   if (accepted) graph.telemetry.mutationsAccepted += 1;
   else graph.telemetry.mutationsRejected += 1;
@@ -1059,17 +1071,19 @@ export function markSearchGraphTerminal(
   graph.status = status;
   graph.selectedFrontierEntryIds = [];
   graph.frontier = graph.frontier.map((entry) =>
-    entry.status === "selected"
-      || entry.status === "running"
-      || (!preserveQueued && (entry.status === "queued" || entry.status === "mutated"))
+    entry.status === "selected" ||
+    entry.status === "running" ||
+    (!preserveQueued && (entry.status === "queued" || entry.status === "mutated"))
       ? { ...entry, status: "exhausted", updatedAt: timestamp }
-      : entry);
+      : entry,
+  );
   graph.nodes = graph.nodes.map((node) =>
-    node.status === "selected"
-      || node.status === "running"
-      || (!preserveQueued && (node.status === "queued" || node.status === "mutated"))
+    node.status === "selected" ||
+    node.status === "running" ||
+    (!preserveQueued && (node.status === "queued" || node.status === "mutated"))
       ? { ...node, status: "exhausted", updatedAt: timestamp }
-      : node);
+      : node,
+  );
   graph.updatedAt = timestamp;
   return graph;
 }
@@ -1080,39 +1094,59 @@ export interface SearchGraphInvariantIssue {
   message: string;
 }
 
-const GRAPH_RUN_STATUSES = new Set([
-  "empty", "active", "exhausted", "completed", "blocked", "canceled", "failed",
-]);
-const GRAPH_NODE_STATUSES = new Set([
-  "queued", "selected", "running", "verified", "rejected", "exhausted", "mutated",
-]);
+const GRAPH_RUN_STATUSES = new Set(["empty", "active", "exhausted", "completed", "blocked", "canceled", "failed"]);
+const GRAPH_NODE_STATUSES = new Set(["queued", "selected", "running", "verified", "rejected", "exhausted", "mutated"]);
 const GRAPH_NODE_KINDS = new Set([
-  "seed", "pivot", "action", "source", "evidence", "candidate", "finding", "gap", "report",
+  "seed",
+  "pivot",
+  "action",
+  "source",
+  "evidence",
+  "candidate",
+  "finding",
+  "gap",
+  "report",
 ]);
-const GRAPH_EDGE_KINDS = new Set([
-  "expands", "mutates", "supports", "conflicts", "separates", "grounds", "includes",
-]);
+const GRAPH_EDGE_KINDS = new Set(["expands", "mutates", "supports", "conflicts", "separates", "grounds", "includes"]);
 const GRAPH_EDGE_ENDPOINTS: Readonly<Record<SearchGraphEdgeKind, ReadonlySet<string>>> = {
   expands: new Set([
-    "seed->pivot", "pivot->pivot", "pivot->action",
-    "action->candidate", "action->source", "action->gap", "candidate->pivot",
+    "seed->pivot",
+    "pivot->pivot",
+    "pivot->action",
+    "action->candidate",
+    "action->source",
+    "action->gap",
+    "candidate->pivot",
   ]),
   mutates: new Set(["pivot->pivot", "pivot->action"]),
   supports: new Set(["source->evidence", "evidence->candidate", "candidate->finding"]),
   conflicts: new Set(["evidence->candidate"]),
   separates: new Set(["candidate->candidate"]),
-  grounds: new Set([
-    "pivot->source", "source->evidence", "evidence->candidate", "evidence->finding",
-  ]),
+  grounds: new Set(["pivot->source", "source->evidence", "evidence->candidate", "evidence->finding"]),
   includes: new Set(["candidate->report", "finding->report", "gap->report"]),
 };
 const GRAPH_TELEMETRY_KEYS = [
-  "seeded", "enqueued", "selected", "pruned", "expanded", "exhausted", "toolCalls",
-  "mutationToolCalls", "mutationsProposed", "mutationsAccepted", "mutationsRejected",
+  "seeded",
+  "enqueued",
+  "selected",
+  "pruned",
+  "expanded",
+  "exhausted",
+  "toolCalls",
+  "mutationToolCalls",
+  "mutationsProposed",
+  "mutationsAccepted",
+  "mutationsRejected",
 ] as const;
 const GRAPH_UTILITY_KEYS = [
-  "relevance", "novelty", "informationGain", "sourceTrust", "executionCost",
-  "policyRisk", "repetition", "depthPenalty",
+  "relevance",
+  "novelty",
+  "informationGain",
+  "sourceTrust",
+  "executionCost",
+  "policyRisk",
+  "repetition",
+  "depthPenalty",
 ] as const;
 
 function graphRecord(value: unknown): value is Record<string, unknown> {
@@ -1156,39 +1190,48 @@ function graphJsonValue(value: unknown): boolean {
 }
 
 function canonicalGraphNodeShape(value: unknown): boolean {
-  return graphRecord(value)
-    && value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION
-    && graphNonEmptyString(value.id)
-    && typeof value.kind === "string" && GRAPH_NODE_KINDS.has(value.kind)
-    && graphNonEmptyString(value.label)
-    && typeof value.status === "string" && GRAPH_NODE_STATUSES.has(value.status)
-    && (value.sourceTier === null || graphSourceTier(value.sourceTier))
-    && graphNullableString(value.sourceLaneId)
-    && graphNullableString(value.frontierEntryId)
-    && graphNullableString(value.actionId)
-    && graphNullableString(value.candidateId)
-    && graphNullableString(value.evidenceId)
-    && graphNullableString(value.findingId)
-    && graphNonNegativeInteger(value.ordinal)
-    && graphRecord(value.data) && graphJsonValue(value.data)
-    && graphTimestampValue(value.createdAt)
-    && graphTimestampValue(value.updatedAt);
+  return (
+    graphRecord(value) &&
+    value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION &&
+    graphNonEmptyString(value.id) &&
+    typeof value.kind === "string" &&
+    GRAPH_NODE_KINDS.has(value.kind) &&
+    graphNonEmptyString(value.label) &&
+    typeof value.status === "string" &&
+    GRAPH_NODE_STATUSES.has(value.status) &&
+    (value.sourceTier === null || graphSourceTier(value.sourceTier)) &&
+    graphNullableString(value.sourceLaneId) &&
+    graphNullableString(value.frontierEntryId) &&
+    graphNullableString(value.actionId) &&
+    graphNullableString(value.candidateId) &&
+    graphNullableString(value.evidenceId) &&
+    graphNullableString(value.findingId) &&
+    graphNonNegativeInteger(value.ordinal) &&
+    graphRecord(value.data) &&
+    graphJsonValue(value.data) &&
+    graphTimestampValue(value.createdAt) &&
+    graphTimestampValue(value.updatedAt)
+  );
 }
 
 function canonicalGraphEdgeShape(value: unknown): boolean {
-  return graphRecord(value)
-    && value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION
-    && graphNonEmptyString(value.id)
-    && graphNonEmptyString(value.fromNodeId)
-    && graphNonEmptyString(value.toNodeId)
-    && typeof value.kind === "string" && GRAPH_EDGE_KINDS.has(value.kind)
-    && typeof value.status === "string" && GRAPH_NODE_STATUSES.has(value.status)
-    && graphNullableString(value.frontierEntryId)
-    && graphNullableString(value.actionId)
-    && graphPositiveFinite(value.edgeCost)
-    && graphPositiveFinite(value.pathCost)
-    && graphNonNegativeInteger(value.ordinal)
-    && graphTimestampValue(value.createdAt);
+  return (
+    graphRecord(value) &&
+    value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION &&
+    graphNonEmptyString(value.id) &&
+    graphNonEmptyString(value.fromNodeId) &&
+    graphNonEmptyString(value.toNodeId) &&
+    typeof value.kind === "string" &&
+    GRAPH_EDGE_KINDS.has(value.kind) &&
+    typeof value.status === "string" &&
+    GRAPH_NODE_STATUSES.has(value.status) &&
+    graphNullableString(value.frontierEntryId) &&
+    graphNullableString(value.actionId) &&
+    graphPositiveFinite(value.edgeCost) &&
+    graphPositiveFinite(value.pathCost) &&
+    graphNonNegativeInteger(value.ordinal) &&
+    graphTimestampValue(value.createdAt)
+  );
 }
 
 function canonicalGraphUtilityShape(value: unknown): boolean {
@@ -1196,46 +1239,54 @@ function canonicalGraphUtilityShape(value: unknown): boolean {
 }
 
 function canonicalGraphMutationShape(value: unknown): boolean {
-  return graphRecord(value)
-    && typeof value.strategy === "string"
-    && FRONTIER_MUTATION_STRATEGIES.includes(value.strategy as FrontierMutationMetadata["strategy"])
-    && graphNonEmptyString(value.parentFrontierEntryId)
-    && graphNonNegativeInteger(value.proposalIndex)
-    && graphPositiveFinite(value.temperature)
-    && typeof value.logAcceptanceRatio === "number" && Number.isFinite(value.logAcceptanceRatio)
-    && graphScore(value.acceptanceProbability)
-    && graphScore(value.deterministicU)
-    && graphNonNegativeInteger(value.parentNeighborCount) && value.parentNeighborCount > 0
-    && graphNonNegativeInteger(value.candidateNeighborCount) && value.candidateNeighborCount > 0;
+  return (
+    graphRecord(value) &&
+    typeof value.strategy === "string" &&
+    FRONTIER_MUTATION_STRATEGIES.includes(value.strategy as FrontierMutationMetadata["strategy"]) &&
+    graphNonEmptyString(value.parentFrontierEntryId) &&
+    graphNonNegativeInteger(value.proposalIndex) &&
+    graphPositiveFinite(value.temperature) &&
+    typeof value.logAcceptanceRatio === "number" &&
+    Number.isFinite(value.logAcceptanceRatio) &&
+    graphScore(value.acceptanceProbability) &&
+    graphScore(value.deterministicU) &&
+    graphNonNegativeInteger(value.parentNeighborCount) &&
+    value.parentNeighborCount > 0 &&
+    graphNonNegativeInteger(value.candidateNeighborCount) &&
+    value.candidateNeighborCount > 0
+  );
 }
 
 function canonicalFrontierEntryShape(value: unknown): boolean {
-  return graphRecord(value)
-    && value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION
-    && graphNonEmptyString(value.id)
-    && graphNonEmptyString(value.frontierEntryId)
-    && graphNonEmptyString(value.actionId)
-    && graphNonEmptyString(value.nodeId)
-    && graphNonEmptyString(value.parentNodeId)
-    && graphNullableString(value.parentFrontierEntryId)
-    && typeof value.status === "string" && GRAPH_NODE_STATUSES.has(value.status)
-    && graphSourceTier(value.sourceTier)
-    && graphNonEmptyString(value.sourceLaneId)
-    && Array.isArray(value.allowedTools)
-    && value.allowedTools.length > 0
-    && value.allowedTools.every(graphNonEmptyString)
-    && graphNonEmptyString(value.intent)
-    && graphNonEmptyString(value.queryHint)
-    && graphNullableString(value.candidateId)
-    && graphNonNegativeInteger(value.depth)
-    && graphNonNegativeInteger(value.ordinal)
-    && graphNonEmptyString(value.dedupeKey)
-    && canonicalGraphUtilityShape(value.utility)
-    && graphPositiveFinite(value.edgeCost)
-    && graphPositiveFinite(value.pathCost)
-    && (value.mutation === null || canonicalGraphMutationShape(value.mutation))
-    && graphTimestampValue(value.createdAt)
-    && graphTimestampValue(value.updatedAt);
+  return (
+    graphRecord(value) &&
+    value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION &&
+    graphNonEmptyString(value.id) &&
+    graphNonEmptyString(value.frontierEntryId) &&
+    graphNonEmptyString(value.actionId) &&
+    graphNonEmptyString(value.nodeId) &&
+    graphNonEmptyString(value.parentNodeId) &&
+    graphNullableString(value.parentFrontierEntryId) &&
+    typeof value.status === "string" &&
+    GRAPH_NODE_STATUSES.has(value.status) &&
+    graphSourceTier(value.sourceTier) &&
+    graphNonEmptyString(value.sourceLaneId) &&
+    Array.isArray(value.allowedTools) &&
+    value.allowedTools.length > 0 &&
+    value.allowedTools.every(graphNonEmptyString) &&
+    graphNonEmptyString(value.intent) &&
+    graphNonEmptyString(value.queryHint) &&
+    graphNullableString(value.candidateId) &&
+    graphNonNegativeInteger(value.depth) &&
+    graphNonNegativeInteger(value.ordinal) &&
+    graphNonEmptyString(value.dedupeKey) &&
+    canonicalGraphUtilityShape(value.utility) &&
+    graphPositiveFinite(value.edgeCost) &&
+    graphPositiveFinite(value.pathCost) &&
+    (value.mutation === null || canonicalGraphMutationShape(value.mutation)) &&
+    graphTimestampValue(value.createdAt) &&
+    graphTimestampValue(value.updatedAt)
+  );
 }
 
 function validateSearchGraphStructure(value: unknown): SearchGraphInvariantIssue[] {
@@ -1248,7 +1299,11 @@ function validateSearchGraphStructure(value: unknown): SearchGraphInvariantIssue
   };
   requireField(value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION, "schemaVersion", "unsupported search graph schema");
   requireField(graphNonEmptyString(value.runId), "runId", "runId must be non-empty");
-  requireField(typeof value.status === "string" && GRAPH_RUN_STATUSES.has(value.status), "status", "invalid graph status");
+  requireField(
+    typeof value.status === "string" && GRAPH_RUN_STATUSES.has(value.status),
+    "status",
+    "invalid graph status",
+  );
   requireField(typeof value.seed === "string", "seed", "seed must be a string");
   requireField(graphNullableString(value.seedNodeId), "seedNodeId", "seedNodeId must be null or non-empty");
   requireField(Array.isArray(value.nodes), "nodes", "nodes must be an array");
@@ -1259,9 +1314,17 @@ function validateSearchGraphStructure(value: unknown): SearchGraphInvariantIssue
     "selectedFrontierEntryIds",
     "selectedFrontierEntryIds must contain strings",
   );
-  requireField(value.currentSourceTier === null || graphSourceTier(value.currentSourceTier), "currentSourceTier", "invalid current source tier");
+  requireField(
+    value.currentSourceTier === null || graphSourceTier(value.currentSourceTier),
+    "currentSourceTier",
+    "invalid current source tier",
+  );
   requireField(graphNonNegativeInteger(value.nextOrdinal), "nextOrdinal", "nextOrdinal must be a non-negative integer");
-  requireField(graphNonNegativeInteger(value.mutationStep), "mutationStep", "mutationStep must be a non-negative integer");
+  requireField(
+    graphNonNegativeInteger(value.mutationStep),
+    "mutationStep",
+    "mutationStep must be a non-negative integer",
+  );
   const telemetry = graphRecord(value.telemetry) ? value.telemetry : null;
   requireField(
     telemetry !== null && GRAPH_TELEMETRY_KEYS.every((key) => graphNonNegativeInteger(telemetry[key])),
@@ -1270,21 +1333,28 @@ function validateSearchGraphStructure(value: unknown): SearchGraphInvariantIssue
   );
   requireField(graphTimestampValue(value.createdAt), "createdAt", "createdAt must be a valid timestamp");
   requireField(graphTimestampValue(value.updatedAt), "updatedAt", "updatedAt must be a valid timestamp");
-  if (Array.isArray(value.nodes)) value.nodes.forEach((node, index) => {
-    if (!canonicalGraphNodeShape(node)) {
-      issues.push({ code: "invalid_node_shape", path: `nodes[${index}]`, message: "invalid canonical graph node" });
-    }
-  });
-  if (Array.isArray(value.edges)) value.edges.forEach((edge, index) => {
-    if (!canonicalGraphEdgeShape(edge)) {
-      issues.push({ code: "invalid_edge_shape", path: `edges[${index}]`, message: "invalid canonical graph edge" });
-    }
-  });
-  if (Array.isArray(value.frontier)) value.frontier.forEach((entry, index) => {
-    if (!canonicalFrontierEntryShape(entry)) {
-      issues.push({ code: "invalid_frontier_shape", path: `frontier[${index}]`, message: "invalid canonical frontier entry" });
-    }
-  });
+  if (Array.isArray(value.nodes))
+    value.nodes.forEach((node, index) => {
+      if (!canonicalGraphNodeShape(node)) {
+        issues.push({ code: "invalid_node_shape", path: `nodes[${index}]`, message: "invalid canonical graph node" });
+      }
+    });
+  if (Array.isArray(value.edges))
+    value.edges.forEach((edge, index) => {
+      if (!canonicalGraphEdgeShape(edge)) {
+        issues.push({ code: "invalid_edge_shape", path: `edges[${index}]`, message: "invalid canonical graph edge" });
+      }
+    });
+  if (Array.isArray(value.frontier))
+    value.frontier.forEach((entry, index) => {
+      if (!canonicalFrontierEntryShape(entry)) {
+        issues.push({
+          code: "invalid_frontier_shape",
+          path: `frontier[${index}]`,
+          message: "invalid canonical frontier entry",
+        });
+      }
+    });
   if (!graphJsonValue(value)) {
     issues.push({ code: "invalid_graph_shape", path: "$", message: "search graph must be JSON-safe" });
   }
@@ -1318,8 +1388,10 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         message: "source and evidence nodes require one non-null evidenceId",
       });
     }
-    if ((node.kind === "evidence" || node.kind === "source")
-      && (node.frontierEntryId === null || node.actionId === null)) {
+    if (
+      (node.kind === "evidence" || node.kind === "source") &&
+      (node.frontierEntryId === null || node.actionId === null)
+    ) {
       issues.push({
         code: "unbound_evidence_node",
         path: `nodes[${index}].actionId`,
@@ -1378,14 +1450,20 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     if (!nodeIds.has(edge.fromNodeId) || !nodeIds.has(edge.toNodeId)) {
       issues.push({ code: "dangling_edge", path: `edges[${index}]`, message: edge.id });
     }
-    if (!Number.isFinite(edge.edgeCost) || edge.edgeCost <= 0 || !Number.isFinite(edge.pathCost) || edge.pathCost <= 0) {
+    if (
+      !Number.isFinite(edge.edgeCost) ||
+      edge.edgeCost <= 0 ||
+      !Number.isFinite(edge.pathCost) ||
+      edge.pathCost <= 0
+    ) {
       issues.push({ code: "invalid_edge_cost", path: `edges[${index}]`, message: edge.id });
     }
   });
   const frontierIds = new Set<string>();
   const activeDedupe = new Set<string>();
   graph.frontier.forEach((entry, index) => {
-    if (frontierIds.has(entry.id)) issues.push({ code: "duplicate_frontier", path: `frontier[${index}].id`, message: entry.id });
+    if (frontierIds.has(entry.id))
+      issues.push({ code: "duplicate_frontier", path: `frontier[${index}].id`, message: entry.id });
     frontierIds.add(entry.id);
     if (entry.id !== entry.frontierEntryId || entry.id !== entry.actionId) {
       issues.push({ code: "unstable_action_join", path: `frontier[${index}]`, message: entry.id });
@@ -1393,14 +1471,16 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     if (!nodeIds.has(entry.nodeId) || !nodeIds.has(entry.parentNodeId)) {
       issues.push({ code: "dangling_frontier_node", path: `frontier[${index}]`, message: entry.id });
     }
-    if (!Number.isFinite(entry.edgeCost) || entry.edgeCost <= 0 || !Number.isFinite(entry.pathCost) || entry.pathCost <= 0) {
+    if (
+      !Number.isFinite(entry.edgeCost) ||
+      entry.edgeCost <= 0 ||
+      !Number.isFinite(entry.pathCost) ||
+      entry.pathCost <= 0
+    ) {
       issues.push({ code: "invalid_frontier_cost", path: `frontier[${index}]`, message: entry.id });
     }
     const resolvedLane = sourceLaneForFrontierEntry(entry);
-    if (
-      isDeniedResearchTool(entry.sourceLaneId)
-      || entry.allowedTools.some((tool) => isDeniedResearchTool(tool))
-    ) {
+    if (isDeniedResearchTool(entry.sourceLaneId) || entry.allowedTools.some((tool) => isDeniedResearchTool(tool))) {
       issues.push({
         code: "denied_tool",
         path: `frontier[${index}].allowedTools`,
@@ -1426,25 +1506,26 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         });
       }
     }
-    if (entry.mutation !== null && (
-      typeof entry.mutation !== "object"
-      || !FRONTIER_MUTATION_STRATEGIES.includes(entry.mutation.strategy)
-      || !Number.isInteger(entry.mutation.proposalIndex)
-      || entry.mutation.proposalIndex < 0
-      || !Number.isFinite(entry.mutation.temperature)
-      || entry.mutation.temperature <= 0
-      || !Number.isFinite(entry.mutation.logAcceptanceRatio)
-      || !Number.isFinite(entry.mutation.acceptanceProbability)
-      || entry.mutation.acceptanceProbability < 0
-      || entry.mutation.acceptanceProbability > 1
-      || !Number.isFinite(entry.mutation.deterministicU)
-      || entry.mutation.deterministicU < 0
-      || entry.mutation.deterministicU > 1
-      || !Number.isInteger(entry.mutation.parentNeighborCount)
-      || entry.mutation.parentNeighborCount <= 0
-      || !Number.isInteger(entry.mutation.candidateNeighborCount)
-      || entry.mutation.candidateNeighborCount <= 0
-    )) {
+    if (
+      entry.mutation !== null &&
+      (typeof entry.mutation !== "object" ||
+        !FRONTIER_MUTATION_STRATEGIES.includes(entry.mutation.strategy) ||
+        !Number.isInteger(entry.mutation.proposalIndex) ||
+        entry.mutation.proposalIndex < 0 ||
+        !Number.isFinite(entry.mutation.temperature) ||
+        entry.mutation.temperature <= 0 ||
+        !Number.isFinite(entry.mutation.logAcceptanceRatio) ||
+        !Number.isFinite(entry.mutation.acceptanceProbability) ||
+        entry.mutation.acceptanceProbability < 0 ||
+        entry.mutation.acceptanceProbability > 1 ||
+        !Number.isFinite(entry.mutation.deterministicU) ||
+        entry.mutation.deterministicU < 0 ||
+        entry.mutation.deterministicU > 1 ||
+        !Number.isInteger(entry.mutation.parentNeighborCount) ||
+        entry.mutation.parentNeighborCount <= 0 ||
+        !Number.isInteger(entry.mutation.candidateNeighborCount) ||
+        entry.mutation.candidateNeighborCount <= 0)
+    ) {
       issues.push({
         code: "invalid_mutation_metadata",
         path: `frontier[${index}].mutation`,
@@ -1470,12 +1551,15 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       });
     }
     const parentNode = graph.nodes.find((node) => node.id === entry.parentNodeId);
-    const validParentNode = entry.parentFrontierEntryId === null
-      ? entry.parentNodeId === graph.seedNodeId
-      : Boolean(parent && parentNode && (
-        entry.parentNodeId === parent.nodeId
-        || (parentNode.frontierEntryId === parent.id && parentNode.actionId === parent.id)
-      ));
+    const validParentNode =
+      entry.parentFrontierEntryId === null
+        ? entry.parentNodeId === graph.seedNodeId
+        : Boolean(
+            parent &&
+            parentNode &&
+            (entry.parentNodeId === parent.nodeId ||
+              (parentNode.frontierEntryId === parent.id && parentNode.actionId === parent.id)),
+          );
     if (!validParentNode) {
       issues.push({
         code: "frontier_parent_node_mismatch",
@@ -1484,10 +1568,10 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       });
     }
     if (
-      parentNode?.candidateId !== null
-      && parentNode?.candidateId !== undefined
-      && entry.candidateId !== null
-      && parentNode.candidateId !== entry.candidateId
+      parentNode?.candidateId !== null &&
+      parentNode?.candidateId !== undefined &&
+      entry.candidateId !== null &&
+      parentNode.candidateId !== entry.candidateId
     ) {
       issues.push({
         code: "frontier_candidate_scope_mismatch",
@@ -1505,20 +1589,24 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     }
     const expectedPathCost = rounded((parent?.pathCost ?? 0) + entry.edgeCost);
     if (entry.pathCost !== expectedPathCost) {
-      issues.push({ code: "path_cost_mismatch", path: `frontier[${index}].pathCost`, message: `${entry.pathCost} != ${expectedPathCost}` });
+      issues.push({
+        code: "path_cost_mismatch",
+        path: `frontier[${index}].pathCost`,
+        message: `${entry.pathCost} != ${expectedPathCost}`,
+      });
     }
     const pivotNode = graph.nodes.find((node) => node.id === entry.nodeId);
     if (
-      !pivotNode
-      || pivotNode.kind !== "pivot"
-      || pivotNode.frontierEntryId !== entry.id
-      || pivotNode.actionId !== entry.id
-      || pivotNode.sourceTier !== entry.sourceTier
-      || pivotNode.sourceLaneId !== entry.sourceLaneId
-      || pivotNode.candidateId !== entry.candidateId
-      || pivotNode.status !== entry.status
-      || pivotNode.data.intent !== entry.intent
-      || pivotNode.data.queryHint !== entry.queryHint
+      !pivotNode ||
+      pivotNode.kind !== "pivot" ||
+      pivotNode.frontierEntryId !== entry.id ||
+      pivotNode.actionId !== entry.id ||
+      pivotNode.sourceTier !== entry.sourceTier ||
+      pivotNode.sourceLaneId !== entry.sourceLaneId ||
+      pivotNode.candidateId !== entry.candidateId ||
+      pivotNode.status !== entry.status ||
+      pivotNode.data.intent !== entry.intent ||
+      pivotNode.data.queryHint !== entry.queryHint
     ) {
       issues.push({
         code: "frontier_pivot_mismatch",
@@ -1526,14 +1614,16 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         message: `${entry.id} does not match its canonical pivot node`,
       });
     }
-    const expansionEdges = graph.edges.filter((edge) =>
-      edge.fromNodeId === entry.parentNodeId
-      && edge.toNodeId === entry.nodeId
-      && edge.frontierEntryId === entry.id
-      && edge.actionId === entry.id
-      && edge.kind === (entry.mutation ? "mutates" : "expands")
-      && edge.edgeCost === entry.edgeCost
-      && edge.pathCost === entry.pathCost);
+    const expansionEdges = graph.edges.filter(
+      (edge) =>
+        edge.fromNodeId === entry.parentNodeId &&
+        edge.toNodeId === entry.nodeId &&
+        edge.frontierEntryId === entry.id &&
+        edge.actionId === entry.id &&
+        edge.kind === (entry.mutation ? "mutates" : "expands") &&
+        edge.edgeCost === entry.edgeCost &&
+        edge.pathCost === entry.pathCost,
+    );
     if (expansionEdges.length !== 1) {
       issues.push({
         code: "frontier_expansion_edge_mismatch",
@@ -1541,10 +1631,10 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         message: `${entry.id} requires exactly one canonical expansion edge`,
       });
     }
-    if (entry.mutation && (
-      entry.parentFrontierEntryId === null
-      || entry.mutation.parentFrontierEntryId !== entry.parentFrontierEntryId
-    )) {
+    if (
+      entry.mutation &&
+      (entry.parentFrontierEntryId === null || entry.mutation.parentFrontierEntryId !== entry.parentFrontierEntryId)
+    ) {
       issues.push({
         code: "mutation_parent_mismatch",
         path: `frontier[${index}].mutation.parentFrontierEntryId`,
@@ -1553,7 +1643,11 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     }
     if (!["rejected", "exhausted"].includes(entry.status)) {
       if (activeDedupe.has(entry.dedupeKey)) {
-        issues.push({ code: "active_dedupe_collision", path: `frontier[${index}].dedupeKey`, message: entry.dedupeKey });
+        issues.push({
+          code: "active_dedupe_collision",
+          path: `frontier[${index}].dedupeKey`,
+          message: entry.dedupeKey,
+        });
       }
       activeDedupe.add(entry.dedupeKey);
     }
@@ -1586,10 +1680,10 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       actionNodesByEntry.set(node.frontierEntryId, nodes);
       const entry = frontierById.get(node.frontierEntryId);
       if (
-        !entry
-        || typeof node.data.tool !== "string"
-        || !entry.allowedTools.includes(node.data.tool)
-        || ["queued", "selected", "mutated"].includes(entry.status)
+        !entry ||
+        typeof node.data.tool !== "string" ||
+        !entry.allowedTools.includes(node.data.tool) ||
+        ["queued", "selected", "mutated"].includes(entry.status)
       ) {
         issues.push({
           code: "invalid_action_node_binding",
@@ -1616,12 +1710,14 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     }
     const entry = frontierById.get(entryId);
     if (entry && nodes.length === 1) {
-      const actionEdges = graph.edges.filter((edge) =>
-        edge.fromNodeId === entry.nodeId
-        && edge.toNodeId === nodes[0].id
-        && edge.actionId === entry.id
-        && edge.frontierEntryId === entry.id
-        && edge.kind === (entry.mutation ? "mutates" : "expands"));
+      const actionEdges = graph.edges.filter(
+        (edge) =>
+          edge.fromNodeId === entry.nodeId &&
+          edge.toNodeId === nodes[0].id &&
+          edge.actionId === entry.id &&
+          edge.frontierEntryId === entry.id &&
+          edge.kind === (entry.mutation ? "mutates" : "expands"),
+      );
       if (actionEdges.length !== 1) {
         issues.push({
           code: "missing_or_duplicate_action_edge",
@@ -1632,13 +1728,13 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     }
   }
   const reportNodes = graph.nodes.filter((node) => node.kind === "report");
-  const reportRequired = graph.seedNodeId !== null
-    && ["completed", "blocked", "canceled", "failed"].includes(graph.status);
+  const reportRequired =
+    graph.seedNodeId !== null && ["completed", "blocked", "canceled", "failed"].includes(graph.status);
   const reportForbidden = graph.status === "active" || graph.status === "empty";
   if (
-    (reportRequired && reportNodes.length !== 1)
-    || (reportForbidden && reportNodes.length !== 0)
-    || (!reportRequired && !reportForbidden && reportNodes.length > 1)
+    (reportRequired && reportNodes.length !== 1) ||
+    (reportForbidden && reportNodes.length !== 0) ||
+    (!reportRequired && !reportForbidden && reportNodes.length > 1)
   ) {
     issues.push({
       code: "invalid_report_node_cardinality",
@@ -1648,14 +1744,14 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
   }
   reportNodes.forEach((node) => {
     if (
-      node.frontierEntryId !== null
-      || node.actionId !== null
-      || node.candidateId !== null
-      || node.evidenceId !== null
-      || node.findingId !== null
-      || node.sourceTier !== null
-      || node.sourceLaneId !== null
-      || node.data.entityKey !== `report:${graph.runId}`
+      node.frontierEntryId !== null ||
+      node.actionId !== null ||
+      node.candidateId !== null ||
+      node.evidenceId !== null ||
+      node.findingId !== null ||
+      node.sourceTier !== null ||
+      node.sourceLaneId !== null ||
+      node.data.entityKey !== `report:${graph.runId}`
     ) {
       issues.push({
         code: "invalid_report_node_projection",
@@ -1666,10 +1762,8 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
   });
 
   const seedNodes = graph.nodes.filter((node) => node.kind === "seed");
-  const hasAdmittedSearchState = graph.seedNodeId !== null
-    || graph.nodes.length > 0
-    || graph.edges.length > 0
-    || graph.frontier.length > 0;
+  const hasAdmittedSearchState =
+    graph.seedNodeId !== null || graph.nodes.length > 0 || graph.edges.length > 0 || graph.frontier.length > 0;
   if (hasAdmittedSearchState && !graphNonEmptyString(graph.seed)) {
     issues.push({
       code: "invalid_graph_seed",
@@ -1679,11 +1773,11 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
   }
   if (graph.status === "empty") {
     if (
-      graph.seedNodeId !== null
-      || graph.nodes.length > 0
-      || graph.edges.length > 0
-      || graph.frontier.length > 0
-      || graph.selectedFrontierEntryIds.length > 0
+      graph.seedNodeId !== null ||
+      graph.nodes.length > 0 ||
+      graph.edges.length > 0 ||
+      graph.frontier.length > 0 ||
+      graph.selectedFrontierEntryIds.length > 0
     ) {
       issues.push({
         code: "invalid_empty_graph",
@@ -1700,12 +1794,12 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       });
     }
   } else if (
-    graph.seedNodeId === null
-    || seedNodes.length !== 1
-    || seedNodes[0]?.id !== graph.seedNodeId
-    || seedNodes[0]?.frontierEntryId !== null
-    || seedNodes[0]?.actionId !== null
-    || seedNodes[0]?.candidateId !== null
+    graph.seedNodeId === null ||
+    seedNodes.length !== 1 ||
+    seedNodes[0]?.id !== graph.seedNodeId ||
+    seedNodes[0]?.frontierEntryId !== null ||
+    seedNodes[0]?.actionId !== null ||
+    seedNodes[0]?.candidateId !== null
   ) {
     issues.push({
       code: "invalid_seed_node",
@@ -1717,11 +1811,7 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
   graph.nodes.forEach((node, index) => {
     if (node.frontierEntryId === null && node.actionId === null) return;
     const entry = node.frontierEntryId ? frontierById.get(node.frontierEntryId) : undefined;
-    if (
-      node.frontierEntryId === null
-      || node.actionId !== node.frontierEntryId
-      || !entry
-    ) {
+    if (node.frontierEntryId === null || node.actionId !== node.frontierEntryId || !entry) {
       issues.push({
         code: "broken_node_action_join",
         path: `nodes[${index}].frontierEntryId`,
@@ -1756,12 +1846,13 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
   // Evidence nodes may precede their action node in untrusted input order.
   graph.nodes.forEach((node, index) => {
     if (node.kind !== "evidence" || node.actionId === null) return;
-    const actionNode = graph.nodes.find((candidate) =>
-      candidate.kind === "action" && candidate.actionId === node.actionId);
+    const actionNode = graph.nodes.find(
+      (candidate) => candidate.kind === "action" && candidate.actionId === node.actionId,
+    );
     if (
-      actionNode?.candidateId !== null
-      && actionNode?.candidateId !== undefined
-      && node.candidateId !== actionNode.candidateId
+      actionNode?.candidateId !== null &&
+      actionNode?.candidateId !== undefined &&
+      node.candidateId !== actionNode.candidateId
     ) {
       issues.push({
         code: "action_evidence_candidate_mismatch",
@@ -1774,9 +1865,9 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
   graph.edges.forEach((edge, index) => {
     if (edge.frontierEntryId !== null || edge.actionId !== null) {
       if (
-        edge.frontierEntryId === null
-        || edge.actionId !== edge.frontierEntryId
-        || !frontierById.has(edge.frontierEntryId)
+        edge.frontierEntryId === null ||
+        edge.actionId !== edge.frontierEntryId ||
+        !frontierById.has(edge.frontierEntryId)
       ) {
         issues.push({
           code: "broken_edge_action_join",
@@ -1796,13 +1887,10 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         message: `${edge.kind} cannot connect ${endpointPair}`,
       });
     }
-    const frontierTransition = (edge.kind === "expands" || edge.kind === "mutates")
-      && to.kind === "pivot";
+    const frontierTransition = (edge.kind === "expands" || edge.kind === "mutates") && to.kind === "pivot";
     if (edge.actionId !== null) {
       const matchingEndpoint = from.actionId === edge.actionId || to.actionId === edge.actionId;
-      const incompatibleFrom = from.actionId !== null
-        && from.actionId !== edge.actionId
-        && !frontierTransition;
+      const incompatibleFrom = from.actionId !== null && from.actionId !== edge.actionId && !frontierTransition;
       const incompatibleTo = to.actionId !== null && to.actionId !== edge.actionId;
       if (!matchingEndpoint || incompatibleFrom || incompatibleTo) {
         issues.push({
@@ -1819,10 +1907,10 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       });
     }
     if (
-      edge.kind !== "separates"
-      && from.candidateId !== null
-      && to.candidateId !== null
-      && from.candidateId !== to.candidateId
+      edge.kind !== "separates" &&
+      from.candidateId !== null &&
+      to.candidateId !== null &&
+      from.candidateId !== to.candidateId
     ) {
       issues.push({
         code: "edge_candidate_scope_mismatch",
@@ -1831,8 +1919,8 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       });
     }
     if (
-      edge.kind === "separates"
-      && (from.candidateId === null || to.candidateId === null || from.candidateId === to.candidateId)
+      edge.kind === "separates" &&
+      (from.candidateId === null || to.candidateId === null || from.candidateId === to.candidateId)
     ) {
       issues.push({
         code: "invalid_candidate_separation",
@@ -1889,9 +1977,7 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     });
   }
   const verifiedFrontierCount = graph.frontier.filter((entry) => entry.status === "verified").length;
-  if (
-    graph.telemetry.expanded !== verifiedFrontierCount
-  ) {
+  if (graph.telemetry.expanded !== verifiedFrontierCount) {
     issues.push({
       code: "tool_outcome_counter_mismatch",
       path: "telemetry.toolCalls",
@@ -1899,9 +1985,8 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     });
   }
   if (
-    graph.mutationStep !== graph.telemetry.mutationsProposed
-    || graph.telemetry.mutationsProposed
-      !== graph.telemetry.mutationsAccepted + graph.telemetry.mutationsRejected
+    graph.mutationStep !== graph.telemetry.mutationsProposed ||
+    graph.telemetry.mutationsProposed !== graph.telemetry.mutationsAccepted + graph.telemetry.mutationsRejected
   ) {
     issues.push({
       code: "mutation_counter_mismatch",
@@ -1922,9 +2007,11 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       issues.push({ code: "invalid_selected_frontier", path: "selectedFrontierEntryIds", message: id });
     }
   }
-  const selectedTiers = new Set(graph.selectedFrontierEntryIds
-    .map((id) => graph.frontier.find((entry) => entry.id === id)?.sourceTier)
-    .filter((tier): tier is SourceTier => tier !== undefined));
+  const selectedTiers = new Set(
+    graph.selectedFrontierEntryIds
+      .map((id) => graph.frontier.find((entry) => entry.id === id)?.sourceTier)
+      .filter((tier): tier is SourceTier => tier !== undefined),
+  );
   if (selectedTiers.size > 1) {
     issues.push({
       code: "mixed_selected_tiers",
@@ -1932,10 +2019,7 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       message: "one frontier batch cannot span source tiers",
     });
   }
-  if (
-    selectedTiers.size === 1
-    && graph.currentSourceTier !== [...selectedTiers][0]
-  ) {
+  if (selectedTiers.size === 1 && graph.currentSourceTier !== [...selectedTiers][0]) {
     issues.push({
       code: "current_source_tier_mismatch",
       path: "currentSourceTier",
@@ -1950,11 +2034,15 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     });
   }
   if (
-    graph.telemetry.mutationToolCalls > graph.telemetry.toolCalls
-    || (graph.telemetry.toolCalls > 0
-      && graph.telemetry.mutationToolCalls / graph.telemetry.toolCalls > MUTATION_SHARE_CAP + Number.EPSILON)
+    graph.telemetry.mutationToolCalls > graph.telemetry.toolCalls ||
+    (graph.telemetry.toolCalls > 0 &&
+      graph.telemetry.mutationToolCalls / graph.telemetry.toolCalls > MUTATION_SHARE_CAP + Number.EPSILON)
   ) {
-    issues.push({ code: "mutation_share_exceeded", path: "telemetry.mutationToolCalls", message: "mutation tool share exceeds 20%" });
+    issues.push({
+      code: "mutation_share_exceeded",
+      path: "telemetry.mutationToolCalls",
+      message: "mutation tool share exceeds 20%",
+    });
   }
   return issues;
 }
@@ -1962,8 +2050,11 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
 export function assertSearchGraph(graph: SearchGraph): void {
   const issues = validateSearchGraph(graph);
   if (issues.length > 0) {
-    throw new Error(`search graph invariant failed: ${issues.map((issue) =>
-      `${issue.code}@${issue.path}:${issue.message}`).join(", ")}`);
+    throw new Error(
+      `search graph invariant failed: ${issues
+        .map((issue) => `${issue.code}@${issue.path}:${issue.message}`)
+        .join(", ")}`,
+    );
   }
 }
 
@@ -2022,9 +2113,7 @@ export function assertSearchGraphEvolution(previous: SearchGraph, next: SearchGr
   if (next.runId !== previous.runId || next.createdAt !== previous.createdAt) {
     throw new Error("search graph identity is immutable");
   }
-  if (previous.seedNodeId !== null && (
-    next.seedNodeId !== previous.seedNodeId || next.seed !== previous.seed
-  )) {
+  if (previous.seedNodeId !== null && (next.seedNodeId !== previous.seedNodeId || next.seed !== previous.seed)) {
     throw new Error("seed identity is immutable after frontier seeding");
   }
   if (next.nextOrdinal < previous.nextOrdinal || next.mutationStep < previous.mutationStep) {
@@ -2033,9 +2122,9 @@ export function assertSearchGraphEvolution(previous: SearchGraph, next: SearchGr
     );
   }
   if (
-    previous.currentSourceTier !== null
-    && next.currentSourceTier !== null
-    && next.currentSourceTier < previous.currentSourceTier
+    previous.currentSourceTier !== null &&
+    next.currentSourceTier !== null &&
+    next.currentSourceTier < previous.currentSourceTier
   ) {
     throw new Error("source hierarchy cursor cannot regress");
   }

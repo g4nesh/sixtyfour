@@ -91,11 +91,12 @@ function evidenceViews(
       id: cleanInlineReportText(item.id),
       candidateId: cleanInlineReportText(item.candidateId),
       claim: cleanReportText(item.claim),
-      contentLabel: exactExcerpt !== null
-        ? "Exact source excerpt"
-        : item.canonicalSubset !== null
-          ? "Structured API claim"
-          : "Admitted source claim",
+      contentLabel:
+        exactExcerpt !== null
+          ? "Exact source excerpt"
+          : item.canonicalSubset !== null
+            ? "Structured API claim"
+            : "Admitted source claim",
       exactExcerpt,
       disposition: item.disposition,
       sourceUrl: url,
@@ -128,32 +129,26 @@ function countLabels(values: readonly string[]): ReportGraphCount[] {
     .map(([label, count]) => ({ label, count }));
 }
 
-function sourceLadder(
-  evidence: readonly ReportEvidenceView[],
-  graph: SearchGraph,
-): ReportSourceTierView[] {
+function sourceLadder(evidence: readonly ReportEvidenceView[], graph: SearchGraph): ReportSourceTierView[] {
   const groups = new Map<number, ReportEvidenceView[]>();
   for (const item of evidence) {
     groups.set(item.sourceTier, [...(groups.get(item.sourceTier) ?? []), item]);
   }
-  const tiers = new Set<number>([
-    ...groups.keys(),
-    ...graph.frontier.map((entry) => entry.sourceTier),
-  ]);
+  const tiers = new Set<number>([...groups.keys(), ...graph.frontier.map((entry) => entry.sourceTier)]);
   return [...tiers]
     .sort((left, right) => left - right)
     .map((tier) => {
       const items = groups.get(tier) ?? [];
       const entries = graph.frontier.filter((entry) => entry.sourceTier === tier);
       return {
-      tier,
-      label: TIER_LABELS[tier] ?? `Source tier ${tier}`,
-      evidenceCount: items.length,
-      frontierCount: entries.length,
-      verifiedCount: entries.filter((entry) => entry.status === "verified").length,
-      rejectedCount: entries.filter((entry) => entry.status === "rejected").length,
-      exhaustedCount: entries.filter((entry) => entry.status === "exhausted").length,
-      sourceFamilies: [...new Set(items.map((item) => item.sourceFamily))].sort(),
+        tier,
+        label: TIER_LABELS[tier] ?? `Source tier ${tier}`,
+        evidenceCount: items.length,
+        frontierCount: entries.length,
+        verifiedCount: entries.filter((entry) => entry.status === "verified").length,
+        rejectedCount: entries.filter((entry) => entry.status === "rejected").length,
+        exhaustedCount: entries.filter((entry) => entry.status === "exhausted").length,
+        sourceFamilies: [...new Set(items.map((item) => item.sourceFamily))].sort(),
       };
     });
 }
@@ -170,8 +165,7 @@ function pathForNode(
     path.unshift(cleanInlineReportText(current.label));
     seen.add(current.id);
     const incomingEdges: SearchGraphEdge[] = [...(incoming.get(current.id) ?? [])];
-    const edge: SearchGraphEdge | undefined = incomingEdges
-      .sort((left, right) => left.id.localeCompare(right.id))[0];
+    const edge: SearchGraphEdge | undefined = incomingEdges.sort((left, right) => left.id.localeCompare(right.id))[0];
     current = edge ? nodes.get(edge.fromNodeId) : undefined;
   }
   return path;
@@ -190,9 +184,10 @@ function graphPaths(graph: SearchGraph): ReportPathView[] {
     ...graph.frontier.filter((entry) => entry.mutation !== null).map((entry) => entry.nodeId),
   ]);
   const terminal = graph.nodes
-    .filter((node) =>
-      !outgoing.has(node.id)
-      && (ACCEPTED_STATUSES.has(node.status) || REJECTED_STATUSES.has(node.status) || node.status === "exhausted"),
+    .filter(
+      (node) =>
+        !outgoing.has(node.id) &&
+        (ACCEPTED_STATUSES.has(node.status) || REJECTED_STATUSES.has(node.status) || node.status === "exhausted"),
     )
     .sort((left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id))
     .slice(0, 16);
@@ -200,25 +195,31 @@ function graphPaths(graph: SearchGraph): ReportPathView[] {
     const isMutation = mutationNodeIds.has(node.id);
     const rejected = REJECTED_STATUSES.has(node.status);
     const frontierCost = graph.frontier.find((entry) => entry.nodeId === node.id)?.pathCost;
-    const incomingCost = [...(incoming.get(node.id) ?? [])]
-      .sort((left, right) => right.pathCost - left.pathCost)[0]?.pathCost;
+    const incomingCost = [...(incoming.get(node.id) ?? [])].sort((left, right) => right.pathCost - left.pathCost)[0]
+      ?.pathCost;
     return {
       id: cleanInlineReportText(node.id),
       disposition: isMutation
-        ? rejected || node.status === "exhausted" ? "mutation_rejected" : "mutation_accepted"
-        : rejected ? "rejected" : node.status === "exhausted" ? "exhausted" : "accepted",
+        ? rejected || node.status === "exhausted"
+          ? "mutation_rejected"
+          : "mutation_accepted"
+        : rejected
+          ? "rejected"
+          : node.status === "exhausted"
+            ? "exhausted"
+            : "accepted",
       path: pathForNode(node, nodes, incoming),
-      cost: typeof frontierCost === "number" && Number.isFinite(frontierCost)
-        ? frontierCost
-        : typeof incomingCost === "number" && Number.isFinite(incomingCost) ? incomingCost : null,
+      cost:
+        typeof frontierCost === "number" && Number.isFinite(frontierCost)
+          ? frontierCost
+          : typeof incomingCost === "number" && Number.isFinite(incomingCost)
+            ? incomingCost
+            : null,
     };
   });
 }
 
-function searchStrategy(
-  evidence: readonly ReportEvidenceView[],
-  graph: SearchGraph,
-): ReportSearchStrategyView {
+function searchStrategy(evidence: readonly ReportEvidenceView[], graph: SearchGraph): ReportSearchStrategyView {
   const nodeCount = graph.nodes.length;
   const edgeCount = graph.edges.length;
   return {
@@ -256,24 +257,19 @@ function usageRows(usage: BudgetUsage): Array<{ label: string; value: string }> 
   ].map(([label, value]) => ({ label: String(label), value: String(value) }));
 }
 
-function executiveSummary(
-  report: InvestigationReport,
-  subject: string,
-  findingCount: number,
-): string {
-  const identity = report.identity.status === "resolved"
-    ? `Identity resolved to ${subject} with a ${percentage(report.identity.selectedScore)} candidate score and ${percentage(report.identity.runnerUpMargin)} margin over the retained runner-up.`
-    : report.identity.status === "ambiguous"
-      ? `Identity remains ambiguous; Atlas retained competing candidates instead of merging them.`
-      : "Identity remains unresolved; the available public-professional evidence did not clear the resolution threshold.";
+function executiveSummary(report: InvestigationReport, subject: string, findingCount: number): string {
+  const identity =
+    report.identity.status === "resolved"
+      ? `Identity resolved to ${subject} with a ${percentage(report.identity.selectedScore)} candidate score and ${percentage(report.identity.runnerUpMargin)} margin over the retained runner-up.`
+      : report.identity.status === "ambiguous"
+        ? `Identity remains ambiguous; Atlas retained competing candidates instead of merging them.`
+        : "Identity remains unresolved; the available public-professional evidence did not clear the resolution threshold.";
   const findings = `${findingCount} finding${findingCount === 1 ? "" : "s"} cite${findingCount === 1 ? "s" : ""} admitted evidence across ${report.coverage.independentSourceFamilyCount} independent source famil${report.coverage.independentSourceFamilyCount === 1 ? "y" : "ies"}.`;
   const coverage = `Coverage reached ${percentage(report.coverage.score)} for the requested categories; the run stopped with ${report.stop.reason.replaceAll("_", " ")}.`;
   return cleanReportText(`${identity} ${findings} ${coverage}`);
 }
 
-export function createReportViewModel(
-  report: InvestigationReport,
-): ReportViewModel {
+export function createReportViewModel(report: InvestigationReport): ReportViewModel {
   const evidence = evidenceViews(report.evidence, report.searchGraph);
   const selectedId = report.identity.selectedCandidateId;
   const candidates = [...report.candidates]
@@ -285,19 +281,27 @@ export function createReportViewModel(
     .map(candidateView);
   const selected = candidates.find((candidate) => candidate.id === selectedId) ?? null;
   const alternatives = candidates.filter((candidate) => candidate.id !== selectedId);
-  const subject = selected?.name
-    ?? (report.target.name ? cleanInlineReportText(report.target.name) : cleanInlineReportText(report.input.query));
+  const subject =
+    selected?.name ??
+    (report.target.name ? cleanInlineReportText(report.target.name) : cleanInlineReportText(report.input.query));
   const evidenceViewById = new Map(evidence.items.map((item) => [item.id, item]));
-  const citedSourcesFor = (ids: readonly string[]) => ids
-    .map((id) => {
-      const ref = evidence.refsById.get(id);
-      const view = evidenceViewById.get(cleanInlineReportText(id));
-      if (!ref || !view || !view.sourceUrl) return null;
-      let domain = view.sourceFamily;
-      try { domain = new URL(view.sourceUrl).hostname.replace(/^www\./, ""); } catch { /* keep family */ }
-      return { ref, url: view.sourceUrl, title: view.title, domain };
-    })
-    .filter((source): source is { ref: string; url: string; title: string | null; domain: string } => Boolean(source));
+  const citedSourcesFor = (ids: readonly string[]) =>
+    ids
+      .map((id) => {
+        const ref = evidence.refsById.get(id);
+        const view = evidenceViewById.get(cleanInlineReportText(id));
+        if (!ref || !view || !view.sourceUrl) return null;
+        let domain = view.sourceFamily;
+        try {
+          domain = new URL(view.sourceUrl).hostname.replace(/^www\./, "");
+        } catch {
+          /* keep family */
+        }
+        return { ref, url: view.sourceUrl, title: view.title, domain };
+      })
+      .filter((source): source is { ref: string; url: string; title: string | null; domain: string } =>
+        Boolean(source),
+      );
   const findings = [...report.findings]
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((finding) => ({
@@ -307,16 +311,21 @@ export function createReportViewModel(
       category: finding.category,
       confidenceScore: finiteScore(finding.confidence.score),
       confidenceLabel: finding.confidence.label,
-      citations: finding.evidenceIds.map((id) => evidence.refsById.get(id)).filter((ref): ref is string => Boolean(ref)),
-      counterCitations: finding.counterEvidenceIds.map((id) => evidence.refsById.get(id)).filter((ref): ref is string => Boolean(ref)),
+      citations: finding.evidenceIds
+        .map((id) => evidence.refsById.get(id))
+        .filter((ref): ref is string => Boolean(ref)),
+      counterCitations: finding.counterEvidenceIds
+        .map((id) => evidence.refsById.get(id))
+        .filter((ref): ref is string => Boolean(ref)),
       sources: citedSourcesFor(finding.evidenceIds),
       caveats: finding.caveats.map(cleanReportText).sort(),
     }));
-  const identityRationale = report.identity.status === "resolved"
-    ? `The selected candidate cleared the ${percentage(report.identity.resolutionThreshold)} resolution threshold and the ${percentage(report.identity.marginThreshold)} separation margin.`
-    : report.identity.status === "ambiguous"
-      ? "Candidates were retained separately because the score margin did not justify a strong-identifier merge."
-      : "No candidate met both the resolution and candidate-separation requirements.";
+  const identityRationale =
+    report.identity.status === "resolved"
+      ? `The selected candidate cleared the ${percentage(report.identity.resolutionThreshold)} resolution threshold and the ${percentage(report.identity.marginThreshold)} separation margin.`
+      : report.identity.status === "ambiguous"
+        ? "Candidates were retained separately because the score margin did not justify a strong-identifier merge."
+        : "No candidate met both the resolution and candidate-separation requirements.";
   return {
     schemaVersion: 1,
     classification: "PUBLIC-SOURCE INTELLIGENCE",
@@ -329,9 +338,13 @@ export function createReportViewModel(
       depth: report.input.requestedDepth ?? "unspecified",
       requestedCategories: [...new Set(report.coverage.requestedCategories)].sort(),
       targetKind: report.target.kind,
-      explicitIdentifierKinds: [...new Set(report.target.identifiers
-        .filter((identifier) => identifier.provenance === "user_input")
-        .map((identifier) => identifier.kind))].sort(),
+      explicitIdentifierKinds: [
+        ...new Set(
+          report.target.identifiers
+            .filter((identifier) => identifier.provenance === "user_input")
+            .map((identifier) => identifier.kind),
+        ),
+      ].sort(),
       scope: "Public professional sources only",
       status: report.status,
       generatedAt: report.generatedAt,
@@ -370,10 +383,14 @@ export function createReportViewModel(
       stopDetail: cleanReportText(report.stop.detail),
     },
     methodology: {
-      evidenceStandard: "Only admitted public-professional evidence appears here. Exact source excerpts are kept distinct from structured API claims, and discovery-only snippets are not promoted into findings.",
-      confidenceStandard: "Finding confidence is computed from candidate-bound evidence, independent source families, contradictions, reliability, and spoofability caps. Model prose is never finding authority.",
-      graphStandard: "The search graph records actual frontier execution, including rejected and exhausted paths. Best-first path scores guide which legal action runs next but never increase finding confidence.",
-      safetyNote: "Atlas excludes private contact enrichment, home addresses, personal phone lookup, family mapping, precise location, credentials, financial data, and high-impact decisioning. The scope is public professional intelligence only.",
+      evidenceStandard:
+        "Only admitted public-professional evidence appears here. Exact source excerpts are kept distinct from structured API claims, and discovery-only snippets are not promoted into findings.",
+      confidenceStandard:
+        "Finding confidence is computed from candidate-bound evidence, independent source families, contradictions, reliability, and spoofability caps. Model prose is never finding authority.",
+      graphStandard:
+        "The search graph records actual frontier execution, including rejected and exhausted paths. Best-first path scores guide which legal action runs next but never increase finding confidence.",
+      safetyNote:
+        "Atlas excludes private contact enrichment, home addresses, personal phone lookup, family mapping, precise location, credentials, financial data, and high-impact decisioning. The scope is public professional intelligence only.",
     },
   };
 }

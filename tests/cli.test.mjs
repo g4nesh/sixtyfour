@@ -6,6 +6,8 @@ const projectRoot = new URL("../", import.meta.url);
 
 function runAtlas(arguments_) {
   const environment = { ...process.env };
+  delete environment.GEMINI_API_KEY;
+  delete environment.OPENAI_API_KEY;
   delete environment.OPENROUTER_API_KEY;
   return spawnSync(process.execPath, ["bin/run.mjs", ...arguments_], {
     cwd: projectRoot,
@@ -16,7 +18,10 @@ function runAtlas(arguments_) {
 }
 
 function ndjson(value) {
-  return value.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return value
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
 }
 
 test("CLI streams replay NDJSON from the shared engine and preserves terminal status", () => {

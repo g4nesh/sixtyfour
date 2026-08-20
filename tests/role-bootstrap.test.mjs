@@ -12,10 +12,7 @@ after(async () => vite.close());
 
 const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 const agent = await vite.ssrLoadModule("/lib/agent/index.ts");
-const {
-  createLiveDependencies,
-  gateExtractedCandidate,
-} = await vite.ssrLoadModule("/lib/live/orchestrator.ts");
+const { createLiveDependencies, gateExtractedCandidate } = await vite.ssrLoadModule("/lib/live/orchestrator.ts");
 
 const ROLE_URL = "https://profiles.example/suzie-bishop";
 const UNBOUND_URL = "https://profiles.example/mallory-guess";
@@ -30,15 +27,17 @@ function providerResponse({ annotations, content = null, toolCalls, id }) {
   return jsonResponse({
     id,
     model: "test/model",
-    choices: [{
-      finish_reason: toolCalls ? "tool_calls" : "stop",
-      message: {
-        role: "assistant",
-        content,
-        ...(annotations ? { annotations } : {}),
-        ...(toolCalls ? { tool_calls: toolCalls } : {}),
+    choices: [
+      {
+        finish_reason: toolCalls ? "tool_calls" : "stop",
+        message: {
+          role: "assistant",
+          content,
+          ...(annotations ? { annotations } : {}),
+          ...(toolCalls ? { tool_calls: toolCalls } : {}),
+        },
       },
-    }],
+    ],
     usage: {
       prompt_tokens: 3,
       completion_tokens: 2,
@@ -128,15 +127,17 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
         if (body.tools?.some((tool) => tool.function?.name === "submit_evidence_extraction")) {
           return providerResponse({
             id: "generation-role-extraction",
-            toolCalls: [functionCall("submit_evidence_extraction", {
-              claim: "Suzie Bishop is Ariglad's CTO.",
-              excerpt: "Suzie Bishop is the Chief Technology Officer at Ariglad.",
-              publisher: "Profiles Example",
-              sourceType: "professional_profile",
-              temporalStatus: "current",
-              subjectName: "Suzie Bishop",
-              organization: "Ariglad",
-            })],
+            toolCalls: [
+              functionCall("submit_evidence_extraction", {
+                claim: "Suzie Bishop is Ariglad's CTO.",
+                excerpt: "Suzie Bishop is the Chief Technology Officer at Ariglad.",
+                publisher: "Profiles Example",
+                sourceType: "professional_profile",
+                temporalStatus: "current",
+                subjectName: "Suzie Bishop",
+                organization: "Ariglad",
+              }),
+            ],
           });
         }
         throw new Error("unexpected provider request");
@@ -152,17 +153,20 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
     },
   });
 
-  const search = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-role-search",
-    tool: "search_web",
-    purpose: "Find the current CTO from provider-attested public results.",
-    arguments: {
-      query: "Ariglad CTO",
-      candidateName: "Mallory Guess",
+  const search = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-role-search",
+      tool: "search_web",
+      purpose: "Find the current CTO from provider-attested public results.",
+      arguments: {
+        query: "Ariglad CTO",
+        candidateName: "Mallory Guess",
+      },
+      budgetClass: "search",
     },
-    budgetClass: "search",
-  }, actionContext(engine));
+    actionContext(engine),
+  );
 
   assert.equal(search.status, "succeeded");
   assert.equal(search.data.observedCitationCount, 2);
@@ -183,24 +187,30 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
   const candidate = engine.addCandidate(search.candidates[0]).candidate;
   assert.equal(candidate.status, "separate");
   assert.equal(candidate.score.total, 0);
-  assert.equal(engine.admitEvidence({
-    ...search.evidence[0],
-    candidateId: candidate.id,
-    candidateRef: undefined,
-  }).admitted, true);
+  assert.equal(
+    engine.admitEvidence({
+      ...search.evidence[0],
+      candidateId: candidate.id,
+      candidateRef: undefined,
+    }).admitted,
+    true,
+  );
 
-  const direct = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-role-fetch",
-    tool: "fetch_public_source",
-    purpose: "Bind the attested candidate to the exact fetched source.",
-    arguments: {
-      leadId: search.evidence[0].attributes.leadId,
-      claimFocus: "Current CTO role at Ariglad",
+  const direct = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-role-fetch",
+      tool: "fetch_public_source",
+      purpose: "Bind the attested candidate to the exact fetched source.",
+      arguments: {
+        leadId: search.evidence[0].attributes.leadId,
+        claimFocus: "Current CTO role at Ariglad",
+      },
+      candidateId: candidate.id,
+      budgetClass: "fetch",
     },
-    candidateId: candidate.id,
-    budgetClass: "fetch",
-  }, actionContext(engine));
+    actionContext(engine),
+  );
 
   assert.equal(direct.status, "succeeded");
   assert.deepEqual(fetchedUrls, [ROLE_URL]);
@@ -210,8 +220,11 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
   assert.equal(direct.evidence[0].claim, "Suzie Bishop is the Chief Technology Officer at Ariglad.");
   assert.equal(direct.candidateSignals.length, 1);
   assert.equal(direct.candidateSignals[0].candidateId, candidate.id);
-  assert.ok(direct.candidateSignals[0].signals.some((signal) =>
-    signal.kind === "organization" && signal.normalizedValue === "ariglad"));
+  assert.ok(
+    direct.candidateSignals[0].signals.some(
+      (signal) => signal.kind === "organization" && signal.normalizedValue === "ariglad",
+    ),
+  );
 
   engine.addCandidateSignals(candidate.id, direct.candidateSignals[0].signals);
   const admission = engine.admitEvidence(direct.evidence[0]);
@@ -244,49 +257,55 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
         if (body.tools?.some((tool) => tool.type === "openrouter:web_search")) {
           return providerResponse({
             id: "generation-plain-search",
-            annotations: [{
-              type: "url_citation",
-              url_citation: {
-                url: sourceUrl,
-                title: "Chris Anderson — Acme Labs",
-                content: "Chris Anderson works at Acme Labs.",
+            annotations: [
+              {
+                type: "url_citation",
+                url_citation: {
+                  url: sourceUrl,
+                  title: "Chris Anderson — Acme Labs",
+                  content: "Chris Anderson works at Acme Labs.",
+                },
               },
-            }],
+            ],
           });
         }
         if (body.tools?.some((tool) => tool.function?.name === "submit_evidence_extraction")) {
           return providerResponse({
             id: "generation-plain-extraction",
-            toolCalls: [functionCall("submit_evidence_extraction", {
-              claim: "Chris Anderson works at Acme Labs.",
-              excerpt: "Chris Anderson works at Acme Labs.",
-              publisher: "First Example",
-              sourceType: "professional_profile",
-              temporalStatus: "current",
-              subjectName: "Chris Anderson",
-              organization: "Acme Labs",
-            })],
+            toolCalls: [
+              functionCall("submit_evidence_extraction", {
+                claim: "Chris Anderson works at Acme Labs.",
+                excerpt: "Chris Anderson works at Acme Labs.",
+                publisher: "First Example",
+                sourceType: "professional_profile",
+                temporalStatus: "current",
+                subjectName: "Chris Anderson",
+                organization: "Acme Labs",
+              }),
+            ],
           });
         }
       }
       if (url.href === sourceUrl) {
-        return new Response(
-          "<html><p>Chris Anderson works at Acme Labs.</p></html>",
-          { headers: { "content-type": "text/html" } },
-        );
+        return new Response("<html><p>Chris Anderson works at Acme Labs.</p></html>", {
+          headers: { "content-type": "text/html" },
+        });
       }
       throw new Error(`unexpected outbound URL ${url.href}`);
     },
   });
 
-  const search = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-plain-search",
-    tool: "search_web",
-    purpose: "Find direct public professional sources for the named subject.",
-    arguments: { query: "Chris Anderson public professional profile" },
-    budgetClass: "search",
-  }, actionContext(engine));
+  const search = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-plain-search",
+      tool: "search_web",
+      purpose: "Find direct public professional sources for the named subject.",
+      arguments: { query: "Chris Anderson public professional profile" },
+      budgetClass: "search",
+    },
+    actionContext(engine),
+  );
   assert.equal(search.status, "succeeded");
   assert.equal(search.candidates.length, 1);
   const primary = engine.addCandidate(search.candidates[0]).candidate;
@@ -294,29 +313,38 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
   delete lead.candidateRef;
   assert.equal(engine.admitEvidence({ ...lead, candidateId: primary.id }).admitted, true);
 
-  const direct = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-plain-fetch",
-    tool: "fetch_public_source",
-    purpose: "Inspect the exact provider-attested lead without assuming identity.",
-    arguments: {
-      leadId: search.evidence[0].attributes.leadId,
-      claimFocus: "Public professional identity and organization",
+  const direct = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-plain-fetch",
+      tool: "fetch_public_source",
+      purpose: "Inspect the exact provider-attested lead without assuming identity.",
+      arguments: {
+        leadId: search.evidence[0].attributes.leadId,
+        claimFocus: "Public professional identity and organization",
+      },
+      candidateId: primary.id,
+      budgetClass: "fetch",
     },
-    candidateId: primary.id,
-    budgetClass: "fetch",
-  }, actionContext(engine));
+    actionContext(engine),
+  );
 
   assert.equal(direct.status, "partial");
-  assert.equal(direct.diagnostics.some((item) =>
-    item.code === "candidate_binding_strong_binding_missing"), true);
+  assert.equal(
+    direct.diagnostics.some((item) => item.code === "candidate_binding_strong_binding_missing"),
+    true,
+  );
   assert.equal(direct.candidates.length, 1);
   assert.equal(direct.evidence.length, 1);
   assert.equal(direct.evidence[0].candidateId, undefined);
   assert.equal(typeof direct.evidence[0].candidateRef, "string");
   assert.equal(direct.evidence[0].excerpt, "Chris Anderson works at Acme Labs.");
-  assert.equal(engine.snapshot().evidence.every((item) =>
-    item.candidateId !== primary.id || item.disposition === "discovery_only"), true);
+  assert.equal(
+    engine
+      .snapshot()
+      .evidence.every((item) => item.candidateId !== primary.id || item.disposition === "discovery_only"),
+    true,
+  );
 
   const quarantined = engine.addCandidate(direct.candidates[0]).candidate;
   const quoted = { ...direct.evidence[0] };

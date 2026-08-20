@@ -103,27 +103,32 @@ function parseSignature(
   authorAccount: string | null,
   committerAccount: string | null,
 ): CommitSignatureSummary {
-  if (!isRecord(value)) return {
-    verified: false,
-    reason: null,
-    verifiedAt: null,
-    committerAccount,
-    identityMatch: false,
-  };
+  if (!isRecord(value))
+    return {
+      verified: false,
+      reason: null,
+      verifiedAt: null,
+      committerAccount,
+      identityMatch: false,
+    };
   const verified = value.verified === true && value.reason === "valid";
   return {
     verified,
     reason: asString(value.reason),
     verifiedAt: validIsoDate(value.verified_at),
     committerAccount,
-    identityMatch: verified
-      && authorAccount !== null
-      && committerAccount !== null
-      && authorAccount.toLowerCase() === committerAccount.toLowerCase(),
+    identityMatch:
+      verified &&
+      authorAccount !== null &&
+      committerAccount !== null &&
+      authorAccount.toLowerCase() === committerAccount.toLowerCase(),
   };
 }
 
-function parseSearchCommit(item: unknown, expectedEmail: string): { commit: SearchCommitItem | null; mismatch: boolean } {
+function parseSearchCommit(
+  item: unknown,
+  expectedEmail: string,
+): { commit: SearchCommitItem | null; mismatch: boolean } {
   if (!isRecord(item) || !isRecord(item.commit) || !isRecord(item.repository)) {
     return { commit: null, mismatch: false };
   }
@@ -137,8 +142,10 @@ function parseSearchCommit(item: unknown, expectedEmail: string): { commit: Sear
   const repositoryUrl = asString(item.repository.html_url);
   const url = asString(item.html_url);
   if (
-    !sha || !/^[0-9a-f]{7,64}$/i.test(sha) ||
-    !repository || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ||
+    !sha ||
+    !/^[0-9a-f]{7,64}$/i.test(sha) ||
+    !repository ||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ||
     !repositoryUrl?.startsWith("https://github.com/") ||
     !url?.startsWith("https://github.com/")
   ) {
@@ -150,9 +157,7 @@ function parseSearchCommit(item: unknown, expectedEmail: string): { commit: Sear
   const normalizedLogin = login && /^[A-Za-z0-9-]{1,39}$/.test(login) ? login : null;
   const committer = isRecord(item.committer) ? item.committer : null;
   const rawCommitterLogin = committer ? asString(committer.login) : null;
-  const committerLogin = rawCommitterLogin && /^[A-Za-z0-9-]{1,39}$/.test(rawCommitterLogin)
-    ? rawCommitterLogin
-    : null;
+  const committerLogin = rawCommitterLogin && /^[A-Za-z0-9-]{1,39}$/.test(rawCommitterLogin) ? rawCommitterLogin : null;
   return {
     mismatch: false,
     commit: {
@@ -180,9 +185,7 @@ function makeGithubHeaders(token?: string): Headers {
 }
 
 function isRateLimited(response: Response): boolean {
-  return response.status === 429 || (
-    response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0"
-  );
+  return response.status === 429 || (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0");
 }
 
 function finish(
@@ -207,7 +210,9 @@ function finish(
   };
 }
 
-function strongestSignature(commits: readonly GithubCodegraphCommit[]): (CommitSignatureSummary & { commitUrl: string }) | null {
+function strongestSignature(
+  commits: readonly GithubCodegraphCommit[],
+): (CommitSignatureSummary & { commitUrl: string }) | null {
   const verified = commits.find((commit) => commit.signature.verified && commit.signature.identityMatch);
   if (verified) return { ...verified.signature, commitUrl: verified.url };
   const withReason = commits.find((commit) => commit.signature.reason !== null);
@@ -251,24 +256,44 @@ export async function investigateGithubEmailCodegraph(
   const startedAt = now();
   const exactEmail = typeof target?.email === "string" ? target.email.trim() : "";
   if (target?.provenance !== "explicit_user_input") {
-    return finish(startedAt, now, "skipped", null, [], [{
-      code: "explicit_email_provenance_required",
-      severity: "warning",
-      message: "GitHub email correlation is restricted to an email explicitly supplied by the user.",
-      retryable: false,
-    }], 0, 0, false);
+    return finish(
+      startedAt,
+      now,
+      "skipped",
+      null,
+      [],
+      [
+        {
+          code: "explicit_email_provenance_required",
+          severity: "warning",
+          message: "GitHub email correlation is restricted to an email explicitly supplied by the user.",
+          retryable: false,
+        },
+      ],
+      0,
+      0,
+      false,
+    );
   }
-  if (
-    exactEmail.length > 254 ||
-    /[\r\n\s]/.test(exactEmail) ||
-    !/^[^@<>]+@[^@<>]+\.[^@<>]+$/.test(exactEmail)
-  ) {
-    return finish(startedAt, now, "skipped", null, [], [{
-      code: "invalid_email",
-      severity: "warning",
-      message: "GitHub commit correlation requires one syntactically valid exact email address.",
-      retryable: false,
-    }], 0, 0, false);
+  if (exactEmail.length > 254 || /[\r\n\s]/.test(exactEmail) || !/^[^@<>]+@[^@<>]+\.[^@<>]+$/.test(exactEmail)) {
+    return finish(
+      startedAt,
+      now,
+      "skipped",
+      null,
+      [],
+      [
+        {
+          code: "invalid_email",
+          severity: "warning",
+          message: "GitHub commit correlation requires one syntactically valid exact email address.",
+          retryable: false,
+        },
+      ],
+      0,
+      0,
+      false,
+    );
   }
 
   const maxCommits = bounded(options.maxCommits, 30, 1, 100);
@@ -284,13 +309,12 @@ export async function investigateGithubEmailCodegraph(
     maxRetryAfterMs: 5_000,
     fetch: context.fetch,
     clock: now,
-    beforeRequest: ({ safeUrl: outboundUrl }) => reserveToolBudget(context, {
-      tool: outboundUrl.endsWith("/search/commits")
-        ? "github_email_codegraph"
-        : "github_commit_signature",
-      networkRequests: 1,
-      expectedBytes: maxResponseBytes,
-    }),
+    beforeRequest: ({ safeUrl: outboundUrl }) =>
+      reserveToolBudget(context, {
+        tool: outboundUrl.endsWith("/search/commits") ? "github_email_codegraph" : "github_commit_signature",
+        networkRequests: 1,
+        expectedBytes: maxResponseBytes,
+      }),
   });
   const searchUrl = new URL("https://api.github.com/search/commits");
   searchUrl.searchParams.set("q", `author-email:${exactEmail} is:public`);
@@ -309,53 +333,113 @@ export async function investigateGithubEmailCodegraph(
   } catch (error) {
     const retryable = error instanceof HardenedFetchError && error.retryable;
     const budgetExhausted = error instanceof HardenedFetchError && error.code === "budget_exhausted";
-    return finish(startedAt, now, budgetExhausted ? "skipped" : "failed", null, [], [{
-      code: error instanceof HardenedFetchError ? error.code : "github_unavailable",
-      severity: budgetExhausted ? "info" : "error",
-      message: budgetExhausted
-        ? "GitHub correlation was skipped because the network budget was exhausted."
-        : "GitHub commit search was unavailable.",
-      retryable,
-    }], error instanceof HardenedFetchError ? error.requests : requests, bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      budgetExhausted ? "skipped" : "failed",
+      null,
+      [],
+      [
+        {
+          code: error instanceof HardenedFetchError ? error.code : "github_unavailable",
+          severity: budgetExhausted ? "info" : "error",
+          message: budgetExhausted
+            ? "GitHub correlation was skipped because the network budget was exhausted."
+            : "GitHub commit search was unavailable.",
+          retryable,
+        },
+      ],
+      error instanceof HardenedFetchError ? error.requests : requests,
+      bytesRead,
+      true,
+    );
   }
   requests += search.requests;
   bytesRead += search.bytesRead;
   if (isRateLimited(search.response)) {
-    return finish(startedAt, now, "rate_limited", null, [], [{
-      code: "github_rate_limited",
-      severity: "warning",
-      message: "GitHub rate-limited commit search; absence cannot be assessed.",
-      retryable: true,
-      details: { resetEpochSeconds: nonnegativeInteger(search.response.headers.get("x-ratelimit-reset")) },
-    }], requests, bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "rate_limited",
+      null,
+      [],
+      [
+        {
+          code: "github_rate_limited",
+          severity: "warning",
+          message: "GitHub rate-limited commit search; absence cannot be assessed.",
+          retryable: true,
+          details: { resetEpochSeconds: nonnegativeInteger(search.response.headers.get("x-ratelimit-reset")) },
+        },
+      ],
+      requests,
+      bytesRead,
+      true,
+    );
   }
   if (!search.response.ok) {
-    return finish(startedAt, now, "failed", null, [], [{
-      code: "github_http_error",
-      severity: "error",
-      message: `GitHub commit search returned HTTP ${search.response.status}.`,
-      retryable: search.response.status >= 500,
-    }], requests, bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [],
+      [
+        {
+          code: "github_http_error",
+          severity: "error",
+          message: `GitHub commit search returned HTTP ${search.response.status}.`,
+          retryable: search.response.status >= 500,
+        },
+      ],
+      requests,
+      bytesRead,
+      true,
+    );
   }
 
   let payload: unknown;
   try {
     payload = await search.response.json();
   } catch {
-    return finish(startedAt, now, "failed", null, [], [{
-      code: "github_invalid_json",
-      severity: "error",
-      message: "GitHub commit search returned malformed JSON.",
-      retryable: true,
-    }], requests, bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [],
+      [
+        {
+          code: "github_invalid_json",
+          severity: "error",
+          message: "GitHub commit search returned malformed JSON.",
+          retryable: true,
+        },
+      ],
+      requests,
+      bytesRead,
+      true,
+    );
   }
   if (!isRecord(payload) || !Array.isArray(payload.items)) {
-    return finish(startedAt, now, "failed", null, [], [{
-      code: "github_invalid_response",
-      severity: "error",
-      message: "GitHub commit search returned an unexpected response shape.",
-      retryable: false,
-    }], requests, bytesRead, true);
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [],
+      [
+        {
+          code: "github_invalid_response",
+          severity: "error",
+          message: "GitHub commit search returned an unexpected response shape.",
+          retryable: false,
+        },
+      ],
+      requests,
+      bytesRead,
+      true,
+    );
   }
 
   const totalCountReported = nonnegativeInteger(payload.total_count);
@@ -370,40 +454,42 @@ export async function investigateGithubEmailCodegraph(
     if (parsed.commit) commits.push(parsed.commit);
   }
   const diagnostics: ToolDiagnostic[] = [];
-  if (mismatchCount) diagnostics.push({
-    code: "github_email_mismatch",
-    severity: "warning",
-    message: "GitHub returned commit rows whose author email did not exactly match the requested identifier; they were excluded.",
-    retryable: false,
-    details: { count: mismatchCount },
-  });
-  if (incompleteResults) diagnostics.push({
-    code: "github_incomplete_results",
-    severity: "warning",
-    message: "GitHub marked the commit search incomplete; the returned graph is not exhaustive.",
-    retryable: true,
-  });
-  if (capped) diagnostics.push({
-    code: "github_bounded_results",
-    severity: "info",
-    message: "The commit graph was intentionally capped; account and repository counts describe only returned rows.",
-    retryable: false,
-    details: { returned: payload.items.length, totalReported: totalCountReported },
-  });
+  if (mismatchCount)
+    diagnostics.push({
+      code: "github_email_mismatch",
+      severity: "warning",
+      message:
+        "GitHub returned commit rows whose author email did not exactly match the requested identifier; they were excluded.",
+      retryable: false,
+      details: { count: mismatchCount },
+    });
+  if (incompleteResults)
+    diagnostics.push({
+      code: "github_incomplete_results",
+      severity: "warning",
+      message: "GitHub marked the commit search incomplete; the returned graph is not exhaustive.",
+      retryable: true,
+    });
+  if (capped)
+    diagnostics.push({
+      code: "github_bounded_results",
+      severity: "info",
+      message: "The commit graph was intentionally capped; account and repository counts describe only returned rows.",
+      retryable: false,
+      details: { returned: payload.items.length, totalReported: totalCountReported },
+    });
 
-  const signatureSelection = selectSignatureChecks(
-    commits,
-    bounded(options.maxSignatureChecks, 6, 0, 20),
-  );
+  const signatureSelection = selectSignatureChecks(commits, bounded(options.maxSignatureChecks, 6, 0, 20));
   const checks = signatureSelection.selected;
   let signatureChecksIncomplete = checks.length < signatureSelection.eligible;
-  if (signatureChecksIncomplete) diagnostics.push({
-    code: "signature_checks_bounded",
-    severity: "info",
-    message: "Commit signature checks were bounded; unchecked rows remain unverified.",
-    retryable: false,
-    details: { checked: checks.length, eligible: signatureSelection.eligible },
-  });
+  if (signatureChecksIncomplete)
+    diagnostics.push({
+      code: "signature_checks_bounded",
+      severity: "info",
+      message: "Commit signature checks were bounded; unchecked rows remain unverified.",
+      retryable: false,
+      details: { checked: checks.length, eligible: signatureSelection.eligible },
+    });
   for (const commit of checks) {
     const [owner, repositoryName] = commit.repository.split("/");
     const detailUrl = new URL(
@@ -454,7 +540,9 @@ export async function investigateGithubEmailCodegraph(
       diagnostics.push({
         code: budgetExhausted
           ? "signature_check_budget_exhausted"
-          : error instanceof HardenedFetchError ? error.code : "signature_check_failed",
+          : error instanceof HardenedFetchError
+            ? error.code
+            : "signature_check_failed",
         severity: budgetExhausted ? "info" : "warning",
         message: budgetExhausted
           ? "Remaining commit signature checks were skipped because the network budget was exhausted."
@@ -468,13 +556,15 @@ export async function investigateGithubEmailCodegraph(
   const signatureIdentityMismatches = commits.filter(
     (commit) => commit.signature.verified && !commit.signature.identityMatch,
   ).length;
-  if (signatureIdentityMismatches) diagnostics.push({
-    code: "signature_identity_mismatch",
-    severity: "warning",
-    message: "Verified signatures with a different or missing committer account did not strengthen the author-email identity edge.",
-    retryable: false,
-    details: { count: signatureIdentityMismatches },
-  });
+  if (signatureIdentityMismatches)
+    diagnostics.push({
+      code: "signature_identity_mismatch",
+      severity: "warning",
+      message:
+        "Verified signatures with a different or missing committer account did not strengthen the author-email identity edge.",
+      retryable: false,
+      details: { count: signatureIdentityMismatches },
+    });
 
   const grouped = new Map<string, SearchCommitItem[]>();
   for (const commit of commits) {
@@ -494,21 +584,24 @@ export async function investigateGithubEmailCodegraph(
       keybaseProofs: [],
     };
   });
-  if (accounts.length > 1) diagnostics.push({
-    code: "multiple_github_accounts",
-    severity: "warning",
-    message: "The exact email appears in commits attributed to multiple GitHub accounts; the accounts remain separate candidates.",
-    retryable: false,
-    details: { count: accounts.length },
-  });
+  if (accounts.length > 1)
+    diagnostics.push({
+      code: "multiple_github_accounts",
+      severity: "warning",
+      message:
+        "The exact email appears in commits attributed to multiple GitHub accounts; the accounts remain separate candidates.",
+      retryable: false,
+      details: { count: accounts.length },
+    });
   const unattributedCommitCount = commits.filter((commit) => commit.githubAccount === null).length;
-  if (unattributedCommitCount) diagnostics.push({
-    code: "github_author_null",
-    severity: "info",
-    message: "Some exact-email commits have no GitHub account association and remain metadata-only edges.",
-    retryable: false,
-    details: { count: unattributedCommitCount },
-  });
+  if (unattributedCommitCount)
+    diagnostics.push({
+      code: "github_author_null",
+      severity: "info",
+      message: "Some exact-email commits have no GitHub account association and remain metadata-only edges.",
+      retryable: false,
+      details: { count: unattributedCommitCount },
+    });
 
   let optionalIncomplete = false;
   if (options.includeKeybase) {
@@ -544,7 +637,9 @@ export async function investigateGithubEmailCodegraph(
       signatureReason: commit.signature.reason,
     },
     candidate: {
-      candidateId: commit.githubAccount ? `github:${commit.githubAccount.toLowerCase()}` : `email:${exactEmail.toLowerCase()}`,
+      candidateId: commit.githubAccount
+        ? `github:${commit.githubAccount.toLowerCase()}`
+        : `email:${exactEmail.toLowerCase()}`,
       basis: commit.githubAccount ? "github_commit_account_association" : "exact_git_author_email",
     },
     confidenceCap: commit.signature.identityMatch ? 0.84 : commit.githubAccount ? 0.68 : 0.52,
@@ -569,14 +664,15 @@ export async function investigateGithubEmailCodegraph(
   }
 
   const incomplete = incompleteResults || capped || optionalIncomplete || signatureChecksIncomplete;
-  if (commits.length === 0) diagnostics.push({
-    code: "github_commits_not_observed",
-    severity: "info",
-    message: incomplete
-      ? "No exact-email commits were observed in this incomplete search window."
-      : "No exact-email commits were observed on indexed public default branches; this is not evidence of no GitHub activity.",
-    retryable: incomplete,
-  });
+  if (commits.length === 0)
+    diagnostics.push({
+      code: "github_commits_not_observed",
+      severity: "info",
+      message: incomplete
+        ? "No exact-email commits were observed in this incomplete search window."
+        : "No exact-email commits were observed on indexed public default branches; this is not evidence of no GitHub activity.",
+      retryable: incomplete,
+    });
   const data: GithubCodegraphData = {
     exactEmail,
     commits: commits.map((commit) => ({
@@ -595,10 +691,10 @@ export async function investigateGithubEmailCodegraph(
     incompleteResults,
     capped,
     rateLimitRemaining,
-    scopeNote: "GitHub commit search covers indexed commits on public repositories' default branches; metadata can be spoofed.",
+    scopeNote:
+      "GitHub commit search covers indexed commits on public repositories' default branches; metadata can be spoofed.",
   };
-  const status: ToolStatus = commits.length === 0
-    ? incomplete ? "partial" : "not_found"
-    : incomplete ? "partial" : "succeeded";
+  const status: ToolStatus =
+    commits.length === 0 ? (incomplete ? "partial" : "not_found") : incomplete ? "partial" : "succeeded";
   return finish(startedAt, now, status, data, evidence, diagnostics, requests, bytesRead, incomplete);
 }

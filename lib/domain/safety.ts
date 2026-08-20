@@ -7,10 +7,7 @@ import {
   type SafetyReasonCode,
 } from "./types";
 import { parseInvestigationInput } from "./validation";
-import {
-  containsRestrictedPublicContent,
-  withoutClearlyProfessionalConceptContext,
-} from "./content-policy";
+import { containsRestrictedPublicContent, withoutClearlyProfessionalConceptContext } from "./content-policy";
 
 interface SafetyRule {
   code: SafetyReasonCode;
@@ -174,9 +171,24 @@ function explicitMinorMatches(text: string, currentYear: number): string[] {
     }
   }
   const wordAges: Record<string, number> = {
-    zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
-    eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
-    fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+    zero: 0,
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+    thirteen: 13,
+    fourteen: 14,
+    fifteen: 15,
+    sixteen: 16,
+    seventeen: 17,
   };
   for (const match of text.matchAll(
     /\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen)[- ]years?[- ]old\s+(?:person|founder|developer|student|researcher|engineer|executive|boy|girl|teen(?:ager)?)\b/gi,
@@ -190,11 +202,11 @@ function explicitMinorMatches(text: string, currentYear: number): string[] {
     const subject = match[1].toLocaleLowerCase("en-US");
     const age = Number(match[2]);
     if (
-      Number.isInteger(age)
-      && age >= 0
-      && age < 18
-      && !["company", "organization", "product", "project", "program", "business", "startup"].includes(subject)
-      && match[0]
+      Number.isInteger(age) &&
+      age >= 0 &&
+      age < 18 &&
+      !["company", "organization", "product", "project", "program", "business", "startup"].includes(subject) &&
+      match[0]
     ) {
       matches.push(normalizeWhitespace(match[0]).toLocaleLowerCase("en-US"));
     }
@@ -236,10 +248,7 @@ export function classifySafety(
 
   const currentYear = options.currentYear ?? new Date().getUTCFullYear();
   const minorMatches = explicitMinorMatches(text, currentYear);
-  if (
-    minorMatches.length > 0
-    && !reasons.some((reason) => reason.code === "minor_or_vulnerable_person")
-  ) {
+  if (minorMatches.length > 0 && !reasons.some((reason) => reason.code === "minor_or_vulnerable_person")) {
     reasons.push({
       code: "minor_or_vulnerable_person",
       message: "Research targeting minors or vulnerable people is not permitted.",
@@ -251,12 +260,13 @@ export function classifySafety(
     containsRestrictedPublicContent(text, {
       allowAnyEmail: true,
       currentYear,
-    })
-    && reasons.length === 0
+    }) &&
+    reasons.length === 0
   ) {
     reasons.push({
       code: "sensitive_personal_data",
-      message: "The request includes personal contact, family, minor, health, or protected-trait content outside public professional scope.",
+      message:
+        "The request includes personal contact, family, minor, health, or protected-trait content outside public professional scope.",
       matchedTerms: ["restricted personal content"],
     });
   }
@@ -280,8 +290,7 @@ export function classifySafety(
       reasons: [
         {
           code: "exact_identifier_supplied",
-          message:
-            "A user-supplied email may be used only as an exact public-source correlation key.",
+          message: "A user-supplied email may be used only as an exact public-source correlation key.",
           matchedTerms: [],
         },
       ],

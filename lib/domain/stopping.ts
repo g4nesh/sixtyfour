@@ -5,18 +5,9 @@ import {
   resolveIdentity,
   summarizeCoverage,
 } from "./report";
-import type {
-  Candidate,
-  InvestigationState,
-  StopDecision,
-  StopReason,
-  TerminalStatus,
-} from "./types";
+import type { Candidate, InvestigationState, StopDecision, StopReason, TerminalStatus } from "./types";
 
-function hasUniqueOfficialAnchor(
-  state: InvestigationState,
-  selectedCandidateId: string | undefined,
-): boolean {
+function hasUniqueOfficialAnchor(state: InvestigationState, selectedCandidateId: string | undefined): boolean {
   if (!selectedCandidateId) return false;
   const candidate = state.candidates.find((item) => item.id === selectedCandidateId);
   if (!candidate) return false;
@@ -32,10 +23,7 @@ export interface StopEvaluationOptions {
 }
 
 /** One canonical stop-reason to terminal-status mapping for engine and replay. */
-export function terminalStatusForStop(
-  reason: StopReason,
-  candidates: readonly Candidate[],
-): TerminalStatus {
+export function terminalStatusForStop(reason: StopReason, candidates: readonly Candidate[]): TerminalStatus {
   if (reason === "unsafe_request") return "blocked";
   if (reason === "cancelled") return "canceled";
   if (reason === "configuration_error") return "configuration_error";
@@ -44,10 +32,7 @@ export function terminalStatusForStop(
   return resolveIdentity(candidates).status === "ambiguous" ? "ambiguous" : "partial";
 }
 
-export function evaluateStop(
-  state: InvestigationState,
-  options: StopEvaluationOptions = {},
-): StopDecision {
+export function evaluateStop(state: InvestigationState, options: StopEvaluationOptions = {}): StopDecision {
   if (state.safety.level === "block") {
     return {
       allowed: true,
@@ -67,13 +52,9 @@ export function evaluateStop(
 
   const identity = resolveIdentity(state.candidates, state.evidence);
   const coverage = summarizeCoverage(state, requestedCategoriesForInput(state.input));
-  const minimumFindings = Math.min(
-    options.minimumFindings ?? 2,
-    Math.max(1, coverage.requestedCategories.length),
-  );
+  const minimumFindings = Math.min(options.minimumFindings ?? 2, Math.max(1, coverage.requestedCategories.length));
   const enoughFindings = coverage.supportedFindingCount >= minimumFindings;
-  const enoughSources =
-    coverage.independentSourceFamilyCount >= (options.minimumIndependentSourceFamilies ?? 2);
+  const enoughSources = coverage.independentSourceFamilyCount >= (options.minimumIndependentSourceFamilies ?? 2);
   const uniqueOfficialAnchor = hasUniqueOfficialAnchor(state, identity.selectedCandidateId);
   // Completion and report coverage share one policy source. A run cannot claim
   // success while its own report still lists an applicable category as missing.
@@ -88,9 +69,10 @@ export function evaluateStop(
     return {
       allowed: true,
       reason: "goal_satisfied",
-      detail: uniqueOfficialAnchor && !enoughSources
-        ? "Identity, a unique non-spoofable official anchor, and every applicable report category meet the completion policy."
-        : "Identity, evidence diversity, and every applicable report category meet the completion policy.",
+      detail:
+        uniqueOfficialAnchor && !enoughSources
+          ? "Identity, a unique non-spoofable official anchor, and every applicable report category meet the completion policy."
+          : "Identity, evidence diversity, and every applicable report category meet the completion policy.",
       exhaustedDimensions: [],
     };
   }
@@ -107,9 +89,7 @@ export function evaluateStop(
       exhaustedDimensions,
     };
   }
-  if (
-    state.budget.usage.consecutiveNoProgress >= state.budget.limits.maxConsecutiveNoProgress
-  ) {
+  if (state.budget.usage.consecutiveNoProgress >= state.budget.limits.maxConsecutiveNoProgress) {
     return {
       allowed: true,
       reason: "diminishing_returns",

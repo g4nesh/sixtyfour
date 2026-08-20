@@ -1,16 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  createHardenedFetch,
-  isBlockedIpAddress,
-  parseRetryAfter,
-} from "../lib/tools/hardened-fetch.ts";
+import { createHardenedFetch, isBlockedIpAddress, parseRetryAfter } from "../lib/tools/hardened-fetch.ts";
 
-const jsonResponse = (body, init = {}) => new Response(JSON.stringify(body), {
-  ...init,
-  headers: { "content-type": "application/json", ...(init.headers ?? {}) },
-});
+const jsonResponse = (body, init = {}) =>
+  new Response(JSON.stringify(body), {
+    ...init,
+    headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+  });
 
 test("private and special-use addresses are rejected before fetch", async () => {
   let calls = 0;

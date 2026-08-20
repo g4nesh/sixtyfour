@@ -5,20 +5,19 @@ function visibleControl(character: string): string {
 }
 
 function escapeControlCharacters(value: string): string {
-  return [...value].map((character) => {
-    const code = character.codePointAt(0) ?? 0;
-    const restricted = code <= 8 || code === 11 || code === 12
-      || (code >= 14 && code <= 31) || (code >= 127 && code <= 159);
-    return restricted ? visibleControl(character) : character;
-  }).join("");
+  return [...value]
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      const restricted =
+        code <= 8 || code === 11 || code === 12 || (code >= 14 && code <= 31) || (code >= 127 && code <= 159);
+      return restricted ? visibleControl(character) : character;
+    })
+    .join("");
 }
 
 /** Return stable, visible text with no executable/control characters. */
 export function cleanReportText(value: string): string {
-  return escapeControlCharacters(value
-    .toWellFormed()
-    .normalize("NFC")
-    .replace(/\r\n?/g, "\n"))
+  return escapeControlCharacters(value.toWellFormed().normalize("NFC").replace(/\r\n?/g, "\n"))
     .replace(/[\u2010-\u2015\u2212]/g, "-")
     .replace(/\b(?:javascript|vbscript|data)\s*:/gi, "blocked-scheme:")
     .trim();

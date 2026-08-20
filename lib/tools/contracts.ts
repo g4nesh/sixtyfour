@@ -1,14 +1,8 @@
 /** Runtime-neutral contracts shared by the public-data adapters. */
 
-export type FetchLike = (
-  input: RequestInfo | URL,
-  init?: RequestInit,
-) => Promise<Response>;
+export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-export type HostnameResolver = (
-  hostname: string,
-  signal?: AbortSignal,
-) => Promise<readonly string[]>;
+export type HostnameResolver = (hostname: string, signal?: AbortSignal) => Promise<readonly string[]>;
 
 export interface ToolBudgetCost {
   tool: string;
@@ -28,18 +22,10 @@ export interface ToolContext {
   clock?: () => number;
   signal?: AbortSignal;
   /** Return false to decline work without performing the request. */
-  consumeBudget?: (
-    cost: ToolBudgetCost,
-  ) => boolean | Promise<boolean>;
+  consumeBudget?: (cost: ToolBudgetCost) => boolean | Promise<boolean>;
 }
 
-export type ToolStatus =
-  | "succeeded"
-  | "partial"
-  | "not_found"
-  | "rate_limited"
-  | "failed"
-  | "skipped";
+export type ToolStatus = "succeeded" | "partial" | "not_found" | "rate_limited" | "failed" | "skipped";
 
 export type DiagnosticSeverity = "info" | "warning" | "error";
 
@@ -97,10 +83,7 @@ export function isoTime(epochMs: number): string {
   return new Date(epochMs).toISOString();
 }
 
-export async function reserveToolBudget(
-  context: ToolContext,
-  cost: ToolBudgetCost,
-): Promise<boolean> {
+export async function reserveToolBudget(context: ToolContext, cost: ToolBudgetCost): Promise<boolean> {
   if (!context.consumeBudget) return true;
   return (await context.consumeBudget(cost)) !== false;
 }

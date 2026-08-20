@@ -10,9 +10,7 @@ if (!/^[a-z0-9-]+$/.test(exampleId)) {
   throw new TypeError("Example ID must contain only lowercase letters, numbers, and hyphens.");
 }
 
-const report = JSON.parse(
-  await readFile(path.join(projectRoot, "examples", exampleId, "output.json"), "utf8"),
-);
+const report = JSON.parse(await readFile(path.join(projectRoot, "examples", exampleId, "output.json"), "utf8"));
 const vite = await createServer({
   root: projectRoot,
   configFile: false,
@@ -37,23 +35,19 @@ try {
 
   const pdfDirectory = path.join(projectRoot, "output", "pdf");
   const markdownDirectory = path.join(projectRoot, "output", "markdown");
-  await Promise.all([
-    mkdir(pdfDirectory, { recursive: true }),
-    mkdir(markdownDirectory, { recursive: true }),
-  ]);
+  await Promise.all([mkdir(pdfDirectory, { recursive: true }), mkdir(markdownDirectory, { recursive: true })]);
   const pdfPath = path.join(pdfDirectory, filename);
   const markdownPath = path.join(markdownDirectory, markdownFilename);
-  await Promise.all([
-    writeFile(pdfPath, bytes),
-    writeFile(markdownPath, markdown, "utf8"),
-  ]);
-  process.stdout.write(`${JSON.stringify({
-    exampleId,
-    pdfPath,
-    pdfBytes: bytes.byteLength,
-    markdownPath,
-    markdownBytes: Buffer.byteLength(markdown),
-  })}\n`);
+  await Promise.all([writeFile(pdfPath, bytes), writeFile(markdownPath, markdown, "utf8")]);
+  process.stdout.write(
+    `${JSON.stringify({
+      exampleId,
+      pdfPath,
+      pdfBytes: bytes.byteLength,
+      markdownPath,
+      markdownBytes: Buffer.byteLength(markdown),
+    })}\n`,
+  );
 } finally {
   await vite.close();
 }

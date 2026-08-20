@@ -57,7 +57,12 @@ const statusColor: Record<GraphVisualStatus, string> = {
   exhausted: "#738077",
 };
 
-function flowNodes(graph: CanonicalSearchGraph, selectedNodeId: string | null, focusedStableId: string | null, onSelect: (id: string) => void): AtlasFlowNode[] {
+function flowNodes(
+  graph: CanonicalSearchGraph,
+  selectedNodeId: string | null,
+  focusedStableId: string | null,
+  onSelect: (id: string) => void,
+): AtlasFlowNode[] {
   const positions = deterministicPositions(graph);
   return graph.nodes.map((node) => ({
     id: node.id,
@@ -68,7 +73,9 @@ function flowNodes(graph: CanonicalSearchGraph, selectedNodeId: string | null, f
       detail: nodeDetail(graph, node),
       pathCost: nodePathCost(graph, node),
       depth: nodeDepth(graph, node),
-      focused: Boolean(focusedStableId && (node.frontierEntryId === focusedStableId || node.actionId === focusedStableId)),
+      focused: Boolean(
+        focusedStableId && (node.frontierEntryId === focusedStableId || node.actionId === focusedStableId),
+      ),
       onSelect,
     },
     selected: node.id === selectedNodeId,
@@ -80,7 +87,9 @@ function flowNodes(graph: CanonicalSearchGraph, selectedNodeId: string | null, f
 
 function flowEdges(graph: CanonicalSearchGraph, focusedStableId: string | null): Edge[] {
   return graph.edges.map((edge) => {
-    const focused = Boolean(focusedStableId && (edge.frontierEntryId === focusedStableId || edge.actionId === focusedStableId));
+    const focused = Boolean(
+      focusedStableId && (edge.frontierEntryId === focusedStableId || edge.actionId === focusedStableId),
+    );
     const visualStatus = edgeVisualStatus(edge);
     const color = statusColor[visualStatus];
     const dash = ["queued", "selected", "running"].includes(visualStatus)
@@ -116,21 +125,44 @@ function AtlasGraphNode({ data, selected }: NodeProps<AtlasFlowNode>) {
   const metrics = [
     typeof data.pathCost === "number" ? `g ${data.pathCost.toFixed(2)}` : null,
     typeof data.depth === "number" ? `d ${data.depth}` : null,
-  ].filter(Boolean).join(" · ");
-  return <div className={`atlas-flow-node status-${visualStatus} ${selected ? "is-selected" : ""} ${data.focused ? "is-trace-focused" : ""}`}>
-    <Handle type="target" position={Position.Left} className="atlas-node-handle" />
-    <button type="button" onClick={() => data.onSelect(node.id)} onFocus={() => data.onSelect(node.id)} aria-label={`${node.label}, ${humanize(node.kind)}, ${humanize(node.status)}${data.detail ? `, ${data.detail}` : ""}`}>
-      <span className="node-topline"><small>{humanize(node.kind)}</small><i>{humanize(node.status)}</i></span>
-      <strong>{node.label}</strong>
-      <span className="node-bottomline"><small>{data.detail ?? node.frontierEntryId ?? node.actionId ?? "Canonical search state"}</small>{metrics ? <code>{metrics}</code> : null}</span>
-    </button>
-    <Handle type="source" position={Position.Right} className="atlas-node-handle" />
-  </div>;
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <div
+      className={`atlas-flow-node status-${visualStatus} ${selected ? "is-selected" : ""} ${data.focused ? "is-trace-focused" : ""}`}
+    >
+      <Handle type="target" position={Position.Left} className="atlas-node-handle" />
+      <button
+        type="button"
+        onClick={() => data.onSelect(node.id)}
+        onFocus={() => data.onSelect(node.id)}
+        aria-label={`${node.label}, ${humanize(node.kind)}, ${humanize(node.status)}${data.detail ? `, ${data.detail}` : ""}`}
+      >
+        <span className="node-topline">
+          <small>{humanize(node.kind)}</small>
+          <i>{humanize(node.status)}</i>
+        </span>
+        <strong>{node.label}</strong>
+        <span className="node-bottomline">
+          <small>{data.detail ?? node.frontierEntryId ?? node.actionId ?? "Canonical search state"}</small>
+          {metrics ? <code>{metrics}</code> : null}
+        </span>
+      </button>
+      <Handle type="source" position={Position.Right} className="atlas-node-handle" />
+    </div>
+  );
 }
 
 const nodeTypes = { atlas: AtlasGraphNode };
 
-function GraphCanvasInner({ graph, selectedNodeId, onSelectNode, focusedStableId, fitRequest }: {
+function GraphCanvasInner({
+  graph,
+  selectedNodeId,
+  onSelectNode,
+  focusedStableId,
+  fitRequest,
+}: {
   graph: CanonicalSearchGraph;
   selectedNodeId: string | null;
   onSelectNode: (id: string | null) => void;
@@ -138,7 +170,10 @@ function GraphCanvasInner({ graph, selectedNodeId, onSelectNode, focusedStableId
   fitRequest: number;
 }) {
   const onSelect = useCallback((id: string) => onSelectNode(id), [onSelectNode]);
-  const preparedNodes = useMemo(() => flowNodes(graph, selectedNodeId, focusedStableId, onSelect), [focusedStableId, graph, onSelect, selectedNodeId]);
+  const preparedNodes = useMemo(
+    () => flowNodes(graph, selectedNodeId, focusedStableId, onSelect),
+    [focusedStableId, graph, onSelect, selectedNodeId],
+  );
   const preparedEdges = useMemo(() => flowEdges(graph, focusedStableId), [focusedStableId, graph]);
   const [nodes, setNodes, onNodesChange] = useNodesState<AtlasFlowNode>(preparedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(preparedEdges);
@@ -175,8 +210,12 @@ function GraphCanvasInner({ graph, selectedNodeId, onSelectNode, focusedStableId
             edges: graph.edges.map((edge) => ({ id: edge.id, sources: [edge.fromNodeId], targets: [edge.toNodeId] })),
           });
           if (!active) return;
-          const positions = new Map((result.children ?? []).map((child) => [child.id, { x: child.x ?? 0, y: child.y ?? 0 }]));
-          setNodes((current) => current.map((node) => ({ ...node, position: positions.get(node.id) ?? node.position })));
+          const positions = new Map(
+            (result.children ?? []).map((child) => [child.id, { x: child.x ?? 0, y: child.y ?? 0 }]),
+          );
+          setNodes((current) =>
+            current.map((node) => ({ ...node, position: positions.get(node.id) ?? node.position })),
+          );
         } catch {
           // Deterministic layered positions are already painted. ELK is an optional client enhancement.
         }
@@ -200,36 +239,50 @@ function GraphCanvasInner({ graph, selectedNodeId, onSelectNode, focusedStableId
     requestAnimationFrame(() => void instance.fitView({ padding: 0.18, minZoom: 0.08, maxZoom: 0.9 }));
   }, []);
 
-  return <div className="graph-canvas" data-testid="canonical-graph-canvas">
-    <ReactFlow<AtlasFlowNode, Edge>
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onInit={handleInit}
-      onPaneClick={() => onSelectNode(null)}
-      onNodeClick={(_, node) => onSelectNode(node.id)}
-      minZoom={0.04}
-      maxZoom={2}
-      panOnScroll
-      selectionOnDrag
-      zoomOnDoubleClick={false}
-      nodesFocusable={false}
-      edgesFocusable={false}
-      colorMode="dark"
-      defaultEdgeOptions={{ interactionWidth: 18 }}
-    >
-      <Background variant={BackgroundVariant.Dots} gap={22} size={0.85} color="rgba(155, 170, 160, 0.2)" />
-      <Controls className="atlas-flow-controls" showInteractive={false} />
-      <MiniMap className="atlas-minimap" nodeColor={(node) => {
-        const source = node.data?.source as SearchGraphNode | undefined;
-        return source ? statusColor[nodeVisualStatus(source)] : "#778079";
-      }} nodeStrokeWidth={1} maskColor="rgba(4, 7, 5, .72)" pannable zoomable ariaLabel="Search graph minimap" />
-    </ReactFlow>
-  </div>;
+  return (
+    <div className="graph-canvas" data-testid="canonical-graph-canvas">
+      <ReactFlow<AtlasFlowNode, Edge>
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onInit={handleInit}
+        onPaneClick={() => onSelectNode(null)}
+        onNodeClick={(_, node) => onSelectNode(node.id)}
+        minZoom={0.04}
+        maxZoom={2}
+        panOnScroll
+        selectionOnDrag
+        zoomOnDoubleClick={false}
+        nodesFocusable={false}
+        edgesFocusable={false}
+        colorMode="dark"
+        defaultEdgeOptions={{ interactionWidth: 18 }}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={22} size={0.85} color="rgba(155, 170, 160, 0.2)" />
+        <Controls className="atlas-flow-controls" showInteractive={false} />
+        <MiniMap
+          className="atlas-minimap"
+          nodeColor={(node) => {
+            const source = node.data?.source as SearchGraphNode | undefined;
+            return source ? statusColor[nodeVisualStatus(source)] : "#778079";
+          }}
+          nodeStrokeWidth={1}
+          maskColor="rgba(4, 7, 5, .72)"
+          pannable
+          zoomable
+          ariaLabel="Search graph minimap"
+        />
+      </ReactFlow>
+    </div>
+  );
 }
 
 export function GraphCanvas(props: Parameters<typeof GraphCanvasInner>[0]) {
-  return <ReactFlowProvider><GraphCanvasInner {...props} /></ReactFlowProvider>;
+  return (
+    <ReactFlowProvider>
+      <GraphCanvasInner {...props} />
+    </ReactFlowProvider>
+  );
 }

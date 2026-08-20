@@ -1,0 +1,12 @@
+.agent/
+.next/
+.vinext/
+.wrangler/
+dist/
+examples/
+node_modules/
+output/
+public/
+tmp/
+package-lock.json
+*.tsbuildinfo

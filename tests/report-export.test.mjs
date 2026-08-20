@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
-const example = JSON.parse(await readFile(new URL("../examples/chris-anderson-ted/output.json", import.meta.url), "utf8"));
+const example = JSON.parse(
+  await readFile(new URL("../examples/chris-anderson-ted/output.json", import.meta.url), "utf8"),
+);
 const vite = await createServer({
   root: projectRoot,
   configFile: false,
@@ -255,13 +257,19 @@ test("sanitization escapes hostile Markdown and excludes unsafe URLs and raw pay
 
   const viewModel = reportExport.createReportViewModel(report);
   const markdown = reportExport.reportViewModelToMarkdown(viewModel);
-  assert.equal([...markdown].some((character) => {
-    const code = character.codePointAt(0);
-    return code <= 8 || code === 11 || code === 12 || (code >= 14 && code <= 31);
-  }), false);
+  assert.equal(
+    [...markdown].some((character) => {
+      const code = character.codePointAt(0);
+      return code <= 8 || code === 11 || code === 12 || (code >= 14 && code <= 31);
+    }),
+    false,
+  );
   assert.match(markdown, /Hostile \\| \\\[title\\\] \\`tick\\`\\u0007/);
   assert.match(markdown, /Exact source excerpt/);
-  assert.doesNotMatch(markdown, /\n# injected|javascript:|DO_NOT_EXPORT_PROVIDER_PAYLOAD|DO_NOT_EXPORT_STRUCTURED_PAYLOAD|DO_NOT_EXPORT_TOOL_ARGUMENTS|DO_NOT_EXPORT_RAW_TRACE/);
+  assert.doesNotMatch(
+    markdown,
+    /\n# injected|javascript:|DO_NOT_EXPORT_PROVIDER_PAYLOAD|DO_NOT_EXPORT_STRUCTURED_PAYLOAD|DO_NOT_EXPORT_TOOL_ARGUMENTS|DO_NOT_EXPORT_RAW_TRACE/,
+  );
   assert.equal(viewModel.evidence[0].sourceUrl, "");
   assert.equal(viewModel.evidence[1].contentLabel, "Structured API claim");
 });
@@ -290,7 +298,10 @@ test("canonical graph telemetry and source-ladder frontier states are represente
   assert.equal(tierOne.frontierCount, 1);
   assert.equal(tierOne.verifiedCount, 1);
   assert.equal(tierOne.evidenceCount, 2);
-  assert.equal(viewModel.searchStrategy.paths.some((item) => item.disposition === "mutation_rejected"), true);
+  assert.equal(
+    viewModel.searchStrategy.paths.some((item) => item.disposition === "mutation_rejected"),
+    true,
+  );
 });
 
 async function sourceFiles(directory) {
@@ -298,7 +309,7 @@ async function sourceFiles(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (["node_modules", ".git", "dist", ".next"].includes(entry.name)) continue;
     const absolute = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...await sourceFiles(absolute));
+    if (entry.isDirectory()) files.push(...(await sourceFiles(absolute)));
     else if (/\.(?:ts|tsx|mts|mjs)$/.test(entry.name)) files.push(absolute);
   }
   return files;

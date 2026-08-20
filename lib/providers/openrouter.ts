@@ -215,10 +215,13 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
       clearTimeout(timer);
       reject(new OpenRouterError("aborted", "The request was canceled before retry."));
     };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, Math.max(0, ms));
+    const timer = setTimeout(
+      () => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      Math.max(0, ms),
+    );
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
@@ -297,16 +300,19 @@ export function normalizeOpenRouterUsage(value: unknown): NormalizedUsage {
   return {
     inputTokens,
     outputTokens,
-    totalTokens: explicitTotal === null
-      ? computedTotal
-      : computedTotal === null
-        ? explicitTotal
-        : Math.max(explicitTotal, computedTotal),
-    reasoningTokens: safeNumber(usage.reasoning_tokens)
-      ?? nestedNumber(usage, ["completion_tokens_details", "reasoning_tokens"])
-      ?? nestedNumber(usage, ["output_tokens_details", "reasoning_tokens"]),
-    cachedInputTokens: nestedNumber(usage, ["prompt_tokens_details", "cached_tokens"])
-      ?? nestedNumber(usage, ["input_tokens_details", "cached_tokens"]),
+    totalTokens:
+      explicitTotal === null
+        ? computedTotal
+        : computedTotal === null
+          ? explicitTotal
+          : Math.max(explicitTotal, computedTotal),
+    reasoningTokens:
+      safeNumber(usage.reasoning_tokens) ??
+      nestedNumber(usage, ["completion_tokens_details", "reasoning_tokens"]) ??
+      nestedNumber(usage, ["output_tokens_details", "reasoning_tokens"]),
+    cachedInputTokens:
+      nestedNumber(usage, ["prompt_tokens_details", "cached_tokens"]) ??
+      nestedNumber(usage, ["input_tokens_details", "cached_tokens"]),
     costUsd: safeNumber(usage.cost, false) ?? safeNumber(usage.total_cost, false),
   };
 }
@@ -324,9 +330,7 @@ function normalizeDomain(value: string): string {
   return trimmed;
 }
 
-export function webSearchTool(
-  parameters: OpenRouterWebSearchTool["parameters"] = {},
-): OpenRouterWebSearchTool {
+export function webSearchTool(parameters: OpenRouterWebSearchTool["parameters"] = {}): OpenRouterWebSearchTool {
   if (parameters.allowed_domains?.length && parameters.excluded_domains?.length) {
     throw new OpenRouterConfigurationError("allowed_domains and excluded_domains cannot be combined.");
   }
@@ -422,9 +426,7 @@ function normalizeAssistantContent(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
-    const text = value
-      .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
-      .join("");
+    const text = value.map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : "")).join("");
     return text.length > 0 ? text : null;
   }
   throw new OpenRouterError("invalid_response", "The model provider returned malformed assistant content.");
@@ -542,7 +544,10 @@ async function completeOpenAiWebSearch(args: OpenAiWebSearchArgs): Promise<OpenR
   try {
     payload = await fetched.response.json();
   } catch (error) {
-    throw new OpenRouterError("invalid_response", "The web-search provider returned invalid JSON.", { requestId, cause: error });
+    throw new OpenRouterError("invalid_response", "The web-search provider returned invalid JSON.", {
+      requestId,
+      cause: error,
+    });
   }
   const output = isRecord(payload) && Array.isArray(payload.output) ? payload.output : [];
   const seen = new Set<string>();
@@ -681,9 +686,7 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
         tools.push(webSearchTool(options.webSearch));
       }
       validateTools(tools);
-      const requestModel = useOpenAiSearch
-        ? (config.searchModel?.trim() || "gpt-4o-mini")
-        : config.model;
+      const requestModel = useOpenAiSearch ? config.searchModel?.trim() || "gpt-4o-mini" : config.model;
       const logBase = {
         model: requestModel,
         messageCount: options.messages.length,
@@ -695,152 +698,150 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
       // with backoff by withProviderRetry below so a healthy run is not thrown
       // away over a per-minute limit.
       const attempt = async (): Promise<OpenRouterCompletion> => {
-      const startedAt = clock();
-      safeLog({ phase: "request", ...logBase });
+        const startedAt = clock();
+        safeLog({ phase: "request", ...logBase });
 
-      // OpenAI web discovery uses the Responses API `web_search` tool. Its
-      // server-attested `web_search_call.action.sources` and `url_citation`
-      // annotations are mapped back into the chat-shaped `message.annotations`
-      // the orchestrator already trusts as provider search results.
-      if (useOpenAiSearch) {
-        return await completeOpenAiWebSearch({
-          endpoint: searchEndpoint,
-          apiKey: searchApiKey,
+        // OpenAI web discovery uses the Responses API `web_search` tool. Its
+        // server-attested `web_search_call.action.sources` and `url_citation`
+        // annotations are mapped back into the chat-shaped `message.annotations`
+        // the orchestrator already trusts as provider search results.
+        if (useOpenAiSearch) {
+          return await completeOpenAiWebSearch({
+            endpoint: searchEndpoint,
+            apiKey: searchApiKey,
+            model: requestModel,
+            messages: options.messages,
+            maxOutputTokens: options.maxCompletionTokens,
+            hardenedFetch,
+            clock,
+            startedAt,
+            safeLog,
+            logBase,
+            signal: options.signal,
+          });
+        }
+
+        // OpenAI's strict tool-schema validation requires additionalProperties:false
+        // on every nested object; OpenRouter does not. Drop `strict` for OpenAI so
+        // the existing lenient schemas are accepted (arguments are still JSON-parsed
+        // and validated by the orchestrator).
+        const bodyTools: OpenRouterTool[] = isOpenAiCompat
+          ? tools.map((tool) =>
+              tool.type === "function" ? { ...tool, function: { ...tool.function, strict: false } } : tool,
+            )
+          : tools;
+        const tokenCap =
+          options.maxCompletionTokens === undefined
+            ? undefined
+            : boundedInteger(options.maxCompletionTokens, 4_096, 1, 200_000);
+        const body: Record<string, unknown> = {
           model: requestModel,
           messages: options.messages,
-          maxOutputTokens: options.maxCompletionTokens,
-          hardenedFetch,
-          clock,
-          startedAt,
-          safeLog,
-          logBase,
-          signal: options.signal,
-        });
-      }
+          ...(!useOpenAiSearch && bodyTools.length
+            ? {
+                tools: bodyTools,
+                tool_choice: "auto",
+                parallel_tool_calls: options.parallelToolCalls ?? false,
+              }
+            : {}),
+          // `reasoning` is an OpenRouter extension; OpenAI/Gemini chat reject it.
+          ...(!isOpenAiCompat && options.reasoning ? { reasoning: options.reasoning } : {}),
+          // Gemini's OpenAI-compat layer expects `max_tokens`; OpenAI uses `max_completion_tokens`.
+          ...(tokenCap === undefined ? {} : isGemini ? { max_tokens: tokenCap } : { max_completion_tokens: tokenCap }),
+          // gpt-5 and o-series reasoning models only accept the default temperature.
+          ...(options.temperature === undefined ||
+          useOpenAiSearch ||
+          (isOpenAi && /^(?:gpt-5|o[134])/i.test(requestModel))
+            ? {}
+            : { temperature: normalizeTemperature(options.temperature) }),
+        };
+        let fetched;
+        try {
+          fetched = await hardenedFetch(endpoint, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+              // Attribution headers are OpenRouter-specific.
+              ...(!isOpenAiCompat && config.appUrl ? { "HTTP-Referer": config.appUrl } : {}),
+              ...(!isOpenAiCompat && config.appTitle ? { "X-Title": config.appTitle } : {}),
+            },
+            body: JSON.stringify(body),
+            signal: options.signal,
+          });
+        } catch (error) {
+          const latencyMs = Math.max(0, clock() - startedAt);
+          const code = error instanceof HardenedFetchError ? error.code : "network_error";
+          safeLog({ phase: "error", ...logBase, latencyMs, errorCode: code });
+          throw new OpenRouterError(code, "The OpenRouter request failed before a valid response was received.", {
+            retryable: error instanceof HardenedFetchError && error.retryable,
+            cause: error,
+          });
+        }
 
-      // OpenAI's strict tool-schema validation requires additionalProperties:false
-      // on every nested object; OpenRouter does not. Drop `strict` for OpenAI so
-      // the existing lenient schemas are accepted (arguments are still JSON-parsed
-      // and validated by the orchestrator).
-      const bodyTools: OpenRouterTool[] = isOpenAiCompat
-        ? tools.map((tool) => tool.type === "function"
-          ? { ...tool, function: { ...tool.function, strict: false } }
-          : tool)
-        : tools;
-      const tokenCap = options.maxCompletionTokens === undefined
-        ? undefined
-        : boundedInteger(options.maxCompletionTokens, 4_096, 1, 200_000);
-      const body: Record<string, unknown> = {
-        model: requestModel,
-        messages: options.messages,
-        ...(!useOpenAiSearch && bodyTools.length
-          ? {
-              tools: bodyTools,
-              tool_choice: "auto",
-              parallel_tool_calls: options.parallelToolCalls ?? false,
-            }
-          : {}),
-        // `reasoning` is an OpenRouter extension; OpenAI/Gemini chat reject it.
-        ...(!isOpenAiCompat && options.reasoning ? { reasoning: options.reasoning } : {}),
-        // Gemini's OpenAI-compat layer expects `max_tokens`; OpenAI uses `max_completion_tokens`.
-        ...(tokenCap === undefined
-          ? {}
-          : isGemini
-            ? { max_tokens: tokenCap }
-            : { max_completion_tokens: tokenCap }),
-        // gpt-5 and o-series reasoning models only accept the default temperature.
-        ...(options.temperature === undefined || useOpenAiSearch
-          || (isOpenAi && /^(?:gpt-5|o[134])/i.test(requestModel))
-          ? {}
-          : { temperature: normalizeTemperature(options.temperature) }),
-      };
-      let fetched;
-      try {
-        fetched = await hardenedFetch(endpoint, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-            // Attribution headers are OpenRouter-specific.
-            ...(!isOpenAiCompat && config.appUrl ? { "HTTP-Referer": config.appUrl } : {}),
-            ...(!isOpenAiCompat && config.appTitle ? { "X-Title": config.appTitle } : {}),
-          },
-          body: JSON.stringify(body),
-          signal: options.signal,
-        });
-      } catch (error) {
-        const latencyMs = Math.max(0, clock() - startedAt);
-        const code = error instanceof HardenedFetchError ? error.code : "network_error";
-        safeLog({ phase: "error", ...logBase, latencyMs, errorCode: code });
-        throw new OpenRouterError(code, "The OpenRouter request failed before a valid response was received.", {
-          retryable: error instanceof HardenedFetchError && error.retryable,
-          cause: error,
-        });
-      }
-
-      const requestId = fetched.response.headers.get("x-request-id")
-        ?? fetched.response.headers.get("x-openrouter-request-id");
-      if (!fetched.response.ok) {
-        const latencyMs = Math.max(0, clock() - startedAt);
-        safeLog({
-          phase: "error",
-          ...logBase,
-          latencyMs,
-          status: fetched.response.status,
-          errorCode: "http_error",
-        });
-        // Deliberately do not surface the provider body: it may echo prompt content.
-        throw new OpenRouterError(
-          "http_error",
-          fetched.response.status === 429
-            ? "The model provider rate-limited this request (HTTP 429). Wait a moment and try again, or raise the account's rate limit."
-            : `The model provider returned HTTP ${fetched.response.status}.`,
-          {
+        const requestId =
+          fetched.response.headers.get("x-request-id") ?? fetched.response.headers.get("x-openrouter-request-id");
+        if (!fetched.response.ok) {
+          const latencyMs = Math.max(0, clock() - startedAt);
+          safeLog({
+            phase: "error",
+            ...logBase,
+            latencyMs,
             status: fetched.response.status,
-            retryable: isRetryableStatus(fetched.response.status),
-            requestId,
-            retryAfterMs: parseRetryAfterMs(fetched.response.headers),
-          },
-        );
-      }
+            errorCode: "http_error",
+          });
+          // Deliberately do not surface the provider body: it may echo prompt content.
+          throw new OpenRouterError(
+            "http_error",
+            fetched.response.status === 429
+              ? "The model provider rate-limited this request (HTTP 429). Wait a moment and try again, or raise the account's rate limit."
+              : `The model provider returned HTTP ${fetched.response.status}.`,
+            {
+              status: fetched.response.status,
+              retryable: isRetryableStatus(fetched.response.status),
+              requestId,
+              retryAfterMs: parseRetryAfterMs(fetched.response.headers),
+            },
+          );
+        }
 
-      let payload: unknown;
-      try {
-        payload = await fetched.response.json();
-      } catch (error) {
-        throw new OpenRouterError("invalid_response", "OpenRouter returned invalid JSON.", {
+        let payload: unknown;
+        try {
+          payload = await fetched.response.json();
+        } catch (error) {
+          throw new OpenRouterError("invalid_response", "OpenRouter returned invalid JSON.", {
+            requestId,
+            cause: error,
+          });
+        }
+        if (!isRecord(payload) || !Array.isArray(payload.choices) || !isRecord(payload.choices[0])) {
+          throw new OpenRouterError("invalid_response", "OpenRouter returned no completion choice.", { requestId });
+        }
+        const choice = payload.choices[0];
+        const message = parseMessage(choice.message);
+        const usage = normalizeOpenRouterUsage(payload.usage);
+        const latencyMs = Math.max(0, clock() - startedAt);
+        const completion: OpenRouterCompletion = {
+          id: typeof payload.id === "string" ? payload.id : null,
+          model: typeof payload.model === "string" ? payload.model : config.model,
+          created: safeNumber(payload.created),
+          finishReason: typeof choice.finish_reason === "string" ? choice.finish_reason : null,
+          message,
+          usage,
+          provider: typeof payload.provider === "string" ? payload.provider : null,
           requestId,
-          cause: error,
+          latencyMs,
+        };
+        safeLog({
+          phase: "response",
+          ...logBase,
+          status: fetched.response.status,
+          latencyMs,
+          returnedToolCallCount: message.tool_calls?.length ?? 0,
+          hasReasoningDetails: Boolean(message.reasoning_details?.length),
+          usage,
         });
-      }
-      if (!isRecord(payload) || !Array.isArray(payload.choices) || !isRecord(payload.choices[0])) {
-        throw new OpenRouterError("invalid_response", "OpenRouter returned no completion choice.", { requestId });
-      }
-      const choice = payload.choices[0];
-      const message = parseMessage(choice.message);
-      const usage = normalizeOpenRouterUsage(payload.usage);
-      const latencyMs = Math.max(0, clock() - startedAt);
-      const completion: OpenRouterCompletion = {
-        id: typeof payload.id === "string" ? payload.id : null,
-        model: typeof payload.model === "string" ? payload.model : config.model,
-        created: safeNumber(payload.created),
-        finishReason: typeof choice.finish_reason === "string" ? choice.finish_reason : null,
-        message,
-        usage,
-        provider: typeof payload.provider === "string" ? payload.provider : null,
-        requestId,
-        latencyMs,
-      };
-      safeLog({
-        phase: "response",
-        ...logBase,
-        status: fetched.response.status,
-        latencyMs,
-        returnedToolCallCount: message.tool_calls?.length ?? 0,
-        hasReasoningDetails: Boolean(message.reasoning_details?.length),
-        usage,
-      });
-      return completion;
+        return completion;
       };
 
       return await withProviderRetry(attempt, {

@@ -103,9 +103,7 @@ select:disabled {
   min-height: 520px;
   flex-direction: column;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 35%, rgba(40, 67, 49, 0.1), transparent 34%),
-    var(--atlas-bg);
+  background: radial-gradient(circle at 50% 35%, rgba(40, 67, 49, 0.1), transparent 34%), var(--atlas-bg);
 }
 
 .command-header {
@@ -163,7 +161,9 @@ select:disabled {
   border: 1px solid var(--atlas-line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.035);
-  transition: border-color 140ms ease, background 140ms ease;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease;
 }
 
 .command-search:focus-within {
@@ -528,9 +528,7 @@ kbd {
 .graph-canvas {
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(circle at 50% 45%, rgba(31, 65, 43, 0.1), transparent 38%),
-    var(--atlas-bg);
+  background: radial-gradient(circle at 50% 45%, rgba(31, 65, 43, 0.1), transparent 38%), var(--atlas-bg);
 }
 
 .graph-canvas .react-flow {
@@ -596,15 +594,17 @@ kbd {
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--node-color) 58%, transparent);
   border-radius: 6px;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--node-color) 13%, #071009), rgba(5, 10, 7, 0.96) 68%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--node-color) 13%, #071009), rgba(5, 10, 7, 0.96) 68%);
   box-shadow:
     inset 3px 0 0 color-mix(in srgb, var(--node-color) 74%, transparent),
     0 7px 24px rgba(0, 0, 0, 0.3);
   color: var(--atlas-text);
   cursor: pointer;
   text-align: left;
-  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 .atlas-flow-node > button:hover,
@@ -854,11 +854,21 @@ kbd {
   content: "";
 }
 
-.legend-seed { color: var(--atlas-blue); }
-.legend-verified { color: var(--atlas-green); }
-.legend-frontier { color: var(--atlas-amber); }
-.legend-mutation { color: var(--atlas-orange); }
-.legend-rejected { color: var(--atlas-red); }
+.legend-seed {
+  color: var(--atlas-blue);
+}
+.legend-verified {
+  color: var(--atlas-green);
+}
+.legend-frontier {
+  color: var(--atlas-amber);
+}
+.legend-mutation {
+  color: var(--atlas-orange);
+}
+.legend-rejected {
+  color: var(--atlas-red);
+}
 
 .source-ladder {
   position: absolute;
@@ -1051,12 +1061,20 @@ kbd {
   background: var(--atlas-text-faint);
 }
 
-.node-status-dot.status-verified { background: var(--atlas-green); }
+.node-status-dot.status-verified {
+  background: var(--atlas-green);
+}
 .node-status-dot.status-queued,
 .node-status-dot.status-selected,
-.node-status-dot.status-running { background: var(--atlas-amber); }
-.node-status-dot.status-mutated { background: var(--atlas-orange); }
-.node-status-dot.status-rejected { background: var(--atlas-red); }
+.node-status-dot.status-running {
+  background: var(--atlas-amber);
+}
+.node-status-dot.status-mutated {
+  background: var(--atlas-orange);
+}
+.node-status-dot.status-rejected {
+  background: var(--atlas-red);
+}
 
 .node-inspector > header > div {
   display: flex;
@@ -1232,12 +1250,20 @@ kbd {
   background: var(--atlas-text-faint);
 }
 
-.relation-line.status-verified { background: var(--atlas-green); }
+.relation-line.status-verified {
+  background: var(--atlas-green);
+}
 .relation-line.status-queued,
 .relation-line.status-selected,
-.relation-line.status-running { background: var(--atlas-amber); }
-.relation-line.status-mutated { background: var(--atlas-orange); }
-.relation-line.status-rejected { background: var(--atlas-red); }
+.relation-line.status-running {
+  background: var(--atlas-amber);
+}
+.relation-line.status-mutated {
+  background: var(--atlas-orange);
+}
+.relation-line.status-rejected {
+  background: var(--atlas-red);
+}
 
 .inspector-relations li > span:last-child {
   display: flex;
@@ -1601,12 +1627,20 @@ kbd {
   border-bottom: 1px solid rgba(186, 208, 193, 0.08);
 }
 
-.graph-list-view > ol > li.status-verified { --list-color: var(--atlas-green); }
+.graph-list-view > ol > li.status-verified {
+  --list-color: var(--atlas-green);
+}
 .graph-list-view > ol > li.status-queued,
 .graph-list-view > ol > li.status-selected,
-.graph-list-view > ol > li.status-running { --list-color: var(--atlas-amber); }
-.graph-list-view > ol > li.status-mutated { --list-color: var(--atlas-orange); }
-.graph-list-view > ol > li.status-rejected { --list-color: var(--atlas-red); }
+.graph-list-view > ol > li.status-running {
+  --list-color: var(--atlas-amber);
+}
+.graph-list-view > ol > li.status-mutated {
+  --list-color: var(--atlas-orange);
+}
+.graph-list-view > ol > li.status-rejected {
+  --list-color: var(--atlas-red);
+}
 
 .graph-list-view > ol > li > button {
   display: grid;
@@ -2071,13 +2105,19 @@ kbd {
 }
 
 @keyframes atlas-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes atlas-pulse {
   0%,
-  100% { opacity: 0.45; }
-  50% { opacity: 1; }
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 @media (max-width: 1180px) {
@@ -2115,12 +2155,26 @@ kbd {
     padding: 7px 9px;
   }
 
-  .atlas-wordmark { grid-area: brand; }
-  .command-search { grid-area: search; }
-  .mode-switch { grid-area: mode; justify-self: start; }
-  .example-select-label { grid-area: capture; }
-  .run-button { grid-area: run; }
-  .report-button { grid-area: report; height: 76px; }
+  .atlas-wordmark {
+    grid-area: brand;
+  }
+  .command-search {
+    grid-area: search;
+  }
+  .mode-switch {
+    grid-area: mode;
+    justify-self: start;
+  }
+  .example-select-label {
+    grid-area: capture;
+  }
+  .run-button {
+    grid-area: run;
+  }
+  .report-button {
+    grid-area: report;
+    height: 76px;
+  }
 
   .workspace-status {
     right: 12px;
@@ -2489,6 +2543,15 @@ kbd {
   flex-wrap: wrap;
   margin: 2px 0 10px;
 }
+
+.scope-row .scope-note {
+  position: static;
+  min-width: 240px;
+  flex: 1 1 320px;
+  overflow: visible;
+  transform: none;
+  white-space: normal;
+}
 .modality-toggles {
   display: flex;
   flex-wrap: wrap;
@@ -2507,9 +2570,15 @@ kbd {
   padding: 5px 11px;
   border-radius: 999px;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background 0.15s;
 }
-.modality:hover { color: var(--atlas-text-soft); border-color: var(--atlas-line-strong); }
+.modality:hover {
+  color: var(--atlas-text-soft);
+  border-color: var(--atlas-line-strong);
+}
 .modality.is-on {
   color: #04110a;
   background: var(--atlas-green);
@@ -2525,8 +2594,15 @@ kbd {
   padding: 26px 4px 10px;
   color: var(--atlas-text-faint);
 }
-.empty-hint > p { margin: 0; font-size: 13px; }
-.example-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.empty-hint > p {
+  margin: 0;
+  font-size: 13px;
+}
+.example-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .example-chip {
   appearance: none;
   border: 1px solid var(--atlas-line);
@@ -2537,10 +2613,19 @@ kbd {
   padding: 7px 12px;
   border-radius: 8px;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
-.example-chip:hover { color: var(--atlas-text); border-color: var(--atlas-blue); }
-.config-hint { margin: 0; font-size: 12px; color: var(--atlas-amber); }
+.example-chip:hover {
+  color: var(--atlas-text);
+  border-color: var(--atlas-blue);
+}
+.config-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--atlas-amber);
+}
 
 .finding-sources {
   display: flex;
@@ -2549,8 +2634,15 @@ kbd {
   gap: 8px;
   margin-top: 8px;
 }
-.finding-sources .sources-label { font-size: 11px; color: var(--atlas-text-faint); letter-spacing: 0.2px; }
-.finding-sources .counter-count { font-size: 11px; color: var(--atlas-orange); }
+.finding-sources .sources-label {
+  font-size: 11px;
+  color: var(--atlas-text-faint);
+  letter-spacing: 0.2px;
+}
+.finding-sources .counter-count {
+  font-size: 11px;
+  color: var(--atlas-orange);
+}
 .source-cite {
   display: inline-flex;
   align-items: center;
@@ -2566,8 +2658,15 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.source-cite:hover { border-color: var(--atlas-blue); text-decoration: underline; }
-.source-cite svg { width: 11px; height: 11px; flex: 0 0 auto; }
+.source-cite:hover {
+  border-color: var(--atlas-blue);
+  text-decoration: underline;
+}
+.source-cite svg {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+}
 .evidence-source-link {
   display: inline-flex;
   align-items: center;
@@ -2577,5 +2676,36 @@ kbd {
   color: var(--atlas-blue);
   text-decoration: none;
 }
-.evidence-source-link:hover { text-decoration: underline; }
-.evidence-source-link svg { width: 12px; height: 12px; }
+.evidence-source-link:hover {
+  text-decoration: underline;
+}
+.evidence-source-link svg {
+  width: 12px;
+  height: 12px;
+}
+
+@media (max-width: 700px) {
+  .scope-row {
+    gap: 8px;
+    margin-bottom: 0;
+    padding: 43px 8px 0;
+  }
+
+  .scope-row .scope-note {
+    right: auto;
+    left: auto;
+    min-width: 0;
+    flex-basis: 100%;
+    line-height: 1.45;
+    text-align: left;
+    text-overflow: clip;
+  }
+
+  .graph-toolbar {
+    top: 146px;
+  }
+
+  .empty-hint {
+    padding: 54px 8px 8px;
+  }
+}

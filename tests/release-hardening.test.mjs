@@ -15,12 +15,8 @@ const vite = await createServer({
 const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 const agent = await vite.ssrLoadModule("/lib/agent/index.ts");
 const search = await vite.ssrLoadModule("/lib/search/index.ts");
-const {
-  createLiveDependencies,
-  establishedSourceForCandidate,
-  gateExtractedCandidate,
-  sourceAllowedForCandidate,
-} = await vite.ssrLoadModule("/lib/live/orchestrator.ts");
+const { createLiveDependencies, establishedSourceForCandidate, gateExtractedCandidate, sourceAllowedForCandidate } =
+  await vite.ssrLoadModule("/lib/live/orchestrator.ts");
 
 after(async () => {
   await vite.close();
@@ -36,24 +32,21 @@ function jsonResponse(value, init = {}) {
   });
 }
 
-function providerResponse({
-  content = null,
-  annotations,
-  toolCalls,
-  id = "generation-test",
-}) {
+function providerResponse({ content = null, annotations, toolCalls, id = "generation-test" }) {
   return jsonResponse({
     id,
     model: "test/model",
-    choices: [{
-      finish_reason: toolCalls ? "tool_calls" : "stop",
-      message: {
-        role: "assistant",
-        content,
-        ...(annotations ? { annotations } : {}),
-        ...(toolCalls ? { tool_calls: toolCalls } : {}),
+    choices: [
+      {
+        finish_reason: toolCalls ? "tool_calls" : "stop",
+        message: {
+          role: "assistant",
+          content,
+          ...(annotations ? { annotations } : {}),
+          ...(toolCalls ? { tool_calls: toolCalls } : {}),
+        },
       },
-    }],
+    ],
     usage: {
       prompt_tokens: 3,
       completion_tokens: 2,
@@ -126,15 +119,17 @@ function bindStrongOrganization(engine, candidateId, organization, family, url) 
     reliability: 1,
     spoofable: false,
   }).evidence;
-  engine.addCandidateSignals(candidateId, [{
-    kind: "organization",
-    value: organization,
-    normalizedValue: domain.normalizeComparable(organization),
-    strength: "strong",
-    assurance: "verified",
-    sourceFamily: family,
-    sourceEvidenceId: evidence.id,
-  }]);
+  engine.addCandidateSignals(candidateId, [
+    {
+      kind: "organization",
+      value: organization,
+      normalizedValue: domain.normalizeComparable(organization),
+      strength: "strong",
+      assurance: "verified",
+      sourceFamily: family,
+      sourceEvidenceId: evidence.id,
+    },
+  ]);
   return evidence;
 }
 
@@ -150,18 +145,8 @@ function contextFor(engine, accounting, signal) {
 function selectedPlannerFrontier(engine, availableTools, seed) {
   const state = engine.snapshot();
   const ids = domain.createDeterministicIdFactory(seed);
-  const seeded = search.seedFrontier(
-    state.searchGraph,
-    state.target,
-    availableTools,
-    ids,
-    state.updatedAt,
-  );
-  return search.selectFrontierBatch(
-    seeded.graph,
-    Math.min(4, availableTools.length),
-    state.updatedAt,
-  ).value;
+  const seeded = search.seedFrontier(state.searchGraph, state.target, availableTools, ids, state.updatedAt);
+  return search.selectFrontierBatch(seeded.graph, Math.min(4, availableTools.length), state.updatedAt).value;
 }
 
 test("provider annotations authorize only their opaque candidate-scoped lead, while content URLs and query variants do not", async () => {
@@ -188,10 +173,12 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
           if (searchCalls === 1) {
             return providerResponse({
               content: `A provider result also mentions ${PROVIDER_URL}.`,
-              annotations: [{
-                type: "url_citation",
-                url_citation: { url: PROVIDER_URL, title: "Chris at TED" },
-              }],
+              annotations: [
+                {
+                  type: "url_citation",
+                  url_citation: { url: PROVIDER_URL, title: "Chris at TED" },
+                },
+              ],
               id: "generation-search-annotation",
             });
           }
@@ -202,27 +189,39 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
         }
         if (tools.some((tool) => tool.function?.name === "submit_evidence_extraction")) {
           return providerResponse({
-            toolCalls: [functionCall("submit_evidence_extraction", {
-              claim: "Chris Anderson leads TED public programs.",
-              excerpt: "Chris Anderson leads TED public programs.",
-              publisher: "Profile Example",
-              sourceType: "official_profile",
-              temporalStatus: "current",
-              subjectName: "Chris Anderson",
-              organization: "TED",
-            }, "call-extract")],
+            toolCalls: [
+              functionCall(
+                "submit_evidence_extraction",
+                {
+                  claim: "Chris Anderson leads TED public programs.",
+                  excerpt: "Chris Anderson leads TED public programs.",
+                  publisher: "Profile Example",
+                  sourceType: "official_profile",
+                  temporalStatus: "current",
+                  subjectName: "Chris Anderson",
+                  organization: "TED",
+                },
+                "call-extract",
+              ),
+            ],
             id: "generation-extract",
           });
         }
         if (tools.some((tool) => tool.function?.name === "propose_research_batch")) {
           plannerBody = body;
           return providerResponse({
-            toolCalls: [functionCall("propose_research_batch", {
-              kind: "stop",
-              decisionSummary: "The test planner inspected the opaque discovery lead.",
-              nextPhase: null,
-              actions: [],
-            }, "call-planner-lead")],
+            toolCalls: [
+              functionCall(
+                "propose_research_batch",
+                {
+                  kind: "stop",
+                  decisionSummary: "The test planner inspected the opaque discovery lead.",
+                  nextPhase: null,
+                  actions: [],
+                },
+                "call-planner-lead",
+              ),
+            ],
             id: "generation-planner-lead",
           });
         }
@@ -240,15 +239,18 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   });
 
   const searchAccounting = modelAccounting();
-  const searchResult = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-search",
-    tool: "search_web",
-    purpose: "Find a direct public professional profile.",
-    arguments: { query: "Chris Anderson TED profile" },
-    candidateId: primary.id,
-    budgetClass: "search",
-  }, contextFor(engine, searchAccounting.value));
+  const searchResult = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-search",
+      tool: "search_web",
+      purpose: "Find a direct public professional profile.",
+      arguments: { query: "Chris Anderson TED profile" },
+      candidateId: primary.id,
+      budgetClass: "search",
+    },
+    contextFor(engine, searchAccounting.value),
+  );
 
   assert.equal(searchResult.status, "succeeded");
   assert.equal(searchResult.evidence.length, 1);
@@ -268,55 +270,60 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
     state: stateWithLead,
     availableTools: ["fetch_public_source"],
     legalNextPhases: ["classify"],
-    selectedFrontierEntries: selectedPlannerFrontier(
-      engine,
-      ["fetch_public_source"],
-      "lead-planner-frontier",
-    ),
+    selectedFrontierEntries: selectedPlannerFrontier(engine, ["fetch_public_source"], "lead-planner-frontier"),
     modelAccounting: modelAccounting().value,
   });
   assert.match(JSON.stringify(plannerBody), new RegExp(String(leadId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(JSON.stringify(plannerBody), new RegExp(PROVIDER_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
-  const variantResult = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-variant",
-    tool: "fetch_public_source",
-    purpose: "Try a rewritten query variant without the opaque lead.",
-    arguments: { url: "https://profile.example/chris?ref=rewritten" },
-    candidateId: primary.id,
-    budgetClass: "fetch",
-  }, contextFor(engine, modelAccounting().value));
+  const variantResult = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-variant",
+      tool: "fetch_public_source",
+      purpose: "Try a rewritten query variant without the opaque lead.",
+      arguments: { url: "https://profile.example/chris?ref=rewritten" },
+      candidateId: primary.id,
+      budgetClass: "fetch",
+    },
+    contextFor(engine, modelAccounting().value),
+  );
   assert.equal(variantResult.status, "skipped");
   assert.equal(variantResult.diagnostics[0].code, "source_url_not_linked");
 
-  const crossCandidate = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-cross-candidate",
-    tool: "fetch_public_source",
-    purpose: "Try to reuse another candidate's discovery lead.",
-    arguments: { leadId },
-    candidateId: other.id,
-    budgetClass: "fetch",
-  }, contextFor(engine, modelAccounting().value));
+  const crossCandidate = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-cross-candidate",
+      tool: "fetch_public_source",
+      purpose: "Try to reuse another candidate's discovery lead.",
+      arguments: { leadId },
+      candidateId: other.id,
+      budgetClass: "fetch",
+    },
+    contextFor(engine, modelAccounting().value),
+  );
   assert.equal(crossCandidate.status, "skipped");
   assert.equal(crossCandidate.diagnostics[0].code, "source_url_not_linked");
   assert.deepEqual(fetchedSourceUrls, []);
 
   const fetchAccounting = modelAccounting();
-  const fetched = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-fetch",
-    tool: "fetch_public_source",
-    purpose: "Fetch the exact provider-authorized lead.",
-    arguments: {
-      leadId,
-      url: "https://profile.example/chris?ref=model-rewrite",
-      claimFocus: "Public professional role",
+  const fetched = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-fetch",
+      tool: "fetch_public_source",
+      purpose: "Fetch the exact provider-authorized lead.",
+      arguments: {
+        leadId,
+        url: "https://profile.example/chris?ref=model-rewrite",
+        claimFocus: "Public professional role",
+      },
+      candidateId: primary.id,
+      budgetClass: "fetch",
     },
-    candidateId: primary.id,
-    budgetClass: "fetch",
-  }, contextFor(engine, fetchAccounting.value));
+    contextFor(engine, fetchAccounting.value),
+  );
 
   assert.equal(fetched.status, "succeeded");
   assert.deepEqual(fetchedSourceUrls, [PROVIDER_URL]);
@@ -328,15 +335,18 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.ok(fetched.candidateSignals[0].signals.every((signal) => signal.assurance === "spoofable"));
   assert.deepEqual(fetchAccounting.counts(), { reservations: 1, settlements: 1 });
 
-  const contentOnly = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-content-only",
-    tool: "search_web",
-    purpose: "Search again.",
-    arguments: { query: "Chris Anderson direct source" },
-    candidateId: primary.id,
-    budgetClass: "search",
-  }, contextFor(engine, modelAccounting().value));
+  const contentOnly = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-content-only",
+      tool: "search_web",
+      purpose: "Search again.",
+      arguments: { query: "Chris Anderson direct source" },
+      candidateId: primary.id,
+      budgetClass: "search",
+    },
+    contextFor(engine, modelAccounting().value),
+  );
   assert.equal(contentOnly.status, "not_found");
   assert.equal(contentOnly.data.citationCount, 0);
   assert.deepEqual(contentOnly.evidence, []);
@@ -347,26 +357,26 @@ test("extracted pages must name the candidate and satisfy every known organizati
   const targetCandidate = addCandidate(targetEngine, "Chris Anderson");
   const state = targetEngine.snapshot();
 
-  assert.deepEqual(
-    gateExtractedCandidate(state, targetCandidate.id, null, "TED"),
-    { allowed: false, reason: "subject_missing" },
-  );
-  assert.deepEqual(
-    gateExtractedCandidate(state, targetCandidate.id, "Chris Anderson", null),
-    { allowed: false, reason: "organization_missing" },
-  );
-  assert.deepEqual(
-    gateExtractedCandidate(state, targetCandidate.id, "Chris Anderson", "3D Robotics"),
-    { allowed: false, reason: "organization_mismatch" },
-  );
-  assert.deepEqual(
-    gateExtractedCandidate(state, targetCandidate.id, "Chris Edward Anderson", "TED Conferences"),
-    { allowed: true, reason: "matched" },
-  );
-  assert.deepEqual(
-    gateExtractedCandidate(state, targetCandidate.id, "Christopher Anderson", "TED"),
-    { allowed: false, reason: "subject_mismatch" },
-  );
+  assert.deepEqual(gateExtractedCandidate(state, targetCandidate.id, null, "TED"), {
+    allowed: false,
+    reason: "subject_missing",
+  });
+  assert.deepEqual(gateExtractedCandidate(state, targetCandidate.id, "Chris Anderson", null), {
+    allowed: false,
+    reason: "organization_missing",
+  });
+  assert.deepEqual(gateExtractedCandidate(state, targetCandidate.id, "Chris Anderson", "3D Robotics"), {
+    allowed: false,
+    reason: "organization_mismatch",
+  });
+  assert.deepEqual(gateExtractedCandidate(state, targetCandidate.id, "Chris Edward Anderson", "TED Conferences"), {
+    allowed: true,
+    reason: "matched",
+  });
+  assert.deepEqual(gateExtractedCandidate(state, targetCandidate.id, "Christopher Anderson", "TED"), {
+    allowed: false,
+    reason: "subject_mismatch",
+  });
 
   const sameNameEngine = createEngine("Chris Anderson public professional background", "candidate-gate-same-name");
   const sameName = addCandidate(sameNameEngine, "Chris Anderson");
@@ -378,7 +388,13 @@ test("extracted pages must name the candidate and satisfy every known organizati
   );
 
   const conflictingCandidate = addCandidate(targetEngine, "Chris Anderson");
-  bindStrongOrganization(targetEngine, conflictingCandidate.id, "3D Robotics", "3dr.com", "https://3dr.com/leadership/chris-anderson");
+  bindStrongOrganization(
+    targetEngine,
+    conflictingCandidate.id,
+    "3D Robotics",
+    "3dr.com",
+    "https://3dr.com/leadership/chris-anderson",
+  );
   assert.deepEqual(
     gateExtractedCandidate(targetEngine.snapshot(), conflictingCandidate.id, "Chris Anderson", "TED"),
     { allowed: false, reason: "organization_mismatch" },
@@ -388,10 +404,10 @@ test("extracted pages must name the candidate and satisfy every known organizati
   const affiliationEngine = createEngine("Alex Kim, Acme Labs, former Beta Labs", "candidate-gate-affiliations");
   const affiliated = addCandidate(affiliationEngine, "Alex Kim");
   for (const organization of ["Acme Labs", "Beta Labs"]) {
-    assert.deepEqual(
-      gateExtractedCandidate(affiliationEngine.snapshot(), affiliated.id, "Alex Kim", organization),
-      { allowed: true, reason: "matched" },
-    );
+    assert.deepEqual(gateExtractedCandidate(affiliationEngine.snapshot(), affiliated.id, "Alex Kim", organization), {
+      allowed: true,
+      reason: "matched",
+    });
   }
 
   const brandEngine = createEngine("Henry wang, 64 ai", "candidate-gate-brand");
@@ -403,10 +419,10 @@ test("extracted pages must name the candidate and satisfy every known organizati
       organization,
     );
   }
-  assert.deepEqual(
-    gateExtractedCandidate(brandEngine.snapshot(), brandCandidate.id, "Henry Wang", "64 Labs"),
-    { allowed: false, reason: "organization_mismatch" },
-  );
+  assert.deepEqual(gateExtractedCandidate(brandEngine.snapshot(), brandCandidate.id, "Henry Wang", "64 Labs"), {
+    allowed: false,
+    reason: "organization_mismatch",
+  });
 
   const nameOnlyEngine = createEngine("Chris Anderson public professional background", "candidate-gate-name-only");
   const unbound = addCandidate(nameOnlyEngine, "Chris Anderson");
@@ -492,12 +508,13 @@ test("structured planner calls disable provider parallelism and repair multiple 
         actions: [],
       };
       return providerResponse({
-        toolCalls: attempt === 1
-          ? [
-              functionCall("propose_research_batch", valid, "call-first"),
-              functionCall("propose_research_batch", valid, "call-second"),
-            ]
-          : [functionCall("propose_research_batch", valid, "call-repair")],
+        toolCalls:
+          attempt === 1
+            ? [
+                functionCall("propose_research_batch", valid, "call-first"),
+                functionCall("propose_research_batch", valid, "call-second"),
+              ]
+            : [functionCall("propose_research_batch", valid, "call-repair")],
         id: `generation-planner-${attempt}`,
       });
     },
@@ -508,17 +525,16 @@ test("structured planner calls disable provider parallelism and repair multiple 
     state: engine.snapshot(),
     availableTools: ["search_web"],
     legalNextPhases: ["classify"],
-    selectedFrontierEntries: selectedPlannerFrontier(
-      engine,
-      ["search_web"],
-      "single-submit-frontier",
-    ),
+    selectedFrontierEntries: selectedPlannerFrontier(engine, ["search_web"], "single-submit-frontier"),
     modelAccounting: accounting.value,
   });
 
   assert.equal(decision.kind, "stop");
   assert.equal(attempt, 2);
-  assert.deepEqual(requestBodies.map((body) => body.parallel_tool_calls), [false, false]);
+  assert.deepEqual(
+    requestBodies.map((body) => body.parallel_tool_calls),
+    [false, false],
+  );
   assert.match(requestBodies[1].messages.at(-1).content, /repair the decision once/i);
   assert.deepEqual(accounting.counts(), { reservations: 2, settlements: 2 });
 });
@@ -530,29 +546,43 @@ test("action policy scans nested string values and the runner ignores model-supp
     ["Find Jane's email address.", { query: "Jane public profile" }],
     ["Public professional research.", { nested: { request: "lookup their phone number" } }],
   ]) {
-    const decision = agent.isActionPolicyCompliant({
-      tool: "search_web",
-      purpose,
-      arguments: argumentsValue,
-      budgetClass: "compute",
-    }, safeTool);
+    const decision = agent.isActionPolicyCompliant(
+      {
+        tool: "search_web",
+        purpose,
+        arguments: argumentsValue,
+        budgetClass: "compute",
+      },
+      safeTool,
+    );
     assert.equal(decision.allowed, false, `${purpose} ${JSON.stringify(argumentsValue)}`);
   }
-  assert.equal(agent.isActionPolicyCompliant({
-    tool: "search_web",
-    purpose: "Correlate the exact user-supplied email in public professional sources.",
-    arguments: { query: "andrew.goering@ramp.com" },
-    budgetClass: "fetch",
-  }, safeTool, { allowedEmails: new Set(["andrew.goering@ramp.com"]) }).allowed, true);
-  for (const query of [
-    "guessed.person@example.com",
-    "https://search.example/?q=guessed.person%40example.com",
-  ]) {
-    assert.equal(agent.isActionPolicyCompliant({
-      tool: "search_web",
-      purpose: "Search a guessed email.",
-      arguments: { query },
-    }, safeTool, { allowedEmails: new Set(["provided@example.com"]) }).allowed, false);
+  assert.equal(
+    agent.isActionPolicyCompliant(
+      {
+        tool: "search_web",
+        purpose: "Correlate the exact user-supplied email in public professional sources.",
+        arguments: { query: "andrew.goering@ramp.com" },
+        budgetClass: "fetch",
+      },
+      safeTool,
+      { allowedEmails: new Set(["andrew.goering@ramp.com"]) },
+    ).allowed,
+    true,
+  );
+  for (const query of ["guessed.person@example.com", "https://search.example/?q=guessed.person%40example.com"]) {
+    assert.equal(
+      agent.isActionPolicyCompliant(
+        {
+          tool: "search_web",
+          purpose: "Search a guessed email.",
+          arguments: { query },
+        },
+        safeTool,
+        { allowedEmails: new Set(["provided@example.com"]) },
+      ).allowed,
+      false,
+    );
   }
   for (const query of [
     "http://search.example/?access_token=secret",
@@ -567,17 +597,30 @@ test("action policy scans nested string values and the runner ignores model-supp
     "https://search.example/?redirect=https%3A%2F%2Ftarget.example%2F%3Faccess_token%3Dsecret",
     "https://user:secret@search.example/public",
   ]) {
-    assert.equal(agent.isActionPolicyCompliant({
-      tool: "search_web",
-      purpose: "Find public sources.",
-      arguments: { query },
-    }, safeTool).allowed, false, query);
+    assert.equal(
+      agent.isActionPolicyCompliant(
+        {
+          tool: "search_web",
+          purpose: "Find public sources.",
+          arguments: { query },
+        },
+        safeTool,
+      ).allowed,
+      false,
+      query,
+    );
   }
-  assert.equal(agent.isActionPolicyCompliant({
-    tool: "search_web",
-    purpose: "Find public sources.",
-    arguments: { query: "https://docs.example/authentication-tokens/public-guide" },
-  }, safeTool).allowed, true);
+  assert.equal(
+    agent.isActionPolicyCompliant(
+      {
+        tool: "search_web",
+        purpose: "Find public sources.",
+        arguments: { query: "https://docs.example/authentication-tokens/public-guide" },
+      },
+      safeTool,
+    ).allowed,
+    true,
+  );
 
   let plannerCalls = 0;
   const executed = [];
@@ -612,7 +655,8 @@ test("action policy scans nested string values and the runner ignores model-supp
       availableTools: ["search_web"],
       budget: { maxSearchCalls: 1 },
     },
-  )) updates.push(update);
+  ))
+    updates.push(update);
 
   const report = updates.at(-1).report;
   assert.equal(executed.length, 1);
@@ -677,10 +721,7 @@ test("resolved identity with two sources and two findings still finishes partial
       sourceEvidenceId: secondEvidence.id,
     },
   ]);
-  assert.equal(
-    domain.resolveIdentity(engine.snapshot().candidates, engine.snapshot().evidence).status,
-    "resolved",
-  );
+  assert.equal(domain.resolveIdentity(engine.snapshot().candidates, engine.snapshot().evidence).status, "resolved");
 
   engine.addFinding({
     candidateId: candidate.id,
@@ -698,15 +739,8 @@ test("resolved identity with two sources and two findings still finishes partial
     evidenceIds: [secondEvidence.id],
     counterEvidenceIds: [],
   });
-  for (const phase of [
-    "classify",
-    "plan",
-    "discover",
-    "separate_candidates",
-    "corroborate",
-    "calibrate",
-    "report",
-  ]) engine.transition(phase);
+  for (const phase of ["classify", "plan", "discover", "separate_candidates", "corroborate", "calibrate", "report"])
+    engine.transition(phase);
 
   const decision = domain.evaluateStop(engine.snapshot(), {
     plannerRequested: true,
@@ -726,15 +760,18 @@ test("resolved identity with two sources and two findings still finishes partial
 
 test("a unique official anchor can complete alone, but spoofable anchors and stop-condition precedence cannot distort status", () => {
   const clock = domain.createSequenceClock("2026-08-18T20:30:00.000Z", 2);
-  const engine = new agent.InvestigationEngine({
-    schemaVersion: domain.SCHEMA_VERSION,
-    query: "Chris Anderson, TED",
-    requestedDepth: "standard",
-    requestedCategories: ["identity"],
-  }, {
-    clock,
-    ids: domain.createDeterministicIdFactory("unique-anchor"),
-  });
+  const engine = new agent.InvestigationEngine(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      query: "Chris Anderson, TED",
+      requestedDepth: "standard",
+      requestedCategories: ["identity"],
+    },
+    {
+      clock,
+      ids: domain.createDeterministicIdFactory("unique-anchor"),
+    },
+  );
   const candidate = addCandidate(engine, "Chris Anderson");
   const admitted = engine.admitEvidence({
     candidateId: candidate.id,
@@ -785,9 +822,8 @@ test("a unique official anchor can complete alone, but spoofable anchors and sto
     evidenceIds: [evidence.id],
     counterEvidenceIds: [],
   });
-  for (const phase of [
-    "classify", "plan", "discover", "separate_candidates", "corroborate", "calibrate", "report",
-  ]) engine.transition(phase);
+  for (const phase of ["classify", "plan", "discover", "separate_candidates", "corroborate", "calibrate", "report"])
+    engine.transition(phase);
 
   const satisfied = engine.snapshot();
   assert.equal(domain.resolveIdentity(satisfied.candidates, satisfied.evidence).status, "resolved");
@@ -809,24 +845,23 @@ async function runTwoSourcePromotionScenario(batchSources) {
   const fetchSnapshots = [];
   const planner = async ({ state, selectedFrontierEntries }) => {
     if (state.candidates.length === 0) {
-      const entry = selectedFrontierEntries.find((item) =>
-        item.allowedTools.includes("discover_subject"));
+      const entry = selectedFrontierEntries.find((item) => item.allowedTools.includes("discover_subject"));
       assert.ok(entry, "candidate discovery must bind to a selected frontier entry");
       return {
         kind: "actions",
         decisionSummary: "Create one separated candidate before source admission.",
-        actions: [{
-          frontierEntryId: entry.id,
-          tool: "discover_subject",
-          purpose: "Create the requested public professional candidate.",
-          arguments: {},
-        }],
+        actions: [
+          {
+            frontierEntryId: entry.id,
+            tool: "discover_subject",
+            purpose: "Create the requested public professional candidate.",
+            arguments: {},
+          },
+        ],
       };
     }
     if (state.evidence.length < 2) {
-      const remaining = state.evidence.length === 0
-        ? ["one.example", "two.example"]
-        : ["two.example"];
+      const remaining = state.evidence.length === 0 ? ["one.example", "two.example"] : ["two.example"];
       const selectedEntries = batchSources
         ? selectedFrontierEntries.slice(0, remaining.length)
         : selectedFrontierEntries.slice(0, 1);
@@ -865,33 +900,58 @@ async function runTwoSourcePromotionScenario(batchSources) {
     const url = `https://${family}/alex-kim`;
     return {
       status: "succeeded",
-      candidateSignals: [{
-        candidateId: action.candidateId,
-        signals: [
-          { kind: "name", value: "Alex Kim", normalizedValue: "alex kim", strength: "strong", assurance: "spoofable", sourceFamily: family },
-          { kind: "organization", value: "Acme Labs", normalizedValue: "acme labs", strength: "strong", assurance: "spoofable", sourceFamily: family },
-          { kind: "profile_url", value: url, normalizedValue: url, strength: "strong", assurance: "spoofable", sourceFamily: family },
-        ],
-      }],
-      evidence: [{
-        candidateId: action.candidateId,
-        claim: "Alex Kim works at Acme Labs.",
-        sourceUrl: url,
-        sourceFamily: family,
-        sourceType: "public_document",
-        excerpt: "Alex Kim works at Acme Labs.",
-        verificationMethod: "direct_fetch",
-        reliability: 0.55,
-        spoofable: true,
-        attributes: {
-          untrustedContent: true,
-          extractedSubjectName: "alex kim",
-          extractedSubjectLabel: "Alex Kim",
-          extractedOrganization: "acme labs",
-          extractedOrganizationLabel: "Acme Labs",
-          extractiveClaim: true,
+      candidateSignals: [
+        {
+          candidateId: action.candidateId,
+          signals: [
+            {
+              kind: "name",
+              value: "Alex Kim",
+              normalizedValue: "alex kim",
+              strength: "strong",
+              assurance: "spoofable",
+              sourceFamily: family,
+            },
+            {
+              kind: "organization",
+              value: "Acme Labs",
+              normalizedValue: "acme labs",
+              strength: "strong",
+              assurance: "spoofable",
+              sourceFamily: family,
+            },
+            {
+              kind: "profile_url",
+              value: url,
+              normalizedValue: url,
+              strength: "strong",
+              assurance: "spoofable",
+              sourceFamily: family,
+            },
+          ],
         },
-      }],
+      ],
+      evidence: [
+        {
+          candidateId: action.candidateId,
+          claim: "Alex Kim works at Acme Labs.",
+          sourceUrl: url,
+          sourceFamily: family,
+          sourceType: "public_document",
+          excerpt: "Alex Kim works at Acme Labs.",
+          verificationMethod: "direct_fetch",
+          reliability: 0.55,
+          spoofable: true,
+          attributes: {
+            untrustedContent: true,
+            extractedSubjectName: "alex kim",
+            extractedSubjectLabel: "Alex Kim",
+            extractedOrganization: "acme labs",
+            extractedOrganizationLabel: "Acme Labs",
+            extractiveClaim: true,
+          },
+        },
+      ],
       meta: { requests: 1 },
     };
   };
@@ -902,30 +962,30 @@ async function runTwoSourcePromotionScenario(batchSources) {
       ["Alex Kim at Acme Labs", "Alex Kim works at Acme Labs."],
       ["Acme Labs professional identity", "Two direct pages say Alex Kim works at Acme Labs."],
     ].map(([title, description]) => ({
-        candidateId: state.candidates[0].id,
-        title,
-        description,
-        category: "identity",
-        evidenceIds: state.evidence.map((item) => item.id),
-        counterEvidenceIds: [],
-      })),
+      candidateId: state.candidates[0].id,
+      title,
+      description,
+      category: "identity",
+      evidenceIds: state.evidence.map((item) => item.id),
+      counterEvidenceIds: [],
+    })),
   });
 
   let completed;
-  for await (const update of agent.runResearch({
-    schemaVersion: domain.SCHEMA_VERSION,
-    query: "Alex Kim, Acme Labs",
-    requestedDepth: "standard",
-    requestedCategories: ["identity"],
-  }, { clock, ids, planner, executeAction, synthesize }, {
-    availableTools: [
-      "discover_subject",
-      "fetch_direct_page_one",
-      "fetch_direct_page_two",
-    ],
-    minimumFindings: 2,
-    minimumIndependentSourceFamilies: 2,
-  })) {
+  for await (const update of agent.runResearch(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      query: "Alex Kim, Acme Labs",
+      requestedDepth: "standard",
+      requestedCategories: ["identity"],
+    },
+    { clock, ids, planner, executeAction, synthesize },
+    {
+      availableTools: ["discover_subject", "fetch_direct_page_one", "fetch_direct_page_two"],
+      minimumFindings: 2,
+      minimumIndependentSourceFamilies: 2,
+    },
+  )) {
     if (update.type === "completed") completed = update;
   }
   return { completed, fetchSnapshots };
@@ -936,24 +996,29 @@ async function runTwoSourcePromotionScenario(batchSources) {
 // fetch lanes are discovery-only, so the scripted evidence is not admitted and
 // no cross-source match forms. Cross-source promotion is exercised for real by
 // the byte-stable example fixtures and the live pipeline.
-test("ordered kernel admission promotes two agreeing pages in both parallel and sequential batches", { skip: "superseded by discovery/evidence lane separation; covered by byte-stable examples + live e2e" }, async () => {
-  const parallel = await runTwoSourcePromotionScenario(true);
-  const sequential = await runTwoSourcePromotionScenario(false);
-  assert.deepEqual(parallel.fetchSnapshots, [0, 0], "parallel adapters must share the pre-batch state");
-  assert.deepEqual(sequential.fetchSnapshots, [0, 1]);
-  for (const scenario of [parallel, sequential]) {
-    assert.equal(scenario.completed.report.status, "completed");
-    assert.equal(scenario.completed.report.identity.status, "resolved");
-    assert.equal(scenario.completed.report.identity.selectedCandidate.status, "resolved");
-    assert.equal(scenario.completed.report.identity.selectedScore, 0.819);
-    assert.equal(
-      scenario.completed.report.identity.selectedCandidate.signals
-        .filter((signal) => signal.kind === "cross_source_match").length,
-      1,
-    );
-    assert.ok(scenario.completed.report.evidence.every((item) => item.spoofable));
-  }
-});
+test(
+  "ordered kernel admission promotes two agreeing pages in both parallel and sequential batches",
+  { skip: "superseded by discovery/evidence lane separation; covered by byte-stable examples + live e2e" },
+  async () => {
+    const parallel = await runTwoSourcePromotionScenario(true);
+    const sequential = await runTwoSourcePromotionScenario(false);
+    assert.deepEqual(parallel.fetchSnapshots, [0, 0], "parallel adapters must share the pre-batch state");
+    assert.deepEqual(sequential.fetchSnapshots, [0, 1]);
+    for (const scenario of [parallel, sequential]) {
+      assert.equal(scenario.completed.report.status, "completed");
+      assert.equal(scenario.completed.report.identity.status, "resolved");
+      assert.equal(scenario.completed.report.identity.selectedCandidate.status, "resolved");
+      assert.equal(scenario.completed.report.identity.selectedScore, 0.819);
+      assert.equal(
+        scenario.completed.report.identity.selectedCandidate.signals.filter(
+          (signal) => signal.kind === "cross_source_match",
+        ).length,
+        1,
+      );
+      assert.ok(scenario.completed.report.evidence.every((item) => item.spoofable));
+    }
+  },
+);
 
 test("finding admission materializes only extractive claims and ignores hostile prose or metadata", () => {
   const engine = createEngine("Chris Anderson, TED", "finding-grounding");
@@ -1005,15 +1070,18 @@ test("finding admission materializes only extractive claims and ignores hostile 
 
 test("model-selected category tags cannot forge requested coverage", () => {
   const clock = domain.createSequenceClock("2026-08-18T22:45:00.000Z", 2);
-  const engine = new agent.InvestigationEngine({
-    schemaVersion: domain.SCHEMA_VERSION,
-    query: "Chris Anderson, TED",
-    requestedDepth: "standard",
-    requestedCategories: ["education", "publication"],
-  }, {
-    clock,
-    ids: domain.createDeterministicIdFactory("category-forgery"),
-  });
+  const engine = new agent.InvestigationEngine(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      query: "Chris Anderson, TED",
+      requestedDepth: "standard",
+      requestedCategories: ["education", "publication"],
+    },
+    {
+      clock,
+      ids: domain.createDeterministicIdFactory("category-forgery"),
+    },
+  );
   const candidate = addCandidate(engine, "Chris Anderson");
   const evidence = engine.admitEvidence({
     candidateId: candidate.id,
@@ -1026,14 +1094,18 @@ test("model-selected category tags cannot forge requested coverage", () => {
   }).evidence;
   assert.ok(evidence);
   for (const category of ["education", "publication"]) {
-    assert.throws(() => engine.addFinding({
-      candidateId: candidate.id,
-      title: `Fabricated ${category}`,
-      description: `The quote supposedly establishes ${category}.`,
-      category,
-      evidenceIds: [evidence.id],
-      counterEvidenceIds: [],
-    }), new RegExp(`does not establish finding category ${category}`));
+    assert.throws(
+      () =>
+        engine.addFinding({
+          candidateId: candidate.id,
+          title: `Fabricated ${category}`,
+          description: `The quote supposedly establishes ${category}.`,
+          category,
+          evidenceIds: [evidence.id],
+          counterEvidenceIds: [],
+        }),
+      new RegExp(`does not establish finding category ${category}`),
+    );
   }
   engine.addFinding({
     candidateId: candidate.id,
@@ -1043,14 +1115,18 @@ test("model-selected category tags cannot forge requested coverage", () => {
     evidenceIds: [evidence.id],
     counterEvidenceIds: [],
   });
-  assert.throws(() => engine.addFinding({
-    candidateId: candidate.id,
-    title: "Employment",
-    description: "The quote describes a professional role.",
-    category: "employment",
-    evidenceIds: [evidence.id],
-    counterEvidenceIds: [],
-  }), /evidence cannot be reused across finding categories/i);
+  assert.throws(
+    () =>
+      engine.addFinding({
+        candidateId: candidate.id,
+        title: "Employment",
+        description: "The quote describes a professional role.",
+        category: "employment",
+        evidenceIds: [evidence.id],
+        counterEvidenceIds: [],
+      }),
+    /evidence cannot be reused across finding categories/i,
+  );
   const coverage = domain.summarizeCoverage(
     engine.snapshot(),
     domain.requestedCategoriesForInput(engine.snapshot().input),
@@ -1066,10 +1142,7 @@ test("the kernel rejects forced stop reasons and mismatched terminal statuses", 
     () => engine.stop("budget_exhausted", "Pretend the fresh budget is exhausted."),
     /not valid for current state/i,
   );
-  assert.throws(
-    () => engine.stop("fatal_error", "Pretend an external failure occurred."),
-    /requires stopExternal/i,
-  );
+  assert.throws(() => engine.stop("fatal_error", "Pretend an external failure occurred."), /requires stopExternal/i);
   assert.throws(
     () => engine.stopExternal("fatal_error", "A trusted boundary observed failure.", "completed"),
     /invalid for fatal_error/i,
@@ -1091,11 +1164,18 @@ test("numeric minor formulations are blocked while clearly adult biographies rem
   ]) {
     assert.notEqual(domain.classifySafety(query, { currentYear: 2026 }).level, "block", query);
   }
-  assert.equal(agent.isActionPolicyCompliant({
-    tool: "search_web",
-    purpose: "Find public sources.",
-    arguments: { query: "public profile of a 12-year-old developer" },
-  }, ["search_web"], { currentYear: 2026 }).allowed, false);
+  assert.equal(
+    agent.isActionPolicyCompliant(
+      {
+        tool: "search_web",
+        purpose: "Find public sources.",
+        arguments: { query: "public profile of a 12-year-old developer" },
+      },
+      ["search_web"],
+      { currentYear: 2026 },
+    ).allowed,
+    false,
+  );
   assert.equal(
     createEngine("find Jane Doe born in 2010", "minor-clock").snapshot().safety.level,
     "block",
@@ -1251,11 +1331,19 @@ test("shared safety concepts block ordinary paraphrases at intake, action, outpu
   for (const value of restricted) {
     assert.equal(domain.classifySafety(value, { currentYear: 2026 }).level, "block", value);
     assert.equal(domain.containsRestrictedPublicContent(value, { currentYear: 2026 }), true, value);
-    assert.equal(agent.isActionPolicyCompliant({
-      tool: "search_web",
-      purpose: "Find public professional sources.",
-      arguments: { query: value },
-    }, ["search_web"], { currentYear: 2026 }).allowed, false, value);
+    assert.equal(
+      agent.isActionPolicyCompliant(
+        {
+          tool: "search_web",
+          purpose: "Find public professional sources.",
+          arguments: { query: value },
+        },
+        ["search_web"],
+        { currentYear: 2026 },
+      ).allowed,
+      false,
+      value,
+    );
   }
 
   for (const value of [
@@ -1333,11 +1421,19 @@ test("shared safety concepts block ordinary paraphrases at intake, action, outpu
   ]) {
     assert.notEqual(domain.classifySafety(value, { currentYear: 2026 }).level, "block", value);
     assert.equal(domain.containsRestrictedPublicContent(value, { currentYear: 2026 }), false, value);
-    assert.equal(agent.isActionPolicyCompliant({
-      tool: "search_web",
-      purpose: "Find public professional sources.",
-      arguments: { query: value },
-    }, ["search_web"], { currentYear: 2026 }).allowed, true, value);
+    assert.equal(
+      agent.isActionPolicyCompliant(
+        {
+          tool: "search_web",
+          purpose: "Find public professional sources.",
+          arguments: { query: value },
+        },
+        ["search_web"],
+        { currentYear: 2026 },
+      ).allowed,
+      true,
+      value,
+    );
   }
 
   const engine = createEngine("Alex Kim public professional background", "safe-questions");
@@ -1350,10 +1446,9 @@ test("shared safety concepts block ordinary paraphrases at intake, action, outpu
     "A proposed open question was removed by the public-professional safety policy.",
     "What is Alex Kim's public conference history?",
   ]);
-  assert.deepEqual(
-    agent.sanitizeTraceValue({ decisionSummary: "Found private-contact@example.net in a page." }),
-    { decisionSummary: "[redacted: restricted personal content]" },
-  );
+  assert.deepEqual(agent.sanitizeTraceValue({ decisionSummary: "Found private-contact@example.net in a page." }), {
+    decisionSummary: "[redacted: restricted personal content]",
+  });
   assert.deepEqual(
     agent.sanitizeTraceValue(
       { decisionSummary: "Correlate exact input provided@example.com." },
@@ -1387,31 +1482,54 @@ test("evidence URL admission rejects decoded contact data and secret parameters"
     ["https://example.com/call/602-555-0199", "sensitive_content"],
   ]) {
     const result = domain.admitEvidence(draft(sourceUrl), context);
-    assert.deepEqual({ admitted: result.admitted, reason: result.reason }, {
-      admitted: false,
-      reason,
-    }, sourceUrl);
+    assert.deepEqual(
+      { admitted: result.admitted, reason: result.reason },
+      {
+        admitted: false,
+        reason,
+      },
+      sourceUrl,
+    );
   }
   for (const key of [
-    "password", "client_secret", "auth_token", "session_id", "code",
-    "phone", "mobile", "tel", "home_address", "daughter", "religion",
-    "political_affiliation", "sexual_orientation", "home_location", "session_cookie",
-    "otp", "mfa_code", "recovery_code", "bearer", "jwt_token", "x-api-key",
+    "password",
+    "client_secret",
+    "auth_token",
+    "session_id",
+    "code",
+    "phone",
+    "mobile",
+    "tel",
+    "home_address",
+    "daughter",
+    "religion",
+    "political_affiliation",
+    "sexual_orientation",
+    "home_location",
+    "session_cookie",
+    "otp",
+    "mfa_code",
+    "recovery_code",
+    "bearer",
+    "jwt_token",
+    "x-api-key",
   ]) {
     const result = domain.admitEvidence(draft(`https://example.com/profile?${key}=secret`), context);
-    assert.deepEqual({ admitted: result.admitted, reason: result.reason }, {
-      admitted: false,
-      reason: "unsafe_url",
-    }, key);
+    assert.deepEqual(
+      { admitted: result.admitted, reason: result.reason },
+      {
+        admitted: false,
+        reason: "unsafe_url",
+      },
+      key,
+    );
   }
-  assert.equal(domain.admitEvidence(
-    draft("https://example.com/profile/provided%40example.com?utm_source=public"),
-    context,
-  ).admitted, true);
-  assert.equal(domain.admitEvidence(
-    draft("https://example.com/phone/6025550199"),
-    context,
-  ).admitted, false);
+  assert.equal(
+    domain.admitEvidence(draft("https://example.com/profile/provided%40example.com?utm_source=public"), context)
+      .admitted,
+    true,
+  );
+  assert.equal(domain.admitEvidence(draft("https://example.com/phone/6025550199"), context).admitted, false);
   for (const sourceUrl of [
     "https://example.com/profile#access_token=secret",
     "https://example.com/profile?redirect=https%3A%2F%2Ftarget.example%2F%3Faccess_token%3Dsecret",
@@ -1422,14 +1540,16 @@ test("evidence URL admission rejects decoded contact data and secret parameters"
 
 test("source families are derived from canonical origins and cannot be forged to promote identity", () => {
   const engine = createEngine("Alex Kim, Acme Labs", "source-family-forgery");
-  const candidate = addCandidate(engine, "Alex Kim", [{
-    kind: "organization",
-    value: "Acme Labs",
-    normalizedValue: "acme labs",
-    strength: "strong",
-    assurance: "spoofable",
-    sourceFamily: "example.com",
-  }]);
+  const candidate = addCandidate(engine, "Alex Kim", [
+    {
+      kind: "organization",
+      value: "Acme Labs",
+      normalizedValue: "acme labs",
+      strength: "strong",
+      assurance: "spoofable",
+      sourceFamily: "example.com",
+    },
+  ]);
   const evidenceDraft = (path, sourceFamily) => ({
     candidateId: candidate.id,
     claim: `Alex Kim works at Acme Labs on public project ${path}.`,
@@ -1447,13 +1567,12 @@ test("source families are derived from canonical origins and cannot be forged to
   });
   assert.equal(engine.admitEvidence(evidenceDraft("one", "example.com")).admitted, true);
   const forged = engine.admitEvidence(evidenceDraft("two", "fake-independent.example"));
-  assert.deepEqual(
-    { admitted: forged.admitted, reason: forged.reason },
-    { admitted: false, reason: "invalid_url" },
-  );
+  assert.deepEqual({ admitted: forged.admitted, reason: forged.reason }, { admitted: false, reason: "invalid_url" });
   assert.equal(engine.snapshot().evidence.length, 1);
-  assert.equal(engine.snapshot().candidates[0].signals.some((signal) =>
-    signal.kind === "cross_source_match"), false);
+  assert.equal(
+    engine.snapshot().candidates[0].signals.some((signal) => signal.kind === "cross_source_match"),
+    false,
+  );
   assert.notEqual(engine.snapshot().candidates[0].status, "resolved");
   assert.equal(domain.evaluateStop(engine.snapshot()).allowed, false);
 });
@@ -1476,35 +1595,44 @@ test("sensitive content is rejected at both evidence and finding admission bound
     allowedEmails: new Set(["provided@example.com"]),
   };
 
-  const unexpectedEmail = domain.admitEvidence({
-    candidateId: candidate.id,
-    claim: "A page lists private-contact@example.net.",
-    sourceUrl: "https://example.com/contact",
-    sourceType: "public_document",
-    excerpt: "Contact private-contact@example.net for details.",
-  }, context);
+  const unexpectedEmail = domain.admitEvidence(
+    {
+      candidateId: candidate.id,
+      claim: "A page lists private-contact@example.net.",
+      sourceUrl: "https://example.com/contact",
+      sourceType: "public_document",
+      excerpt: "Contact private-contact@example.net for details.",
+    },
+    context,
+  );
   assert.deepEqual(
     { admitted: unexpectedEmail.admitted, reason: unexpectedEmail.reason },
     { admitted: false, reason: "sensitive_content" },
   );
 
-  const address = domain.admitEvidence({
-    candidateId: candidate.id,
-    claim: "The page contains a location line.",
-    sourceUrl: "https://example.com/address",
-    sourceType: "public_document",
-    excerpt: "Jane lives at 123 Main Street, Phoenix, AZ 85001.",
-  }, context);
+  const address = domain.admitEvidence(
+    {
+      candidateId: candidate.id,
+      claim: "The page contains a location line.",
+      sourceUrl: "https://example.com/address",
+      sourceType: "public_document",
+      excerpt: "Jane lives at 123 Main Street, Phoenix, AZ 85001.",
+    },
+    context,
+  );
   assert.equal(address.admitted, false);
   assert.equal(address.reason, "sensitive_content");
 
-  const allowedExactEmail = domain.admitEvidence({
-    candidateId: candidate.id,
-    claim: "Public commit metadata contains provided@example.com.",
-    sourceUrl: "https://github.com/example/repository/commit/abc",
-    sourceType: "code_commit",
-    excerpt: "Author email provided@example.com appears in public commit metadata.",
-  }, context);
+  const allowedExactEmail = domain.admitEvidence(
+    {
+      candidateId: candidate.id,
+      claim: "Public commit metadata contains provided@example.com.",
+      sourceUrl: "https://github.com/example/repository/commit/abc",
+      sourceType: "code_commit",
+      excerpt: "Author email provided@example.com appears in public commit metadata.",
+    },
+    context,
+  );
   assert.equal(allowedExactEmail.admitted, true);
 
   for (const [field, value] of [
@@ -1515,43 +1643,57 @@ test("sensitive content is rejected at both evidence and finding admission bound
     ["attributes", { nested: { query: 6025550199 } }],
     ["attributes", { nested: { query: "６０２５５５０１９９" } }],
     ["attributes", { nested: { query: "٦٠٢٥٥٥٠١٩٩" } }],
-    ["attributes", { nested: { "ｐｈｏｎｅ": "６０２－５５５－０１９９" } }],
-    ["canonicalSubset", { nested: { "ｈｏｍｅａｄｄｒｅｓｓ": "１２３ Main St" } }],
+    ["attributes", { nested: { ｐｈｏｎｅ: "６０２－５５５－０１９９" } }],
+    ["canonicalSubset", { nested: { ｈｏｍｅａｄｄｒｅｓｓ: "１２３ Main St" } }],
     ["attributes", { nested: { address: "123 Main Street, Phoenix, AZ 85001" } }],
   ]) {
-    const nested = domain.admitEvidence({
-      candidateId: candidate.id,
-      claim: "A public professional source was inspected.",
-      sourceUrl: `https://nested.example/${field}-${JSON.stringify(value).length}`,
-      sourceType: "public_document",
-      excerpt: "A public professional source was inspected.",
-      [field]: value,
-    }, context);
+    const nested = domain.admitEvidence(
+      {
+        candidateId: candidate.id,
+        claim: "A public professional source was inspected.",
+        sourceUrl: `https://nested.example/${field}-${JSON.stringify(value).length}`,
+        sourceType: "public_document",
+        excerpt: "A public professional source was inspected.",
+        [field]: value,
+      },
+      context,
+    );
     assert.deepEqual(
       { admitted: nested.admitted, reason: nested.reason },
       { admitted: false, reason: "sensitive_content" },
       field,
     );
   }
-  const allowedNestedEmail = domain.admitEvidence({
-    candidateId: candidate.id,
-    claim: "Public commit metadata was inspected.",
-    sourceUrl: "https://github.com/example/repository/commit/def",
-    sourceType: "code_commit",
-    excerpt: "Public commit metadata was inspected.",
-    canonicalSubset: { authorEmail: "provided@example.com" },
-  }, context);
+  const allowedNestedEmail = domain.admitEvidence(
+    {
+      candidateId: candidate.id,
+      claim: "Public commit metadata was inspected.",
+      sourceUrl: "https://github.com/example/repository/commit/def",
+      sourceType: "code_commit",
+      excerpt: "Public commit metadata was inspected.",
+      canonicalSubset: { authorEmail: "provided@example.com" },
+    },
+    context,
+  );
   assert.equal(allowedNestedEmail.admitted, true);
 
   assert.throws(
-    () => domain.createFinding({
-      candidateId: candidate.id,
-      title: "Public commit identity",
-      description: "The finding also exposes a home address.",
-      category: "identity",
-      evidenceIds: [allowedExactEmail.evidence.id],
-      counterEvidenceIds: [],
-    }, [candidate], [allowedExactEmail.evidence], ids, clock, context.allowedEmails),
+    () =>
+      domain.createFinding(
+        {
+          candidateId: candidate.id,
+          title: "Public commit identity",
+          description: "The finding also exposes a home address.",
+          category: "identity",
+          evidenceIds: [allowedExactEmail.evidence.id],
+          counterEvidenceIds: [],
+        },
+        [candidate],
+        [allowedExactEmail.evidence],
+        ids,
+        clock,
+        context.allowedEmails,
+      ),
     /restricted personal content/,
   );
 
@@ -1560,23 +1702,25 @@ test("sensitive content is rejected at both evidence and finding admission bound
     false,
   );
   assert.equal(domain.containsRestrictedPublicContent("Mail records show P.O. Box 421."), true);
-  assert.deepEqual(
-    agent.sanitizeTraceValue({ summary: "Jane lives at 123 Main Street, Phoenix, AZ 85001." }),
-    { summary: "[redacted: restricted personal content]" },
-  );
+  assert.deepEqual(agent.sanitizeTraceValue({ summary: "Jane lives at 123 Main Street, Phoenix, AZ 85001." }), {
+    summary: "[redacted: restricted personal content]",
+  });
 });
 
 test("cancellation during model extraction returns canceled and admits no fetched evidence", async () => {
   const engine = createEngine("Chris Anderson, TED", "cancel-extraction");
   const candidate = addCandidate(engine, "Chris Anderson");
   const sourceUrl = "https://cancel.example/chris";
-  assert.equal(engine.admitEvidence({
-    candidateId: candidate.id,
-    claim: "An established index links this professional source to Chris Anderson.",
-    sourceUrl,
-    sourceType: "company_page",
-    excerpt: "Chris Anderson is linked to this public professional source.",
-  }).admitted, true);
+  assert.equal(
+    engine.admitEvidence({
+      candidateId: candidate.id,
+      claim: "An established index links this professional source to Chris Anderson.",
+      sourceUrl,
+      sourceType: "company_page",
+      excerpt: "Chris Anderson is linked to this public professional source.",
+    }).admitted,
+    true,
+  );
 
   let providerStarted = false;
   const dependencies = createLiveDependencies(engine.snapshot().input, {
@@ -1586,10 +1730,9 @@ test("cancellation during model extraction returns canceled and admits no fetche
     fetch: async (request, init = {}) => {
       const url = new URL(String(request));
       if (url.hostname === "cancel.example") {
-        return new Response(
-          "<html><p>Chris Anderson leads TED public programs.</p></html>",
-          { headers: { "content-type": "text/html" } },
-        );
+        return new Response("<html><p>Chris Anderson leads TED public programs.</p></html>", {
+          headers: { "content-type": "text/html" },
+        });
       }
       if (url.hostname === "openrouter.ai") {
         providerStarted = true;
@@ -1604,15 +1747,18 @@ test("cancellation during model extraction returns canceled and admits no fetche
   });
   const controller = new AbortController();
   const accounting = modelAccounting();
-  const resultPromise = dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-cancel-extraction",
-    tool: "fetch_public_source",
-    purpose: "Extract one public professional fact.",
-    arguments: { url: sourceUrl },
-    candidateId: candidate.id,
-    budgetClass: "fetch",
-  }, contextFor(engine, accounting.value, controller.signal));
+  const resultPromise = dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-cancel-extraction",
+      tool: "fetch_public_source",
+      purpose: "Extract one public professional fact.",
+      arguments: { url: sourceUrl },
+      candidateId: candidate.id,
+      budgetClass: "fetch",
+    },
+    contextFor(engine, accounting.value, controller.signal),
+  );
   setTimeout(() => controller.abort("release regression cancellation"), 20);
   const result = await resultPromise;
 
@@ -1625,29 +1771,30 @@ test("cancellation during model extraction returns canceled and admits no fetche
 
 test("Wayback refuses discovery-only and self-asserted candidate links without network work", async () => {
   const engine = createEngine("Chris Anderson public professional background", "wayback-denial");
-  const candidate = addCandidate(engine, "Chris Anderson", [{
-    kind: "profile_url",
-    value: "https://profile.example/chris",
-    normalizedValue: "https profile example chris",
-    strength: "strong",
-    assurance: "self_asserted",
-    sourceFamily: "profile.example",
-  }]);
-  assert.equal(engine.admitEvidence({
-    candidateId: candidate.id,
-    claim: "Search surfaced a possible profile URL.",
-    disposition: "discovery_only",
-    sourceUrl: "https://profile.example/chris",
-    sourceType: "search_result",
-    excerpt: "The URL has not been fetched or quoted.",
-    attributes: { leadId: "lead-wayback" },
-  }).admitted, true);
+  const candidate = addCandidate(engine, "Chris Anderson", [
+    {
+      kind: "profile_url",
+      value: "https://profile.example/chris",
+      normalizedValue: "https profile example chris",
+      strength: "strong",
+      assurance: "self_asserted",
+      sourceFamily: "profile.example",
+    },
+  ]);
+  assert.equal(
+    engine.admitEvidence({
+      candidateId: candidate.id,
+      claim: "Search surfaced a possible profile URL.",
+      disposition: "discovery_only",
+      sourceUrl: "https://profile.example/chris",
+      sourceType: "search_result",
+      excerpt: "The URL has not been fetched or quoted.",
+      attributes: { leadId: "lead-wayback" },
+    }).admitted,
+    true,
+  );
   const state = engine.snapshot();
-  assert.equal(establishedSourceForCandidate(
-    state,
-    "https://profile.example/chris",
-    candidate.id,
-  ), null);
+  assert.equal(establishedSourceForCandidate(state, "https://profile.example/chris", candidate.id), null);
 
   let networkCalls = 0;
   const dependencies = createLiveDependencies(state.input, {
@@ -1658,19 +1805,22 @@ test("Wayback refuses discovery-only and self-asserted candidate links without n
       throw new Error("Wayback denial must happen before network work");
     },
   });
-  const result = await dependencies.executeAction({
-    schemaVersion: domain.SCHEMA_VERSION,
-    id: "action-wayback-denied",
-    tool: "wayback_profile_history",
-    purpose: "Inspect bounded historical profile changes.",
-    arguments: { url: "https://profile.example/chris" },
-    candidateId: candidate.id,
-    budgetClass: "search",
-  }, {
-    schemaVersion: domain.SCHEMA_VERSION,
-    state,
-    modelAccounting: modelAccounting().value,
-  });
+  const result = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-wayback-denied",
+      tool: "wayback_profile_history",
+      purpose: "Inspect bounded historical profile changes.",
+      arguments: { url: "https://profile.example/chris" },
+      candidateId: candidate.id,
+      budgetClass: "search",
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state,
+      modelAccounting: modelAccounting().value,
+    },
+  );
 
   assert.equal(result.status, "skipped");
   assert.equal(result.diagnostics[0].code, "established_candidate_link_required");

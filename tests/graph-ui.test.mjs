@@ -92,31 +92,33 @@ function canonicalFixture() {
       }),
       edge("edge-mutation", "seed", "mutation", "mutates", "mutated", 3),
     ],
-    frontier: [{
-      schemaVersion: 2,
-      id: stableId,
-      frontierEntryId: stableId,
-      actionId: stableId,
-      nodeId: "candidate-decoy",
-      parentNodeId: "seed",
-      parentFrontierEntryId: null,
-      status: "rejected",
-      sourceTier: 1,
-      sourceLaneId: "t1.first_party",
-      allowedTools: ["search_web"],
-      intent: "Keep the same-name alternative separate.",
-      queryHint: "Chris Anderson 3D Robotics",
-      candidateId: "candidate-decoy",
-      depth: 1,
-      ordinal: 1,
-      dedupeKey: "candidate-decoy",
-      utility: utility(),
-      edgeCost: 1.1,
-      pathCost: 1.1,
-      mutation: null,
-      createdAt,
-      updatedAt: createdAt,
-    }],
+    frontier: [
+      {
+        schemaVersion: 2,
+        id: stableId,
+        frontierEntryId: stableId,
+        actionId: stableId,
+        nodeId: "candidate-decoy",
+        parentNodeId: "seed",
+        parentFrontierEntryId: null,
+        status: "rejected",
+        sourceTier: 1,
+        sourceLaneId: "t1.first_party",
+        allowedTools: ["search_web"],
+        intent: "Keep the same-name alternative separate.",
+        queryHint: "Chris Anderson 3D Robotics",
+        candidateId: "candidate-decoy",
+        depth: 1,
+        ordinal: 1,
+        dedupeKey: "candidate-decoy",
+        utility: utility(),
+        edgeCost: 1.1,
+        pathCost: 1.1,
+        mutation: null,
+        createdAt,
+        updatedAt: createdAt,
+      },
+    ],
     selectedFrontierEntryIds: [stableId],
     currentSourceTier: 1,
     nextOrdinal: 5,
@@ -143,11 +145,14 @@ test("UI accepts only the canonical v2 runtime graph and never derives one from 
   const graph = canonicalFixture();
   assert.equal(graphUi.canonicalGraph(graph), graph);
   assert.equal(graphUi.graphFromReport({ searchGraph: graph }), graph);
-  assert.equal(graphUi.graphFromReport({
-    candidates: [{ id: "candidate", displayName: "Decorative candidate" }],
-    evidence: [{ id: "evidence", claim: "Decorative evidence" }],
-    findings: [{ id: "finding", title: "Decorative finding" }],
-  }), null);
+  assert.equal(
+    graphUi.graphFromReport({
+      candidates: [{ id: "candidate", displayName: "Decorative candidate" }],
+      evidence: [{ id: "evidence", claim: "Decorative evidence" }],
+      findings: [{ id: "finding", title: "Decorative finding" }],
+    }),
+    null,
+  );
   assert.equal(graphUi.canonicalGraph({ ...graph, schemaVersion: 1 }), null);
 
   const invalidEdge = structuredClone(graph);

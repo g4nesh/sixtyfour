@@ -1,10 +1,6 @@
 "use client";
 
-import {
-  reportMarkdownFilename,
-  reportViewModelToMarkdown,
-  type ReportViewModel,
-} from "../../lib/report-export";
+import { reportMarkdownFilename, reportViewModelToMarkdown, type ReportViewModel } from "../../lib/report-export";
 
 function saveBlob(blob: Blob, filename: string): void {
   if (typeof document === "undefined") throw new Error("Report downloads require a browser.");

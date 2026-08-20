@@ -86,7 +86,7 @@ Confidence uses transparent bands and a rationale-bearing set of caps. Multiple 
 - `lib/search`: ordered source hierarchy, best-first frontier, costs, graph transitions, and deterministic bounded mutation.
 - `lib/harness`: explicit LangGraph `StateGraph` topology and conditional routing.
 - `lib/agent`: LangGraph-backed run coordinator, deterministic engine, and append-only trace recorder.
-- `lib/providers`: direct OpenRouter Chat Completions client and usage normalization.
+- `lib/providers`: provider-neutral OpenAI-compatible planning client, OpenAI Responses web discovery, OpenRouter web discovery, and usage normalization.
 - `lib/tools`: hardened fetch, exact-email GitHub codegraph, optional Keybase proof lookup, and bounded candidate-linked Wayback history.
 - `lib/replay`: immutable example catalog and zero-network replay.
 - `lib/report-export`: pure report-to-view-model transformation and deterministic Markdown serialization.
@@ -96,7 +96,7 @@ Confidence uses transparent bands and a rationale-bearing set of caps. Multiple 
 
 ## Live model protocol
 
-Live mode calls OpenRouter Chat Completions directly from LangGraph's `plan_expansion` and `synthesize` nodes. It uses custom function schemas, `tool_choice: "auto"`, one expected structured function submission per provider turn (`parallel_tool_calls: false`), and the current `openrouter:web_search` server tool. The planner receives a compact view of the selected frontier and must bind each action to one selected ID. The deterministic runner can execute an approved same-tier batch concurrently, up to four actions. Every provider attempt is reserved before dispatch and settled independently, so repair and concurrent extraction calls count against LLM, network, token, and cost budgets. Provider `reasoning_details`, when returned, are opaque continuation data and are passed back unchanged on the next provider turn. They are never logged or streamed. Only provider-reported prompt, completion, reasoning, and cached-input token counts are exposed; unavailable values remain `null` with a reason.
+Live mode supports OpenAI, Gemini's OpenAI-compatible endpoint, and OpenRouter from LangGraph's `plan_expansion` and `synthesize` nodes. It uses custom function schemas, `tool_choice: "auto"`, and one expected structured function submission per provider turn (`parallel_tool_calls: false`). OpenAI discovery uses the Responses API `web_search` tool, Gemini can delegate discovery to OpenAI when both keys are configured, and OpenRouter uses its server-side web-search tool. The planner receives a compact view of the selected frontier and must bind each action to one selected ID. The deterministic runner can execute an approved same-tier batch concurrently, up to four actions. Every provider attempt is reserved before dispatch and settled independently, so repair and concurrent extraction calls count against LLM, network, token, and cost budgets. Provider reasoning continuation data, when returned, remains opaque and is never logged or streamed. Only normalized provider-reported usage is exposed; unavailable values remain `null` with a reason.
 
 Search annotations are provider-attested leads with zero final claim weight. A final finding must cite an admitted direct-source or specialist-tool evidence record. General-purpose `fetch_public_source` additionally requires a trusted injected hostname resolver or controlled egress proxy and fails closed without one; candidate linkage alone is not presented as DNS-rebinding protection.
 
