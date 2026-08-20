@@ -65,9 +65,9 @@ export function GraphWorkspace({
       </div>
     </> : <div className="canonical-graph-empty" data-graph-state="unavailable">
       <div className="empty-graph-mark" aria-hidden="true"><span /></div>
-      <p className="empty-kicker">Canonical runtime graph</p>
-      <h2>{runStatus === "running" ? "Waiting for the first frontier patch" : "Graph unavailable for this capture"}</h2>
-      <p>{runStatus === "running" ? "The canvas will render only after the search runtime emits real nodes and edges." : "This view never invents a network from report prose. Load a regenerated graph-enabled replay or start a supported run."}</p>
+      <p className="empty-kicker">Search graph</p>
+      <h2>{runStatus === "running" ? "Building the search graph…" : "Run a search to build the graph"}</h2>
+      <p>{runStatus === "running" ? "Nodes and edges appear as the agent discovers, fetches, and verifies public sources." : "Enter a query and press Research. The graph is drawn from real execution — it is never invented from prose."}</p>
     </div>}
   </section>;
 }

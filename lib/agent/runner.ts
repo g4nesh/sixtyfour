@@ -989,14 +989,14 @@ async function executeActions(
           mutations += 1;
           actionMutations += 1;
         }
+        // Candidate nodes are unbound entities (no single action owns an
+        // identity), matching the canonical graph the generator produces; this
+        // keeps cross-candidate `separates` edges free of a conflicting single
+        // action provenance.
         const candidateNodeAdmission = admitGraphNode(graph, {
           kind: "candidate",
           label: candidateMutation.candidate.displayName,
           status: candidateMutation.created ? "verified" : "selected",
-          sourceTier: entry.sourceTier,
-          sourceLaneId: entry.sourceLaneId,
-          frontierEntryId: entry.id,
-          actionId: action.id,
           candidateId: candidateMutation.candidate.id,
           data: {},
           dedupeEntityKey: `candidate:${candidateMutation.candidate.id}`,
@@ -1027,8 +1027,6 @@ async function executeActions(
             toNodeId: candidateNodeAdmission.value.id,
             kind: "separates",
             status: "verified",
-            frontierEntryId: entry.id,
-            actionId: action.id,
             edgeCost: 0.07,
             pathCost: entry.pathCost + 0.12,
           }, engine.ids, engine.clock.now());
@@ -1042,7 +1040,9 @@ async function executeActions(
             state.target,
             candidateMutation.candidate,
             entry,
-            candidateNodeAdmission.value.id,
+            // Candidate-bound lanes descend from the discovering action entry's
+            // node (matching the canonical graph), not the unbound candidate node.
+            entry.nodeId,
             availableTools,
             engine.ids,
             engine.clock.now(),
@@ -2063,13 +2063,38 @@ export async function* runResearch(
       if (options.signal?.aborted) {
         finish(evaluateStop(engine.snapshot(), { canceled: true }), { canceled: true });
       } else {
-        graph = engine.snapshot().searchGraph;
-        graph = addTerminalReportNode(engine, graph, "failed");
-        engine.replaceSearchGraph(graph);
-        engine.stopExternal(
-          "fatal_error",
-          `Investigation failed: ${(safeError(error).message as string)}`,
-        );
+        // A mid-run failure (budget exhaustion, a transient provider/rate-limit
+        // error, etc.) should not discard work already done. If a legal terminal
+        // exists — or evidence has been gathered — finalize as a partial report
+        // that preserves the collected evidence and findings.
+        const snapshot = engine.snapshot();
+        const naturalStop = evaluateStop(snapshot);
+        const gracefulStop = naturalStop.allowed
+          ? naturalStop
+          : snapshot.evidence.length > 0
+            ? evaluateStop(snapshot, { noLegalActions: true })
+            : null;
+        let gracefullyStopped = false;
+        if (gracefulStop?.allowed && gracefulStop.reason !== "goal_satisfied") {
+          try {
+            // Finalize from the last committed (valid) graph, since the local
+            // graph may be mid-mutation at the point the error surfaced.
+            graph = engine.snapshot().searchGraph;
+            finish(gracefulStop);
+            gracefullyStopped = true;
+          } catch {
+            gracefullyStopped = false;
+          }
+        }
+        if (!gracefullyStopped) {
+          graph = engine.snapshot().searchGraph;
+          graph = addTerminalReportNode(engine, graph, "failed");
+          engine.replaceSearchGraph(graph);
+          engine.stopExternal(
+            "fatal_error",
+            `Investigation failed: ${(safeError(error).message as string)}`,
+          );
+        }
       }
     }
     for (const update of emitPending()) yield update;

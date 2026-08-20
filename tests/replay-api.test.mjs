@@ -982,7 +982,7 @@ test("safety refusal precedes replay lookup and missing live key is an honest co
   const unconfiguredEvents = parseNdjson(await unconfigured.text());
   assert.equal(terminalReport(unconfiguredEvents).status, "configuration_error");
   assert.equal(terminalReport(unconfiguredEvents).stop.reason, "configuration_error");
-  assert.match(terminalReport(unconfiguredEvents).stop.detail, /OPENROUTER_API_KEY/);
+  assert.match(terminalReport(unconfiguredEvents).stop.detail, /OPENAI_API_KEY/);
 
   const keyWithoutEnablement = await api.handleApiRequest(new Request("https://atlas.test/api/research", {
     method: "POST",

@@ -123,6 +123,15 @@ export interface OpenRouterClientConfig {
   timeoutMs?: number;
   maxResponseBytes?: number;
   logger?: (event: OpenRouterSafeLogEvent) => void;
+  /**
+   * "openai" targets the OpenAI chat-completions API directly: web discovery
+   * uses OpenAI's native `web_search_options` on a search-preview model (which
+   * returns url_citation annotations in the same shape) instead of the
+   * OpenRouter web_search tool, and OpenRouter-only fields are omitted.
+   */
+  provider?: "openrouter" | "openai";
+  /** Search-preview model used only for the web-discovery turn (OpenAI). */
+  searchModel?: string;
 }
 
 export class OpenRouterConfigurationError extends Error {
@@ -323,19 +332,164 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
+function stripTrackingParams(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    url.searchParams.delete("utm_source");
+    url.searchParams.delete("utm_medium");
+    url.searchParams.delete("utm_campaign");
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+interface OpenAiWebSearchArgs {
+  endpoint: URL;
+  apiKey: string;
+  model: string;
+  messages: readonly OpenRouterMessage[];
+  maxOutputTokens?: number;
+  hardenedFetch: (input: URL, init: RequestInit) => Promise<{ response: Response }>;
+  clock: () => number;
+  startedAt: number;
+  safeLog: (event: OpenRouterSafeLogEvent) => void;
+  logBase: { model: string; messageCount: number; functionToolCount: number; webSearchEnabled: boolean };
+  signal?: AbortSignal;
+}
+
+/**
+ * Web discovery via the OpenAI Responses API. Returns a chat-shaped completion
+ * whose `message.annotations` carry the server-attested search-result URLs
+ * (`web_search_call.action.sources` plus inline `url_citation`s), so the
+ * orchestrator's existing citation trust boundary applies unchanged.
+ */
+async function completeOpenAiWebSearch(args: OpenAiWebSearchArgs): Promise<OpenRouterCompletion> {
+  const responsesEndpoint = new URL(args.endpoint.toString());
+  responsesEndpoint.pathname = responsesEndpoint.pathname.replace(/\/chat\/completions\/?$/, "/responses");
+  if (!responsesEndpoint.pathname.endsWith("/responses")) {
+    responsesEndpoint.pathname = "/v1/responses";
+  }
+  const input = args.messages.map((message) => ({
+    role: message.role === "assistant" ? "assistant" : message.role === "system" ? "system" : "user",
+    content: typeof message.content === "string" ? message.content : "",
+  }));
+  const body = {
+    model: args.model,
+    tools: [{ type: "web_search" }],
+    tool_choice: { type: "web_search" },
+    include: ["web_search_call.action.sources"],
+    input,
+    ...(args.maxOutputTokens === undefined
+      ? {}
+      : { max_output_tokens: boundedInteger(args.maxOutputTokens, 900, 16, 4_000) }),
+  };
+  let fetched;
+  try {
+    fetched = await args.hardenedFetch(responsesEndpoint, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${args.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: args.signal,
+    });
+  } catch (error) {
+    const code = error instanceof HardenedFetchError ? error.code : "network_error";
+    args.safeLog({ phase: "error", ...args.logBase, errorCode: code });
+    throw new OpenRouterError(code, "The web-search request failed before a valid response was received.", {
+      retryable: error instanceof HardenedFetchError && error.retryable,
+      cause: error,
+    });
+  }
+  const requestId = fetched.response.headers.get("x-request-id");
+  if (!fetched.response.ok) {
+    args.safeLog({ phase: "error", ...args.logBase, status: fetched.response.status, errorCode: "http_error" });
+    throw new OpenRouterError("http_error", `The web-search provider returned HTTP ${fetched.response.status}.`, {
+      status: fetched.response.status,
+      retryable: isRetryableStatus(fetched.response.status),
+      requestId,
+    });
+  }
+  let payload: unknown;
+  try {
+    payload = await fetched.response.json();
+  } catch (error) {
+    throw new OpenRouterError("invalid_response", "The web-search provider returned invalid JSON.", { requestId, cause: error });
+  }
+  const output = isRecord(payload) && Array.isArray(payload.output) ? payload.output : [];
+  const seen = new Set<string>();
+  const annotations: OpenRouterAnnotation[] = [];
+  const addUrl = (rawUrl: unknown, rawTitle: unknown): void => {
+    if (typeof rawUrl !== "string") return;
+    const url = stripTrackingParams(rawUrl);
+    if (!/^https:\/\//i.test(url) || seen.has(url)) return;
+    seen.add(url);
+    annotations.push({
+      type: "url_citation",
+      url_citation: { url, ...(typeof rawTitle === "string" && rawTitle ? { title: rawTitle } : {}) },
+    });
+  };
+  for (const item of output) {
+    if (!isRecord(item)) continue;
+    if (item.type === "web_search_call") {
+      const action = isRecord(item.action) ? item.action : {};
+      const sources = Array.isArray(action.sources) ? action.sources : [];
+      for (const source of sources) {
+        if (typeof source === "string") addUrl(source, undefined);
+        else if (isRecord(source)) addUrl(source.url, source.title);
+      }
+    }
+    if (item.type === "message" && Array.isArray(item.content)) {
+      for (const content of item.content) {
+        if (!isRecord(content) || !Array.isArray(content.annotations)) continue;
+        for (const annotation of content.annotations) {
+          if (isRecord(annotation) && annotation.type === "url_citation") {
+            addUrl(annotation.url, annotation.title);
+          }
+        }
+      }
+    }
+  }
+  const usageRecord = isRecord(payload) && isRecord(payload.usage) ? payload.usage : {};
+  const usage: NormalizedUsage = {
+    inputTokens: safeNumber(usageRecord.input_tokens),
+    outputTokens: safeNumber(usageRecord.output_tokens),
+    totalTokens: safeNumber(usageRecord.total_tokens),
+    reasoningTokens: null,
+    cachedInputTokens: null,
+    costUsd: null,
+  };
+  const latencyMs = Math.max(0, args.clock() - args.startedAt);
+  args.safeLog({ phase: "response", ...args.logBase, status: fetched.response.status, latencyMs, usage });
+  return {
+    id: isRecord(payload) && typeof payload.id === "string" ? payload.id : null,
+    model: isRecord(payload) && typeof payload.model === "string" ? payload.model : args.model,
+    created: null,
+    finishReason: "stop",
+    message: { role: "assistant", content: null, annotations },
+    usage,
+    provider: "openai:web_search",
+    requestId,
+    latencyMs,
+  };
+}
+
 export function createOpenRouterClient(config: OpenRouterClientConfig) {
   const apiKey = config.apiKey?.trim();
   if (!apiKey) {
-    throw new OpenRouterConfigurationError("OPENROUTER_API_KEY is required for live investigations.");
+    throw new OpenRouterConfigurationError("A model provider API key is required for live investigations.");
   }
   if (!config.model.trim()) {
-    throw new OpenRouterConfigurationError("An OpenRouter model identifier is required.");
+    throw new OpenRouterConfigurationError("A model identifier is required.");
   }
+  const isOpenAi = config.provider === "openai";
+  const defaultEndpoint = isOpenAi
+    ? "https://api.openai.com/v1/chat/completions"
+    : "https://openrouter.ai/api/v1/chat/completions";
   let endpoint: URL;
   try {
-    endpoint = new URL(config.endpoint ?? "https://openrouter.ai/api/v1/chat/completions");
+    endpoint = new URL(config.endpoint ?? defaultEndpoint);
   } catch {
-    throw new OpenRouterConfigurationError("The OpenRouter endpoint is invalid.");
+    throw new OpenRouterConfigurationError("The model provider endpoint is invalid.");
   }
   if (endpoint.protocol !== "https:") {
     throw new OpenRouterConfigurationError("The OpenRouter endpoint must use HTTPS.");
@@ -366,35 +520,76 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
       if (options.messages.length === 0) {
         throw new OpenRouterConfigurationError("At least one message is required.");
       }
+      const webSearchRequested = options.webSearch !== false && options.webSearch !== undefined;
+      const useOpenAiSearch = isOpenAi && webSearchRequested;
       const tools: OpenRouterTool[] = [...(options.tools ?? [])];
-      if (options.webSearch !== false && options.webSearch !== undefined) {
+      // OpenAI does discovery via native web_search_options (see below), so its
+      // web-search turn carries no function tools and never the OpenRouter tool.
+      if (!isOpenAi && options.webSearch !== false && options.webSearch !== undefined) {
         tools.push(webSearchTool(options.webSearch));
       }
       validateTools(tools);
       const startedAt = clock();
+      const requestModel = useOpenAiSearch
+        ? (config.searchModel?.trim() || "gpt-4o-mini")
+        : config.model;
       const logBase = {
-        model: config.model,
+        model: requestModel,
         messageCount: options.messages.length,
         functionToolCount: tools.filter((tool) => tool.type === "function").length,
-        webSearchEnabled: tools.some((tool) => tool.type === "openrouter:web_search"),
+        webSearchEnabled: useOpenAiSearch || tools.some((tool) => tool.type === "openrouter:web_search"),
       };
       safeLog({ phase: "request", ...logBase });
 
+      // OpenAI web discovery uses the Responses API `web_search` tool. Its
+      // server-attested `web_search_call.action.sources` and `url_citation`
+      // annotations are mapped back into the chat-shaped `message.annotations`
+      // the orchestrator already trusts as provider search results.
+      if (useOpenAiSearch) {
+        return await completeOpenAiWebSearch({
+          endpoint,
+          apiKey,
+          model: requestModel,
+          messages: options.messages,
+          maxOutputTokens: options.maxCompletionTokens,
+          hardenedFetch,
+          clock,
+          startedAt,
+          safeLog,
+          logBase,
+          signal: options.signal,
+        });
+      }
+
+      // OpenAI's strict tool-schema validation requires additionalProperties:false
+      // on every nested object; OpenRouter does not. Drop `strict` for OpenAI so
+      // the existing lenient schemas are accepted (arguments are still JSON-parsed
+      // and validated by the orchestrator).
+      const bodyTools: OpenRouterTool[] = isOpenAi
+        ? tools.map((tool) => tool.type === "function"
+          ? { ...tool, function: { ...tool.function, strict: false } }
+          : tool)
+        : tools;
       const body: Record<string, unknown> = {
-        model: config.model,
+        model: requestModel,
         messages: options.messages,
-        ...(tools.length
+        ...(!useOpenAiSearch && bodyTools.length
           ? {
-              tools,
+              tools: bodyTools,
               tool_choice: "auto",
               parallel_tool_calls: options.parallelToolCalls ?? false,
             }
           : {}),
-        ...(options.reasoning ? { reasoning: options.reasoning } : {}),
+        // `reasoning` is an OpenRouter extension; OpenAI chat models reject it.
+        ...(!isOpenAi && options.reasoning ? { reasoning: options.reasoning } : {}),
         ...(options.maxCompletionTokens === undefined
           ? {}
           : { max_completion_tokens: boundedInteger(options.maxCompletionTokens, 4_096, 1, 200_000) }),
-        ...(options.temperature === undefined ? {} : { temperature: normalizeTemperature(options.temperature) }),
+        // gpt-5 and o-series reasoning models only accept the default temperature.
+        ...(options.temperature === undefined || useOpenAiSearch
+          || (isOpenAi && /^(?:gpt-5|o[134])/i.test(requestModel))
+          ? {}
+          : { temperature: normalizeTemperature(options.temperature) }),
       };
       let fetched;
       try {
@@ -403,8 +598,9 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
           headers: {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
-            ...(config.appUrl ? { "HTTP-Referer": config.appUrl } : {}),
-            ...(config.appTitle ? { "X-Title": config.appTitle } : {}),
+            // Attribution headers are OpenRouter-specific.
+            ...(!isOpenAi && config.appUrl ? { "HTTP-Referer": config.appUrl } : {}),
+            ...(!isOpenAi && config.appTitle ? { "X-Title": config.appTitle } : {}),
           },
           body: JSON.stringify(body),
           signal: options.signal,
@@ -433,7 +629,9 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
         // Deliberately do not surface the provider body: it may echo prompt content.
         throw new OpenRouterError(
           "http_error",
-          `OpenRouter returned HTTP ${fetched.response.status}.`,
+          fetched.response.status === 429
+            ? "The model provider rate-limited this request (HTTP 429). Wait a moment and try again, or raise the account's rate limit."
+            : `The model provider returned HTTP ${fetched.response.status}.`,
           {
             status: fetched.response.status,
             retryable: isRetryableStatus(fetched.response.status),

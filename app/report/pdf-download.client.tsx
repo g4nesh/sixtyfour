@@ -179,6 +179,7 @@ const styles = StyleSheet.create({
   },
   findingDescription: { fontSize: 8.7, lineHeight: 1.48, marginBottom: 7 },
   citationLine: { color: colors.blue, fontFamily: "Helvetica-Bold", fontSize: 7.3 },
+  citationLink: { color: colors.blue, textDecoration: "underline" },
   evidenceCard: {
     borderTopWidth: 1.2,
     borderTopColor: colors.blue,
@@ -299,7 +300,6 @@ function CoverPath({ viewModel }: { viewModel: ReportViewModel }) {
 }
 
 function FindingCard({ finding, index }: { finding: ReportFindingView; index: number }) {
-  const citations = [...finding.citations, ...finding.counterCitations];
   return (
     <View style={styles.findingCard} wrap={false}>
       <View style={styles.findingTop}>
@@ -308,7 +308,14 @@ function FindingCard({ finding, index }: { finding: ReportFindingView; index: nu
         <Text style={styles.badge}>{human(finding.confidenceLabel)} {percent(finding.confidenceScore)}</Text>
       </View>
       <Text style={styles.findingDescription}>{finding.description}</Text>
-      <Text style={styles.citationLine}>Evidence: {citations.length > 0 ? citations.join(", ") : "None"}</Text>
+      <Text style={styles.citationLine}>Sources: {finding.sources.length > 0
+        ? finding.sources.map((source, sourceIndex) => (
+            <Text key={`${source.url}-${sourceIndex}`}>
+              {sourceIndex > 0 ? ", " : ""}
+              <Link src={source.url} style={styles.citationLink}>{source.domain}</Link>
+            </Text>
+          ))
+        : "None"}</Text>
       {finding.caveats.map((caveat) => (
         <View key={caveat} style={[styles.bullet, { marginTop: 5 }]}>
           <Text style={styles.bulletMark}>!</Text>

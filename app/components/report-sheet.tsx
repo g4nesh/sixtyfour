@@ -56,6 +56,19 @@ export function ReportSheet({ report, trace, open, onClose, onDownloadMarkdown, 
   const evidence = reportEvidence(report);
   const findings = report?.findings ?? [];
   const reportId = report?.runId ?? report?.run?.id ?? "atlas-report";
+
+  const evidenceUrl = (item: (typeof evidence)[number]): string | undefined =>
+    item.canonicalUrl ?? item.sourceUrl ?? item.url ?? item.source?.canonicalUrl ?? item.source?.url;
+  const domainOf = (url: string, fallback: string): string => {
+    try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return fallback; }
+  };
+  const evidenceById = new Map(evidence.map((item) => [item.id ?? item.evidenceId, item] as const));
+  const findingSources = (finding: (typeof findings)[number]) =>
+    ((finding.evidenceIds as string[] | undefined) ?? [])
+      .map((id) => evidenceById.get(id))
+      .filter((item): item is (typeof evidence)[number] => Boolean(item))
+      .map((item) => { const url = evidenceUrl(item); return url ? { url, domain: domainOf(url, item.sourceFamily ?? item.publisher ?? "source") } : null; })
+      .filter((source): source is { url: string; domain: string } => Boolean(source));
   return <div className="report-sheet-backdrop">
     <button className="report-backdrop-dismiss" type="button" onClick={onClose} aria-label="Close intelligence report" tabIndex={-1} />
     <section className="report-sheet" role="dialog" aria-modal="true" aria-labelledby="report-sheet-heading" tabIndex={-1} ref={sheetRef}>
@@ -76,10 +89,13 @@ export function ReportSheet({ report, trace, open, onClose, onDownloadMarkdown, 
           const score = candidateScore(candidate);
           return <article key={id} className={`candidate-report-card status-${candidate.status ?? "unknown"}`}><header><span>{humanize(candidate.status)}</span>{typeof score === "number" ? <strong>{Math.round(score * 100)}%</strong> : null}</header><h4>{candidateName(candidate)}</h4><p>{candidate.headline ?? candidate.affiliation ?? candidate.separationReason ?? "Candidate kept as a distinct graph branch."}</p><code>{id}</code></article>;
         })}</div></section>
-        <section className="report-section" aria-labelledby="report-findings-heading"><div className="report-section-heading"><h3 id="report-findings-heading">Findings</h3><span>{findings.length}</span></div><div className="report-findings">{findings.map((finding, index) => <article key={finding.id ?? finding.findingId ?? index}><header><span>{humanize(finding.category)}</span><strong>{humanize(finding.confidence?.label ?? finding.confidenceBand)}</strong></header><h4>{finding.title}</h4><p>{finding.description ?? finding.summary ?? finding.rationale}</p><footer><span>{finding.evidenceIds?.length ?? 0} supporting records</span>{finding.counterEvidenceIds?.length ? <span>{finding.counterEvidenceIds.length} counter records</span> : null}</footer></article>)}</div></section>
+        <section className="report-section" aria-labelledby="report-findings-heading"><div className="report-section-heading"><h3 id="report-findings-heading">Findings</h3><span>{findings.length}</span></div><div className="report-findings">{findings.map((finding, index) => {
+          const sources = findingSources(finding);
+          return <article key={finding.id ?? finding.findingId ?? index}><header><span>{humanize(finding.category)}</span><strong>{humanize(finding.confidence?.label ?? finding.confidenceBand)}</strong></header><h4>{finding.title}</h4><p>{finding.description ?? finding.summary ?? finding.rationale}</p><footer className="finding-sources">{sources.length > 0 ? <><span className="sources-label">Sources:</span>{sources.map((source, sourceIndex) => <a key={`${source.url}-${sourceIndex}`} href={source.url} target="_blank" rel="noreferrer" className="source-cite"><ExternalIcon />{source.domain}</a>)}</> : <span className="sources-label">No cited source</span>}{finding.counterEvidenceIds?.length ? <span className="counter-count">{finding.counterEvidenceIds.length} counter</span> : null}</footer></article>;
+        })}</div></section>
         <section className="report-section" aria-labelledby="report-evidence-heading"><div className="report-section-heading"><h3 id="report-evidence-heading">Evidence ledger</h3><span>{evidence.length}</span></div><ol className="report-evidence-list">{evidence.map((item, index) => {
-          const href = item.canonicalUrl ?? item.sourceUrl ?? item.url ?? item.source?.canonicalUrl ?? item.source?.url;
-          return <li key={item.id ?? item.evidenceId ?? index}><span>E{String(index + 1).padStart(2, "0")}</span><div><small>{item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} · {humanize(item.verificationMethod)}</small><strong>{item.title ?? item.source?.title ?? item.claim ?? "Evidence record"}</strong><p>{item.excerpt ?? item.minimalExcerpt ?? item.claim}</p></div>{href ? <a href={href} target="_blank" rel="noreferrer" aria-label="Open canonical evidence source"><ExternalIcon /></a> : null}</li>;
+          const href = evidenceUrl(item);
+          return <li key={item.id ?? item.evidenceId ?? index}><span>E{String(index + 1).padStart(2, "0")}</span><div><small>{item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} · {humanize(item.verificationMethod)}</small><strong>{item.title ?? item.source?.title ?? item.claim ?? "Evidence record"}</strong><p>{item.excerpt ?? item.minimalExcerpt ?? item.claim}</p>{href ? <a className="evidence-source-link" href={href} target="_blank" rel="noreferrer"><ExternalIcon />{domainOf(href, "source")}</a> : null}</div></li>;
         })}</ol></section>
         {(report.limitations?.length ?? 0) > 0 ? <section className="report-section report-limitations" aria-labelledby="report-limitations-heading"><div className="report-section-heading"><h3 id="report-limitations-heading">Limits</h3><span>{report.limitations?.length}</span></div><ul>{report.limitations?.map((limitation, index) => <li key={index}>{limitationText(limitation)}</li>)}</ul></section> : null}
       </div> : <div className="report-empty"><span aria-hidden="true">□</span><h3>No report loaded</h3><p>Run a verified replay or live investigation before exporting.</p></div>}

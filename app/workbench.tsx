@@ -9,8 +9,8 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import type { InvestigationReport } from "../lib/domain/types";
-import type { Report, RunMode, RunStatus, TraceEvent, ExamplePayload } from "./atlas-types";
+import type { FindingCategory, InvestigationReport } from "../lib/domain/types";
+import type { Report, RunStatus, TraceEvent } from "./atlas-types";
 import {
   eventType,
   formatDuration,
@@ -33,11 +33,25 @@ import { SourceLadder } from "./components/source-ladder";
 import { TraceRail } from "./components/trace-rail";
 import { PlayIcon, ReportIcon, SearchIcon, StopIcon } from "./components/atlas-icons";
 
-const examples = [
-  { id: "linus-codegraph", label: "Exact email → code graph", query: "torvalds@linux-foundation.org" },
-  { id: "chris-anderson-ted", label: "Same-name separation", query: "Chris Anderson, TED" },
-  { id: "python-creator", label: "Role-only resolution", query: "the creator of Python" },
-] as const;
+// Public-professional research modalities. These map to report categories, not
+// to any private-contact/location data — home address, personal phone, and
+// tax/data-broker records are intentionally out of scope.
+const MODALITIES: ReadonlyArray<{ id: FindingCategory; label: string }> = [
+  { id: "identity", label: "Identity" },
+  { id: "employment", label: "Employer & role" },
+  { id: "online_presence", label: "Profiles & handles" },
+  { id: "project", label: "Projects & repos" },
+  { id: "publication", label: "Publications" },
+  { id: "education", label: "Education" },
+];
+
+const DEFAULT_MODALITIES: readonly FindingCategory[] = ["identity", "employment", "online_presence"];
+
+const EXAMPLE_QUERIES: readonly string[] = [
+  "torvalds@linux-foundation.org",
+  "Chris Anderson, TED",
+  "the creator of Python",
+];
 
 interface AtlasWorkbenchProps {
   onDownloadMarkdown?: (report: Report) => void | Promise<void>;
@@ -56,16 +70,14 @@ function terminalStatusFor(event: TraceEvent, report: Report | null): string | u
   return report?.status ?? event.status;
 }
 
-function runMessage(status: string | undefined, mode: RunMode): string {
-  if (status === "configuration_error") return "Live mode is not configured on this server. Verified replays remain available.";
+function runMessage(status: string | undefined): string {
+  if (status === "configuration_error") return "Live mode is not configured on this server. Set OPENAI_API_KEY and ATLAS_LIVE_ENABLED.";
   if (status === "blocked") return "The request was refused by the public-professional safety policy.";
-  if (status === "failed") return "The run failed safely. Inspect the terminal trace for the recorded boundary.";
+  if (status === "failed") return "The run ended early. Inspect the terminal trace for the recorded boundary.";
   if (status === "canceled") return "The run was canceled. Its partial graph and trace remain inspectable.";
-  if (status === "partial") return "The run stopped with partial coverage; gaps are retained in the report.";
+  if (status === "partial") return "Stopped with partial coverage — the cited sources gathered so far are in the report.";
   if (status === "ambiguous") return "Identity remained ambiguous; competing candidate branches were not merged.";
-  return mode === "live"
-    ? "Live run complete. Review every finding against admitted evidence."
-    : "Replay complete. No external research requests were made.";
+  return "Run complete. Every finding links to the public source it was drawn from.";
 }
 
 async function defaultMarkdownDownload(report: Report): Promise<void> {
@@ -91,10 +103,9 @@ function isTerminalEvent(event: TraceEvent): boolean {
 }
 
 function graphStatusLabel(graph: CanonicalSearchGraph | null, runStatus: RunStatus): string {
-  if (runStatus === "loading") return "Loading capture";
   if (runStatus === "running") return graph ? `Search ${graph.status}` : "Awaiting frontier";
   if (graph) return `Graph ${graph.status}`;
-  return "Graph unavailable";
+  return "Idle";
 }
 
 function subscribeCompactViewport(onStoreChange: () => void): () => void {
@@ -108,16 +119,14 @@ function compactViewportSnapshot(): boolean {
 }
 
 export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkbenchProps = {}) {
-  const [query, setQuery] = useState<string>(examples[0].query);
-  const [mode, setMode] = useState<RunMode>("replay");
-  const [selectedExample, setSelectedExample] = useState<string | null>(examples[0].id);
+  const [query, setQuery] = useState<string>("");
+  const [categories, setCategories] = useState<ReadonlySet<FindingCategory>>(() => new Set(DEFAULT_MODALITIES));
   const [report, setReport] = useState<Report | null>(null);
   const [trace, setTrace] = useState<TraceEvent[]>([]);
   const [graph, setGraph] = useState<CanonicalSearchGraph | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
-  const [message, setMessage] = useState("Loading the default verified replay.");
+  const [message, setMessage] = useState("Enter a name, email, organization, or public identifier to research.");
   const [liveConfigured, setLiveConfigured] = useState<boolean | null>(null);
-  const [capturedAt, setCapturedAt] = useState<string | null>(null);
   const [graphView, setGraphView] = useState<GraphView>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [focusedStableId, setFocusedStableId] = useState<string | null>(null);
@@ -128,7 +137,6 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
   const [exporting, setExporting] = useState<"markdown" | "pdf" | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const queryRef = useRef<HTMLInputElement>(null);
-  const didLoadInitialRef = useRef(false);
   const compactViewport = useSyncExternalStore(subscribeCompactViewport, compactViewportSnapshot, () => false);
   const sourceLadderCollapsed = sourceLadderPreference ?? compactViewport;
 
@@ -136,7 +144,6 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     setReport(null);
     setTrace([]);
     setGraph(null);
-    setCapturedAt(null);
     setSelectedNodeId(null);
     setFocusedStableId(null);
     setReportOpen(false);
@@ -149,49 +156,17 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     setSelectedNodeId((current) => current && nextGraph?.nodes.some((node) => node.id === current) ? current : null);
   }, []);
 
-  const loadExample = useCallback(async (exampleId: string) => {
-    const example = examples.find((item) => item.id === exampleId);
-    if (!example) return;
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setSelectedExample(example.id);
-    setMode("replay");
-    setQuery(example.query);
-    resetRun();
-    setRunStatus("loading");
-    setMessage("Loading a deterministic, zero-network capture…");
-    try {
-      const response = await fetch(`/api/examples/${encodeURIComponent(example.id)}`, {
-        headers: { accept: "application/json" },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`Replay unavailable (${response.status})`);
-      const payload = (await response.json()) as ExamplePayload;
-      if (abortRef.current !== controller || controller.signal.aborted) return;
-      const nextReport = payload.output ?? payload.report ?? null;
-      applyReport(nextReport);
-      setTrace(Array.isArray(payload.trace) ? payload.trace : []);
-      setCapturedAt(payload.manifest?.capturedAt ?? null);
-      setRunStatus("complete");
-      setMessage(graphFromReport(nextReport)
-        ? "Verified replay loaded with its canonical execution graph."
-        : "This legacy capture has no canonical graph; no decorative graph was fabricated.");
-    } catch (error) {
-      if (controller.signal.aborted || abortRef.current !== controller) return;
-      resetRun();
-      setRunStatus("error");
-      setMessage(error instanceof Error ? error.message : "Replay unavailable");
-    } finally {
-      if (abortRef.current === controller) abortRef.current = null;
-    }
-  }, [applyReport, resetRun]);
-
-  useEffect(() => {
-    if (didLoadInitialRef.current) return;
-    didLoadInitialRef.current = true;
-    void loadExample(examples[0].id);
-  }, [loadExample]);
+  const toggleModality = useCallback((id: FindingCategory) => {
+    setCategories((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        if (next.size > 1) next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     void fetch("/api/health", { headers: { accept: "application/json" } })
@@ -231,13 +206,13 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     abortRef.current = controller;
     resetRun();
     setRunStatus("running");
-    setMessage(mode === "live" ? "Live public-source search started." : "Replaying captured frontier decisions.");
+    setMessage("Searching public professional sources…");
     let terminalStatus: string | undefined;
     try {
       const response = await fetch("/api/research", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/x-ndjson" },
-        body: JSON.stringify({ query: trimmed, mode, exampleId: selectedExample }),
+        body: JSON.stringify({ query: trimmed, mode: "live", requestedCategories: [...categories] }),
         signal: controller.signal,
       });
       if (abortRef.current !== controller || controller.signal.aborted) return;
@@ -263,7 +238,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       if (buffered.trim()) terminalStatus = ingestEvent(JSON.parse(buffered) as TraceEvent) ?? terminalStatus;
       if (abortRef.current !== controller || controller.signal.aborted) return;
       setRunStatus((current) => current === "running" ? "complete" : current);
-      setMessage(runMessage(terminalStatus, mode));
+      setMessage(runMessage(terminalStatus));
     } catch (error) {
       if (abortRef.current !== controller) return;
       if (controller.signal.aborted) {
@@ -277,21 +252,6 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       if (abortRef.current === controller) abortRef.current = null;
     }
   };
-
-  const setRunMode = useCallback((nextMode: RunMode) => {
-    if (nextMode === mode) return;
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setMode(nextMode);
-    setSelectedExample(null);
-    resetRun();
-    setRunStatus("idle");
-    setMessage(nextMode === "live"
-      ? liveConfigured
-        ? "Live mode uses server-side OpenRouter and allowlisted public-source tools."
-        : "Live mode needs server configuration; verified replays remain available."
-      : "Replay mode is deterministic and zero-network. Choose a verified capture.");
-  }, [liveConfigured, mode, resetRun]);
 
   const focusStableId = useCallback((stableId: string | null) => {
     setFocusedStableId(stableId);
@@ -321,9 +281,6 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       } else if (event.key.toLowerCase() === "l") {
         event.preventDefault();
         setGraphView((current) => current === "graph" ? "list" : "graph");
-      } else if (event.key.toLowerCase() === "t") {
-        event.preventDefault();
-        setTraceExpanded((current) => !current);
       } else if (event.key.toLowerCase() === "r" && report) {
         event.preventDefault();
         setReportOpen((current) => !current);
@@ -341,7 +298,6 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
   const elapsed = report?.usage?.elapsedMs ?? report?.telemetry?.elapsedMs ?? traceDuration(lastTrace);
   const usage = report?.usage ?? report?.telemetry?.usage ?? traceUsage(lastTrace);
   const reportStatus = report?.status ?? runStatus;
-  const reportMode = report?.mode ?? report?.run?.mode ?? mode;
 
   const markdownDownload = useCallback(async (nextReport: Report) => {
     setExporting("markdown");
@@ -367,6 +323,8 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     }
   }, [onDownloadPdf]);
 
+  const idle = runStatus === "idle" && !report;
+
   return <div className="atlas-shell">
     <a className="skip-link" href="#graph-workspace">Skip to search graph</a>
     <header className="command-header">
@@ -380,10 +338,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
           name="query"
           type="search"
           value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            if (event.target.value !== examples.find((item) => item.id === selectedExample)?.query) setSelectedExample(null);
-          }}
+          onChange={(event) => setQuery(event.target.value)}
           placeholder="Name, role, organization, work email, URL, handle, or publication"
           autoComplete="off"
           spellCheck="false"
@@ -391,23 +346,46 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         />
         <kbd>/</kbd>
       </form>
-      <div className="mode-switch" role="group" aria-label="Research mode">
-        <button type="button" className={mode === "replay" ? "is-selected" : ""} aria-pressed={mode === "replay"} onClick={() => setRunMode("replay")}>Replay</button>
-        <button type="button" className={mode === "live" ? "is-selected" : ""} aria-pressed={mode === "live"} onClick={() => setRunMode("live")}>Live<span className={liveConfigured ? "is-ready" : ""} aria-label={liveConfigured ? "configured" : "not configured"} /></button>
-      </div>
-      <label className="example-select-label"><span className="sr-only">Verified replay</span><select value={selectedExample ?? ""} onChange={(event) => { if (event.target.value) void loadExample(event.target.value); }} disabled={mode === "live" || runStatus === "running"}><option value="">Verified captures</option>{examples.map((example) => <option key={example.id} value={example.id}>{example.label}</option>)}</select></label>
-      {runStatus === "running" ? <button className="run-button is-stop" type="button" onClick={() => abortRef.current?.abort()}><StopIcon /><span>Stop</span></button> : <button className="run-button" type="button" onClick={() => document.querySelector<HTMLFormElement>(".command-search")?.requestSubmit()}><PlayIcon /><span>Run</span></button>}
+      {runStatus === "running"
+        ? <button className="run-button is-stop" type="button" onClick={() => abortRef.current?.abort()}><StopIcon /><span>Stop</span></button>
+        : <button className="run-button" type="button" onClick={() => document.querySelector<HTMLFormElement>(".command-search")?.requestSubmit()}><PlayIcon /><span>Research</span></button>}
       <button className="report-button" type="button" onClick={() => setReportOpen(true)} disabled={!report} title="Open intelligence report (R)"><ReportIcon /><span>Report</span>{exporting ? <i aria-label={`Exporting ${exporting}`} /> : null}</button>
     </header>
 
     <main id="graph-workspace" className="atlas-main">
       <div className="workspace-status" role="status" aria-live="polite">
         <span className={`run-status-pip status-${runStatus}`} aria-hidden="true" />
-        <strong>{reportMode === "replay" ? "Replay" : "Live"} · {humanize(reportStatus)}</strong>
+        <strong>{humanize(reportStatus)}</strong>
         <span>{message}</span>
-        <div><span>{graphStatusLabel(graph, runStatus)}</span>{capturedAt ? <span>Captured {capturedAt.slice(0, 10)}</span> : null}<span>{formatDuration(elapsed)}</span><span>{formatUsage(usage)}</span></div>
+        <div><span>{graphStatusLabel(graph, runStatus)}</span><span>{formatDuration(elapsed)}</span><span>{formatUsage(usage)}</span></div>
       </div>
-      <p id="research-scope-note" className="scope-note"><span aria-hidden="true">●</span> Public-professional sources only. Private contact and home-record research is blocked.</p>
+
+      <div className="scope-row">
+        <fieldset className="modality-toggles" aria-label="Research modalities">
+          {MODALITIES.map((modality) => {
+            const active = categories.has(modality.id);
+            return <button
+              key={modality.id}
+              type="button"
+              className={active ? "modality is-on" : "modality"}
+              aria-pressed={active}
+              onClick={() => toggleModality(modality.id)}
+            >{modality.label}</button>;
+          })}
+        </fieldset>
+        <p id="research-scope-note" className="scope-note"><span aria-hidden="true">●</span> Public-professional sources only. Home address, personal phone, and data-broker records are out of scope.</p>
+      </div>
+
+      {idle
+        ? <div className="empty-hint">
+            <p>Try:</p>
+            <div className="example-chips">
+              {EXAMPLE_QUERIES.map((example) => <button key={example} type="button" className="example-chip" onClick={() => { setQuery(example); queryRef.current?.focus(); }}>{example}</button>)}
+            </div>
+            {liveConfigured === false ? <p className="config-hint">Live mode is not configured on this server yet.</p> : null}
+          </div>
+        : null}
+
       <GraphWorkspace
         graph={graph}
         view={graphView}
@@ -419,9 +397,8 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         onFit={requestFit}
         runStatus={runStatus}
       />
-      <SourceLadder graph={graph} collapsed={sourceLadderCollapsed} onToggle={() => setSourceLadderPreference(!sourceLadderCollapsed)} />
+      {graph ? <SourceLadder graph={graph} collapsed={sourceLadderCollapsed} onToggle={() => setSourceLadderPreference(!sourceLadderCollapsed)} /> : null}
       {graph ? <NodeInspector graph={graph} node={activeNode} onClose={() => setSelectedNodeId(null)} /> : null}
-      <div className="shortcut-rail" aria-label="Keyboard shortcuts"><span><kbd>L</kbd> list</span><span><kbd>T</kbd> trace</span><span><kbd>R</kbd> report</span></div>
       <TraceRail trace={trace} expanded={traceExpanded} onToggle={() => setTraceExpanded((current) => !current)} focusedStableId={focusedStableId} onFocusStableId={focusStableId} />
     </main>
 

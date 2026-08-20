@@ -4,23 +4,70 @@ import { classifySafety } from "../domain/safety";
 import { evaluateStop } from "../domain/stopping";
 import { parseTarget } from "../domain/target";
 import { createDeterministicIdFactory, type Clock, type IdFactory } from "../domain/runtime";
-import { SCHEMA_VERSION, type InvestigationInput, type JsonObject, type ResearchDepth, type TerminalStatus } from "../domain/types";
+import { SCHEMA_VERSION, type FindingCategory, type InvestigationInput, type JsonObject, type ResearchDepth, type TerminalStatus } from "../domain/types";
 import { isInvestigationReport, parseInvestigationInput } from "../domain/validation";
 import { streamLiveResearch } from "../live/orchestrator";
+import { createDohResolver } from "../tools/doh-resolver";
 import { findReplayForQuery, getReplayExample, listReplayExamples } from "../replay/catalog";
 
 export interface ApiEnvironment {
   ATLAS_LIVE_ENABLED?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_MODEL?: string;
+  OPENAI_SEARCH_MODEL?: string;
+  OPENAI_BASE_URL?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODEL?: string;
   OPENROUTER_SITE_URL?: string;
   OPENROUTER_APP_NAME?: string;
 }
 
+/**
+ * Resolve the live model provider from the environment. OpenAI is preferred
+ * when its key is present; OpenRouter remains supported as a fallback.
+ */
+function resolveLiveProvider(environment: ApiEnvironment): {
+  provider: "openai" | "openrouter";
+  apiKey: string;
+  model: string;
+  searchModel?: string;
+  endpoint?: string;
+  siteUrl?: string;
+  appName?: string;
+} | null {
+  const openaiKey = environment.OPENAI_API_KEY?.trim();
+  if (openaiKey) {
+    const base = environment.OPENAI_BASE_URL?.trim();
+    return {
+      provider: "openai",
+      apiKey: openaiKey,
+      model: environment.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+      searchModel: environment.OPENAI_SEARCH_MODEL?.trim() || "gpt-4o-mini",
+      ...(base ? { endpoint: `${base.replace(/\/+$/, "")}/chat/completions` } : {}),
+    };
+  }
+  const openrouterKey = environment.OPENROUTER_API_KEY?.trim();
+  if (openrouterKey) {
+    return {
+      provider: "openrouter",
+      apiKey: openrouterKey,
+      model: environment.OPENROUTER_MODEL?.trim() || "openai/gpt-5.4",
+      siteUrl: environment.OPENROUTER_SITE_URL?.trim(),
+      appName: environment.OPENROUTER_APP_NAME?.trim(),
+    };
+  }
+  return null;
+}
+
+const FINDING_CATEGORIES: readonly FindingCategory[] = [
+  "identity", "employment", "education", "project", "publication", "online_presence", "timeline", "other",
+];
+
 interface ResearchRequestBody {
   query: string;
   objective?: string;
   requestedDepth?: ResearchDepth;
+  requestedCategories?: FindingCategory[];
   mode: "replay" | "live";
   exampleId?: string;
 }
@@ -60,11 +107,21 @@ function parseResearchBody(value: unknown): ResearchRequestBody {
   const exampleId = typeof record.exampleId === "string" && record.exampleId.trim()
     ? record.exampleId.trim()
     : undefined;
+  let requestedCategories: FindingCategory[] | undefined;
+  if (record.requestedCategories !== undefined) {
+    if (!Array.isArray(record.requestedCategories)) {
+      throw new TypeError("requestedCategories must be an array of report categories.");
+    }
+    const filtered = [...new Set(record.requestedCategories)]
+      .filter((item): item is FindingCategory => FINDING_CATEGORIES.includes(item as FindingCategory));
+    if (filtered.length > 0) requestedCategories = filtered;
+  }
   return {
     query,
     mode,
     ...(objective ? { objective } : {}),
     ...(requestedDepth ? { requestedDepth: requestedDepth as ResearchDepth } : {}),
+    ...(requestedCategories ? { requestedCategories } : {}),
     ...(exampleId ? { exampleId } : {}),
   };
 }
@@ -91,6 +148,7 @@ function requestInput(body: ResearchRequestBody): InvestigationInput {
     query: body.query,
     ...(body.objective ? { objective: body.objective } : {}),
     ...(body.requestedDepth ? { requestedDepth: body.requestedDepth } : {}),
+    ...(body.requestedCategories ? { requestedCategories: body.requestedCategories } : {}),
   });
 }
 
@@ -318,8 +376,9 @@ export async function handleApiRequest(
 
   if (url.pathname === "/api/health") {
     if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "GET" });
+    const provider = resolveLiveProvider(environment);
     const liveConfigured = environment.ATLAS_LIVE_ENABLED?.trim() === "true"
-      && Boolean(environment.OPENROUTER_API_KEY?.trim());
+      && Boolean(provider);
     return jsonResponse({
       schemaVersion: SCHEMA_VERSION,
       status: "ok",
@@ -327,7 +386,7 @@ export async function handleApiRequest(
       replayReady: true,
       exampleCount: listReplayExamples().length,
       liveConfigured,
-      model: liveConfigured ? environment.OPENROUTER_MODEL?.trim() || "openai/gpt-5.4" : null,
+      model: liveConfigured && provider ? provider.model : null,
     });
   }
 
@@ -383,17 +442,23 @@ export async function handleApiRequest(
   }
 
   const liveEnabled = environment.ATLAS_LIVE_ENABLED?.trim() === "true";
-  const apiKey = environment.OPENROUTER_API_KEY?.trim();
-  if (!liveEnabled || !apiKey) {
-    const events = immediateTerminalTrace(input, "configuration_error", "Live HTTP research requires both ATLAS_LIVE_ENABLED=true and the server-side OPENROUTER_API_KEY binding. Deterministic replays remain available.");
+  const provider = resolveLiveProvider(environment);
+  if (!liveEnabled || !provider) {
+    const events = immediateTerminalTrace(input, "configuration_error", "Live HTTP research requires ATLAS_LIVE_ENABLED=true and a server-side model key (OPENAI_API_KEY).");
     return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
   }
   return traceNdjsonResponse(
     (signal) => streamLiveResearch(input, {
-      apiKey,
-      model: environment.OPENROUTER_MODEL?.trim() || "openai/gpt-5.4",
-      siteUrl: environment.OPENROUTER_SITE_URL?.trim(),
-      appName: environment.OPENROUTER_APP_NAME?.trim(),
+      provider: provider.provider,
+      apiKey: provider.apiKey,
+      model: provider.model,
+      ...(provider.searchModel ? { searchModel: provider.searchModel } : {}),
+      ...(provider.endpoint ? { endpoint: provider.endpoint } : {}),
+      ...(provider.siteUrl ? { siteUrl: provider.siteUrl } : {}),
+      ...(provider.appName ? { appName: provider.appName } : {}),
+      // Injected DNS validation lets public-source fetches resolve arbitrary
+      // hosts while the hardened fetch still rejects private/loopback answers.
+      resolveHostname: createDohResolver(),
       signal,
     }),
     request.signal,

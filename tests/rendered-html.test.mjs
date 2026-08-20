@@ -45,17 +45,19 @@ test("server-renders the black graph-first Atlas workspace", async () => {
   assert.match(html, /class="atlas-shell"/);
   assert.match(html, /Public-professional research input/);
   assert.match(html, /Name, role, organization, work email, URL, handle, or publication/);
-  assert.match(html, /Replay/);
-  assert.match(html, /Live/);
-  assert.match(html, /Verified captures/);
-  assert.match(html, /Website source search hierarchy/);
-  assert.match(html, /Exact supplied public URL/);
-  assert.match(html, /Structured professional records/);
-  assert.match(html, /General web discovery/);
-  assert.match(html, /Canonical runtime graph/);
-  assert.match(html, /Graph unavailable for this capture/);
-  assert.match(html, /never invents a network from report prose/i);
-  assert.match(html, /Private contact and home-record research is blocked/);
+  // Live-first workspace: no replay/example mode switch is exposed in the UI.
+  assert.doesNotMatch(html, /Replay/);
+  // Public-professional modality toggles are rendered.
+  assert.match(html, /Identity/);
+  assert.match(html, /Employer &amp; role/);
+  assert.match(html, /Profiles &amp; handles/);
+  assert.match(html, /Publications/);
+  assert.match(html, /Education/);
+  // Graph empty-state invites a live run rather than referencing captures.
+  assert.match(html, /Run a search to build the graph/);
+  assert.match(html, /it is never invented from prose/i);
+  // Safety scope banner stays visible on the input.
+  assert.match(html, /Home address, personal phone, and data-broker records are out of scope/);
   assert.match(html, /<main id="graph-workspace"/);
   assert.doesNotMatch(html, /Investigate a person, not just a name|class="codegraph"|class="dossier-panel"/i);
   assert.doesNotMatch(html, /Henry Wang|Illustrative public-source run|aria-valuenow="72"/i);
@@ -121,7 +123,6 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.doesNotMatch(workbench, /Henry Wang|fake live|dangerouslySetInnerHTML/i);
   assert.match(workbench, /event\.key\.toLowerCase\(\) === "f"/);
   assert.match(workbench, /event\.key\.toLowerCase\(\) === "l"/);
-  assert.match(workbench, /event\.key\.toLowerCase\(\) === "t"/);
   assert.match(workbench, /event\.key\.toLowerCase\(\) === "r"/);
   assert.doesNotMatch(workbench, /@xyflow\/react|elkjs/);
 

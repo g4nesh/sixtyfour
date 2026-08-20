@@ -13,6 +13,7 @@ export type IdKind =
   | "evidence"
   | "finding"
   | "action"
+  | "lead"
   | "graph_node"
   | "graph_edge"
   | "event"

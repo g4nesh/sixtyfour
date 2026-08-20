@@ -67,6 +67,13 @@ export interface ReportIdentityView {
   rationale: string;
 }
 
+export interface ReportCitedSource {
+  ref: string;
+  url: string;
+  title: string | null;
+  domain: string;
+}
+
 export interface ReportFindingView {
   id: string;
   title: string;
@@ -76,6 +83,8 @@ export interface ReportFindingView {
   confidenceLabel: ConfidenceLabel;
   citations: string[];
   counterCitations: string[];
+  /** Resolved cited sources (real public URLs) backing this finding. */
+  sources: ReportCitedSource[];
   caveats: string[];
 }
 

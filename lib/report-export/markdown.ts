@@ -1,5 +1,6 @@
 import { markdownInline, markdownUrl, stableSlug } from "./sanitize";
 import type {
+  ReportCitedSource,
   ReportCandidateView,
   ReportEvidenceView,
   ReportFindingView,
@@ -23,6 +24,15 @@ function referenceLinks(refs: readonly string[]): string {
   return refs.length === 0
     ? "None"
     : refs.map((ref) => `[${markdownInline(ref)}](#${ref.toLocaleLowerCase("en-US")})`).join(", ");
+}
+
+function citedSourceLinks(sources: readonly ReportCitedSource[]): string {
+  if (sources.length === 0) return "None";
+  return sources.map((source) => {
+    const target = markdownUrl(source.url);
+    const label = source.title ? `${source.title} — ${source.domain}` : source.domain;
+    return target ? `[${markdownInline(label)}](${target})` : markdownInline(label);
+  }).join(", ");
 }
 
 function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
@@ -50,7 +60,7 @@ function findingSection(finding: ReportFindingView, index: number): string[] {
     "",
     `**Category:** ${markdownInline(human(finding.category))}  `,
     `**Confidence:** ${markdownInline(human(finding.confidenceLabel))} (${percent(finding.confidenceScore)})  `,
-    `**Evidence:** ${referenceLinks(finding.citations)}  `,
+    `**Sources:** ${citedSourceLinks(finding.sources)}  `,
     `**Counter-evidence:** ${referenceLinks(finding.counterCitations)}`,
     "",
     markdownInline(finding.description),

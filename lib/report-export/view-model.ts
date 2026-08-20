@@ -287,6 +287,17 @@ export function createReportViewModel(
   const alternatives = candidates.filter((candidate) => candidate.id !== selectedId);
   const subject = selected?.name
     ?? (report.target.name ? cleanInlineReportText(report.target.name) : cleanInlineReportText(report.input.query));
+  const evidenceViewById = new Map(evidence.items.map((item) => [item.id, item]));
+  const citedSourcesFor = (ids: readonly string[]) => ids
+    .map((id) => {
+      const ref = evidence.refsById.get(id);
+      const view = evidenceViewById.get(cleanInlineReportText(id));
+      if (!ref || !view || !view.sourceUrl) return null;
+      let domain = view.sourceFamily;
+      try { domain = new URL(view.sourceUrl).hostname.replace(/^www\./, ""); } catch { /* keep family */ }
+      return { ref, url: view.sourceUrl, title: view.title, domain };
+    })
+    .filter((source): source is { ref: string; url: string; title: string | null; domain: string } => Boolean(source));
   const findings = [...report.findings]
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((finding) => ({
@@ -298,6 +309,7 @@ export function createReportViewModel(
       confidenceLabel: finding.confidence.label,
       citations: finding.evidenceIds.map((id) => evidence.refsById.get(id)).filter((ref): ref is string => Boolean(ref)),
       counterCitations: finding.counterEvidenceIds.map((id) => evidence.refsById.get(id)).filter((ref): ref is string => Boolean(ref)),
+      sources: citedSourcesFor(finding.evidenceIds),
       caveats: finding.caveats.map(cleanReportText).sort(),
     }));
   const identityRationale = report.identity.status === "resolved"

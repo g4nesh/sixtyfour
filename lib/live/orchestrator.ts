@@ -75,6 +75,12 @@ export interface LiveResearchConfig {
   model: string;
   siteUrl?: string;
   appName?: string;
+  /** "openai" uses the OpenAI API directly with native web search. */
+  provider?: "openrouter" | "openai";
+  /** Override the chat-completions endpoint (defaults per provider). */
+  endpoint?: string;
+  /** Search-preview model used only for the web-discovery turn (OpenAI). */
+  searchModel?: string;
   fetch?: FetchLike;
   clock?: Clock;
   ids?: IdFactory;
@@ -268,7 +274,7 @@ function decisionTool(
         },
         actions: {
           type: "array",
-          maxItems: 4,
+          maxItems: 2,
           items: {
             type: "object",
             additionalProperties: false,
@@ -363,6 +369,9 @@ function plannerSystemPrompt(): string {
   return [
     "You plan bounded public-professional research for an evidence-graph agent.",
     "Every action must bind to exactly one selected frontierEntryId and use a tool allowed by that entry. Do not invent a new pivot outside the frontier.",
+    "If you propose two actions in one batch, give each a DIFFERENT frontierEntryId — never reuse the same id twice.",
+    "Order of work: FIRST call search_web (with a non-empty query) to discover source leads; only AFTER a search has produced leads may you call fetch_public_source. On the first turn, when no leads exist yet, search_web is the only useful action — do not call fetch_public_source with an empty leadId.",
+    "To fetch, set arguments.leadId to the EXACT leadId string copied from a discovery-only evidence record already in the state (these ids start with 'lead_'), and set candidateId to that same record's candidateId. Do not invent or paraphrase a leadId, and do not pass a frontierEntryId as the leadId.",
     "Return only the propose_research_batch function call and a short decisionSummary; never expose private reasoning.",
     "Search annotations are discovery-only. Use fetch_public_source with candidateId plus opaque leadId before asking to make a factual finding; do not rewrite a lead URL. The only candidate-free fetch is the exact URL in a selected t0.explicit_url entry.",
     "Keep same-name people separate. Reuse an existing candidateId when fetching a source for that candidate.",
@@ -966,6 +975,9 @@ export function createLiveDependencies(
     model: config.model,
     appUrl: config.siteUrl,
     appTitle: config.appName ?? "Atlas People Intelligence",
+    ...(config.provider ? { provider: config.provider } : {}),
+    ...(config.endpoint ? { endpoint: config.endpoint } : {}),
+    ...(config.searchModel ? { searchModel: config.searchModel } : {}),
   } as const;
   // Validate configuration synchronously, before the generator starts work.
   createOpenRouterClient({ ...clientConfig, fetch: countedFetch });
@@ -1201,7 +1213,10 @@ export function createLiveDependencies(
       }
       const evidence: EvidenceDraft[] = boundCitations.map((binding) => {
         const { citation } = binding;
-        const leadId = ids.next("action");
+        // A distinct "lead" prefix keeps opaque discovery lead ids visually
+        // separate from frontier/action ids so the planner references the right
+        // one when calling fetch_public_source.
+        const leadId = ids.next("lead");
         discoveryAuthorizations.set(leadId, citation.url);
         return {
           ...(binding.candidateId
@@ -1254,18 +1269,24 @@ export function createLiveDependencies(
     }
 
     if (action.tool === "fetch_public_source") {
-      const leadId = stringValue(action.arguments.leadId, 180);
-      const leadEvidence = leadId && action.candidateId
+      const leadId = stringValue(action.arguments.leadId, 180)
+        ?? stringValue((action.arguments as Record<string, unknown>).opaqueLeadId, 180);
+      // Resolve the discovery lead by its opaque id alone and bind the fetch to
+      // that lead's own candidate. This keeps the candidate scope authoritative
+      // (from the search, not the model) and is robust to a model that omits or
+      // slightly mismatches candidateId when it references a lead.
+      const leadEvidence = leadId
         ? context.state.evidence.find((item) =>
-          item.candidateId === action.candidateId
-          && item.sourceType === "search_result"
+          item.sourceType === "search_result"
           && item.disposition === "discovery_only"
-          && item.attributes.leadId === leadId)
+          && item.attributes.leadId === leadId
+          && (!action.candidateId || item.candidateId === action.candidateId))
         : undefined;
       const leadUrl = leadEvidence && leadId ? discoveryAuthorizations.get(leadId) ?? null : null;
+      const boundCandidateId = leadEvidence?.candidateId ?? action.candidateId;
       const proposedUrl = safeHttpsUrl(action.arguments.url);
       const establishedUrl = proposedUrl
-        ? sourceAllowedForCandidate(context.state, proposedUrl, action.candidateId)
+        ? sourceAllowedForCandidate(context.state, proposedUrl, boundCandidateId)
         : null;
       const exactInputUrl = action.sourceLaneId === "t0.explicit_url" && proposedUrl
         ? exactUserSuppliedUrl(context.state, proposedUrl)
@@ -1315,7 +1336,7 @@ export function createLiveDependencies(
       const family = inferSourceFamily(fetched.data.finalUrl);
       const gate = gateExtractedCandidate(
         context.state,
-        action.candidateId,
+        boundCandidateId,
         extracted.subjectName,
         extracted.organization,
         fetched.data.finalUrl,
@@ -1419,9 +1440,9 @@ export function createLiveDependencies(
           meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: true },
         };
       }
-      const evidence: EvidenceDraft[] = [{ ...evidenceBase, candidateId: action.candidateId! }];
+      const evidence: EvidenceDraft[] = [{ ...evidenceBase, candidateId: boundCandidateId! }];
       const candidateSignals = [{
-        candidateId: action.candidateId!,
+        candidateId: boundCandidateId!,
         signals: [
           { kind: "name", value: extracted.subjectName!, normalizedValue: normalizeComparable(extracted.subjectName!), strength: "strong", assurance: "spoofable", sourceFamily: family } as IdentitySignal,
           { kind: "profile_url", value: fetched.data.finalUrl, normalizedValue: fetched.data.finalUrl, strength: "strong", assurance: "spoofable", sourceFamily: family } as IdentitySignal,

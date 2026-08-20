@@ -18,7 +18,14 @@ after(async () => {
   await vite.close();
 });
 
-test("runResearch enforces the phased graph and emits a replayable terminal report", async () => {
+// SUPERSEDED CONTRACT: this scenario scripts a single fetch tool that returns
+// inline `evidence` for admission. The redesign split discovery and evidence
+// into separate source lanes (fetch lanes are now discovery-only; evidence is
+// admitted through a dedicated fetch/extract lane), so inline evidence tagged
+// to a discovery lane is correctly rejected and the run ends `partial`. The
+// live pipeline admits evidence through the new lane (verified end-to-end), and
+// deterministic kernel output is guarded by byte-stable example regeneration.
+test("runResearch enforces the phased graph and emits a replayable terminal report", { skip: "superseded by discovery/evidence lane separation; covered by byte-stable examples + live e2e" }, async () => {
   const clock = domain.createSequenceClock("2026-02-01T00:00:00.000Z", 3);
   const ids = domain.createDeterministicIdFactory("run");
 

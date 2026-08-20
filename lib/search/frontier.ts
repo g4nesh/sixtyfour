@@ -489,6 +489,10 @@ export function enqueueCandidateFrontier(
   const events: SearchKernelEvent[] = [];
   for (const lane of sourceLanesForTarget(target, availableTools, { candidateId: candidate.id })) {
     if (!lane.requiresCandidate) continue;
+    // Lanes that require an exact candidate-linked URL (e.g. Wayback) cannot be
+    // enqueued from a name/org query hint; they are opened later, only once an
+    // admitted source has bound a concrete HTTPS URL to this candidate.
+    if (lane.requiresExactCandidateUrl) continue;
     const enqueued = enqueueFrontier(graph, {
       lane,
       target,
@@ -527,8 +531,12 @@ export function selectFrontierBatch(
   // batch may expand only the lowest tier that has an action executable now;
   // this prevents broad discovery from racing an unexhausted exact/official
   // lane while still allowing mutation-cap-deferred entries to wait safely.
+  // The cursor is monotonic: entries below the current tier (e.g. a candidate
+  // lane opened after the run already advanced) are not revisited downward.
+  const tierFloor = graph.currentSourceTier ?? 0;
   const initiallyExecutable = queued.filter((entry) =>
-    entry.mutation === null || mutationSelectionLegal(graph));
+    entry.sourceTier >= tierFloor
+    && (entry.mutation === null || mutationSelectionLegal(graph)));
   const minimumEligibleTier = initiallyExecutable.length > 0
     ? initiallyExecutable.reduce<SourceTier>(
       (value, entry) => Math.min(value, entry.sourceTier) as SourceTier,

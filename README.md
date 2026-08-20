@@ -1,4 +1,4 @@
-# Atlas — People Intelligence
+# Atlas — People Intelligence 
 
 Atlas is an auditable public-source research agent for resolving professional identities. Its live scheduler performs a visible best-first search over a canonical execution graph: it expands the lowest-cost legal source frontier first, keeps rejected and ambiguous branches, and reserves a small deterministic Metropolis-Hastings mutation lane for useful adjacent exploration. It separates same-name candidates, attaches every finding to direct evidence, exposes the full execution trace, and stops honestly when identity or coverage is insufficient.
 
