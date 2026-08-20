@@ -56,12 +56,12 @@ export function GraphWorkspace({
     {graph ? <>
       <p className="sr-only" role="status">{graphSummary(graph)}</p>
       {view === "graph" ? <GraphCanvas graph={graph} selectedNodeId={selectedNodeId} onSelectNode={onSelectNode} focusedStableId={focusedStableId} fitRequest={fitRequest} /> : <GraphList graph={graph} selectedNodeId={selectedNodeId} onSelectNode={onSelectNode} />}
-      <div className="graph-legend" aria-label="Graph status legend">
-        <span className="legend-seed">Seed</span>
-        <span className="legend-verified">Verified</span>
-        <span className="legend-frontier">Frontier</span>
-        <span className="legend-mutation">Mutation</span>
-        <span className="legend-rejected">Rejected</span>
+      <div className="graph-legend" role="list" aria-label="Graph status legend">
+        <span className="legend-seed" role="listitem">Seed</span>
+        <span className="legend-verified" role="listitem">Verified</span>
+        <span className="legend-frontier" role="listitem">Frontier</span>
+        <span className="legend-mutation" role="listitem">Mutation</span>
+        <span className="legend-rejected" role="listitem">Rejected</span>
       </div>
     </> : <div className="canonical-graph-empty" data-graph-state="unavailable">
       <div className="empty-graph-mark" aria-hidden="true"><span /></div>

@@ -22,16 +22,16 @@ import type {
 } from "../../lib/report-export/types";
 
 const colors = {
-  ink: "#0c111b",
-  muted: "#5f6b7a",
-  faint: "#eef1f5",
-  line: "#d9dee7",
+  ink: "#141816",
+  muted: "#5c6861",
+  faint: "#f2f4f2",
+  line: "#dfe4e0",
   paper: "#ffffff",
-  black: "#05070a",
-  blue: "#4f8cff",
-  green: "#22c55e",
-  amber: "#f59e0b",
-  orange: "#f97316",
+  black: "#060806",
+  blue: "#2f6dc6",
+  green: "#2f8a58",
+  amber: "#9a6b25",
+  orange: "#b35d2c",
 };
 
 const styles = StyleSheet.create({
@@ -43,9 +43,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 54,
     fontFamily: "Helvetica",
   },
-  coverRule: { width: 48, height: 3, backgroundColor: colors.blue, marginBottom: 26 },
+  coverRule: { width: 36, height: 2, backgroundColor: colors.blue, marginBottom: 26 },
   classification: {
-    color: "#9fb9e9",
+    color: "#a9bddc",
     fontSize: 8,
     letterSpacing: 2.2,
     fontFamily: "Helvetica-Bold",
@@ -58,27 +58,23 @@ const styles = StyleSheet.create({
     maxWidth: 465,
     marginBottom: 18,
   },
-  coverSubject: { color: "#c6d0de", fontSize: 13, lineHeight: 1.5, maxWidth: 450 },
+  coverSubject: { color: "#c8d0cb", fontSize: 13, lineHeight: 1.5, maxWidth: 450 },
   coverGraph: { marginTop: 48, marginBottom: 34 },
-  coverMeta: { marginTop: "auto", borderTopWidth: 0.7, borderTopColor: "#263244", paddingTop: 18 },
+  coverMeta: { marginTop: "auto", borderTopWidth: 0.7, borderTopColor: "#2b332e", paddingTop: 18 },
   coverMetaRow: { display: "flex", flexDirection: "row", marginBottom: 8 },
-  coverMetaLabel: { width: 82, color: "#7f8ea3", fontSize: 7.5, letterSpacing: 0.5 },
-  coverMetaValue: { flexGrow: 1, color: "#dce3ec", fontSize: 8.5, lineHeight: 1.3 },
+  coverMetaLabel: { width: 82, color: "#8e9a92", fontSize: 7.5, letterSpacing: 0.5 },
+  coverMetaValue: { flexGrow: 1, color: "#e0e5e1", fontSize: 8.5, lineHeight: 1.3 },
   bodyPage: {
     backgroundColor: colors.paper,
     color: colors.ink,
-    paddingTop: 55,
-    paddingBottom: 48,
+    paddingTop: 28,
+    paddingBottom: 22,
     paddingHorizontal: 48,
     fontFamily: "Helvetica",
     fontSize: 9,
     lineHeight: 1.45,
   },
   header: {
-    position: "absolute",
-    top: 22,
-    left: 48,
-    right: 48,
     display: "flex",
     flexDirection: "row",
     justifyContent: "space-between",
@@ -86,14 +82,11 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.line,
     paddingBottom: 7,
     color: colors.muted,
-    fontSize: 6.8,
+    fontSize: 7.5,
     letterSpacing: 0.45,
+    marginBottom: 16,
   },
   footer: {
-    position: "absolute",
-    bottom: 20,
-    left: 48,
-    right: 48,
     display: "flex",
     flexDirection: "row",
     justifyContent: "space-between",
@@ -101,13 +94,14 @@ const styles = StyleSheet.create({
     borderTopColor: colors.line,
     paddingTop: 7,
     color: colors.muted,
-    fontSize: 6.8,
+    fontSize: 7.5,
+    marginTop: "auto",
   },
   section: { marginBottom: 18 },
   sectionKicker: {
     color: colors.blue,
     fontFamily: "Helvetica-Bold",
-    fontSize: 6.8,
+    fontSize: 7.5,
     letterSpacing: 1.25,
     marginBottom: 4,
   },
@@ -120,17 +114,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     marginBottom: 8,
   },
-  metricInner: { backgroundColor: "#f6f8fb", borderRadius: 3, padding: 9, minHeight: 43 },
+  metricInner: { borderTopWidth: 1, borderTopColor: colors.line, paddingVertical: 8, minHeight: 43 },
   metricValue: { fontFamily: "Helvetica-Bold", fontSize: 12, color: colors.ink, marginBottom: 2 },
-  metricLabel: { fontSize: 6.6, color: colors.muted, letterSpacing: 0.25 },
-  label: { color: colors.muted, fontFamily: "Helvetica-Bold", fontSize: 6.7, letterSpacing: 0.4 },
+  metricLabel: { fontSize: 7.5, color: colors.muted, letterSpacing: 0.25 },
+  label: { color: colors.muted, fontFamily: "Helvetica-Bold", fontSize: 7.5, letterSpacing: 0.4 },
   value: { color: colors.ink, fontSize: 8.5, marginTop: 2, lineHeight: 1.35 },
   detailRow: { display: "flex", flexDirection: "row", marginBottom: 8 },
   detailCell: { width: "50%", paddingRight: 16 },
   decision: {
     borderLeftWidth: 3,
     borderLeftColor: colors.green,
-    backgroundColor: "#f4fbf6",
+    backgroundColor: "#f5f9f6",
     paddingVertical: 10,
     paddingHorizontal: 12,
     marginBottom: 10,
@@ -145,24 +139,22 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   candidateName: { width: "30%", fontFamily: "Helvetica-Bold", fontSize: 8.2 },
-  candidateState: { width: "18%", fontSize: 7.7 },
-  candidateSignals: { width: "52%", color: colors.muted, fontSize: 7.3, lineHeight: 1.35 },
+  candidateState: { width: "18%", fontSize: 8 },
+  candidateSignals: { width: "52%", color: colors.muted, fontSize: 8, lineHeight: 1.35 },
   findingCard: {
-    borderWidth: 0.7,
-    borderColor: colors.line,
-    borderRadius: 4,
-    padding: 12,
-    marginBottom: 10,
+    borderBottomWidth: 0.7,
+    borderBottomColor: colors.line,
+    paddingVertical: 10,
   },
   findingTop: { display: "flex", flexDirection: "row", alignItems: "flex-start", marginBottom: 6 },
   findingIndex: {
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: colors.ink,
-    color: colors.paper,
+    backgroundColor: colors.faint,
+    color: colors.ink,
     fontFamily: "Helvetica-Bold",
-    fontSize: 7.5,
+    fontSize: 8,
     textAlign: "center",
     paddingTop: 7.3,
     marginRight: 9,
@@ -170,51 +162,49 @@ const styles = StyleSheet.create({
   findingHeading: { flexGrow: 1, fontFamily: "Helvetica-Bold", fontSize: 10.5, lineHeight: 1.25 },
   badge: {
     borderRadius: 9,
-    backgroundColor: "#eaf1ff",
-    color: "#2258aa",
+    backgroundColor: "#edf2f0",
+    color: "#345847",
     paddingVertical: 3,
     paddingHorizontal: 7,
     fontFamily: "Helvetica-Bold",
-    fontSize: 6.5,
+    fontSize: 7.5,
   },
   findingDescription: { fontSize: 8.7, lineHeight: 1.48, marginBottom: 7 },
-  citationLine: { color: colors.blue, fontFamily: "Helvetica-Bold", fontSize: 7.3 },
+  citationLine: { color: colors.blue, fontFamily: "Helvetica-Bold", fontSize: 8 },
   citationLink: { color: colors.blue, textDecoration: "underline" },
   evidenceCard: {
     borderTopWidth: 1.2,
     borderTopColor: colors.blue,
-    backgroundColor: "#f8fafc",
-    padding: 11,
-    marginBottom: 10,
+    paddingVertical: 10,
   },
   evidenceTop: { display: "flex", flexDirection: "row", alignItems: "flex-start", marginBottom: 6 },
   evidenceRef: { color: colors.blue, fontFamily: "Helvetica-Bold", fontSize: 9, width: 34 },
   evidenceTitle: { flexGrow: 1, fontFamily: "Helvetica-Bold", fontSize: 9, lineHeight: 1.3 },
-  evidenceLabel: { color: colors.muted, fontFamily: "Helvetica-Bold", fontSize: 6.5, letterSpacing: 0.35 },
+  evidenceLabel: { color: colors.muted, fontFamily: "Helvetica-Bold", fontSize: 7.5, letterSpacing: 0.35 },
   evidenceClaim: { fontSize: 8.2, lineHeight: 1.45, marginTop: 3, marginBottom: 7 },
   excerpt: {
     borderLeftWidth: 2,
     borderLeftColor: colors.green,
     paddingLeft: 9,
-    color: "#273348",
+    color: "#304138",
     fontSize: 8.1,
     lineHeight: 1.45,
     marginBottom: 8,
   },
-  evidenceMeta: { fontSize: 6.9, color: colors.muted, lineHeight: 1.45, marginBottom: 4 },
-  link: { color: "#2258aa", fontSize: 6.8, lineHeight: 1.35, textDecoration: "none" },
+  evidenceMeta: { fontSize: 7.5, color: colors.muted, lineHeight: 1.45, marginBottom: 4 },
+  link: { color: colors.blue, fontSize: 7.5, lineHeight: 1.35, textDecoration: "none" },
   tierRow: { display: "flex", flexDirection: "row", marginBottom: 6 },
   tierNumber: { width: 24, color: colors.amber, fontFamily: "Helvetica-Bold", fontSize: 8.5 },
-  tierDetail: { flexGrow: 1, fontSize: 7.7, lineHeight: 1.4 },
+  tierDetail: { flexGrow: 1, fontSize: 8, lineHeight: 1.4 },
   pathRow: { display: "flex", flexDirection: "row", marginBottom: 6 },
-  pathStatus: { width: 96, fontFamily: "Helvetica-Bold", fontSize: 7.2 },
-  pathText: { width: 380, flexShrink: 1, color: colors.muted, fontSize: 7.2, lineHeight: 1.35 },
+  pathStatus: { width: 96, fontFamily: "Helvetica-Bold", fontSize: 8 },
+  pathText: { width: 380, flexShrink: 1, color: colors.muted, fontSize: 8, lineHeight: 1.35 },
   bullet: { display: "flex", flexDirection: "row", marginBottom: 5 },
   bulletMark: { width: 12, color: colors.orange, fontFamily: "Helvetica-Bold" },
   bulletText: { flexGrow: 1, fontSize: 8.1, lineHeight: 1.45 },
-  methodologyCard: { backgroundColor: colors.ink, color: colors.paper, padding: 13, marginBottom: 8 },
-  methodologyTitle: { color: "#9fb9e9", fontFamily: "Helvetica-Bold", fontSize: 7, letterSpacing: 0.5, marginBottom: 4 },
-  methodologyText: { color: "#e3e8ef", fontSize: 8, lineHeight: 1.45 },
+  methodologyCard: { borderTopWidth: 0.7, borderTopColor: colors.line, paddingVertical: 10 },
+  methodologyTitle: { color: colors.muted, fontFamily: "Helvetica-Bold", fontSize: 7.5, letterSpacing: 0.5, marginBottom: 4 },
+  methodologyText: { color: colors.ink, fontSize: 8.5, lineHeight: 1.45 },
 });
 
 function human(value: string): string {
@@ -223,6 +213,14 @@ function human(value: string): string {
 
 function percent(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+}
+
+function chunkItems<T>(items: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function safeMetadataDate(value: string): Date | undefined {
@@ -251,15 +249,15 @@ function BodyPage({
 }) {
   return (
     <Page size="LETTER" style={styles.bodyPage} wrap bookmark={bookmark}>
-      <View style={styles.header} fixed>
+      <View style={styles.header}>
         <Text>ATLAS / PUBLIC-SOURCE INTELLIGENCE</Text>
         <Text>{viewModel.subject}</Text>
       </View>
-      <View style={styles.footer} fixed>
-        <Text>{viewModel.run.id}</Text>
-        <Text render={({ pageNumber, totalPages }) => `PAGE ${pageNumber} / ${totalPages}`} />
-      </View>
       {children}
+      <View style={styles.footer}>
+        <Text>{viewModel.run.id}</Text>
+        <Text>ATLAS REPORT</Text>
+      </View>
     </Page>
   );
 }
@@ -292,7 +290,7 @@ function CoverPath({ viewModel }: { viewModel: ReportViewModel }) {
       </Svg>
       <View style={{ display: "flex", flexDirection: "row", justifyContent: "space-between", marginTop: -11 }}>
         {values.map(([label]) => (
-          <Text key={label} style={{ width: 82, color: "#8190a5", fontSize: 5.8, letterSpacing: 0.3 }}>{label}</Text>
+          <Text key={label} style={{ width: 82, color: "#8e9a92", fontSize: 7.5, letterSpacing: 0.3 }}>{label}</Text>
         ))}
       </View>
     </View>
@@ -301,7 +299,7 @@ function CoverPath({ viewModel }: { viewModel: ReportViewModel }) {
 
 function FindingCard({ finding, index }: { finding: ReportFindingView; index: number }) {
   return (
-    <View style={styles.findingCard} wrap={false}>
+    <View style={styles.findingCard}>
       <View style={styles.findingTop}>
         <Text style={styles.findingIndex}>{String(index + 1).padStart(2, "0")}</Text>
         <Text style={styles.findingHeading}>{finding.title}</Text>
@@ -312,7 +310,7 @@ function FindingCard({ finding, index }: { finding: ReportFindingView; index: nu
         ? finding.sources.map((source, sourceIndex) => (
             <Text key={`${source.url}-${sourceIndex}`}>
               {sourceIndex > 0 ? ", " : ""}
-              <Link src={source.url} style={styles.citationLink}>{source.domain}</Link>
+              <Link src={source.url} style={styles.citationLink}>{source.title} — {source.domain}</Link>
             </Text>
           ))
         : "None"}</Text>
@@ -329,7 +327,7 @@ function FindingCard({ finding, index }: { finding: ReportFindingView; index: nu
 function EvidenceCard({ evidence }: { evidence: ReportEvidenceView }) {
   const title = evidence.title ?? evidence.sourceFamily;
   return (
-    <View style={styles.evidenceCard} wrap={false}>
+    <View style={styles.evidenceCard}>
       <View style={styles.evidenceTop}>
         <Text style={styles.evidenceRef}>{evidence.ref}</Text>
         <Text style={styles.evidenceTitle}>{title}</Text>
@@ -354,6 +352,8 @@ function EvidenceCard({ evidence }: { evidence: ReportEvidenceView }) {
 function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
   const selected = viewModel.identity.selected;
   const created = safeMetadataDate(viewModel.run.generatedAt);
+  const evidencePages = chunkItems(viewModel.evidence, 3);
+  if (evidencePages.length === 0) evidencePages.push([]);
   const statusCounts = viewModel.searchStrategy.nodeStatusCounts
     .map((item) => `${human(item.label)} ${item.count}`)
     .join(" / ") || "No canonical graph statistics";
@@ -380,7 +380,7 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
         <Text style={styles.coverTitle}>Atlas intelligence report</Text>
         <Text style={styles.coverSubject}>{viewModel.subject}</Text>
         <CoverPath viewModel={viewModel} />
-        <Text style={{ color: "#dce3ec", fontSize: 11, lineHeight: 1.55, maxWidth: 460 }}>
+        <Text style={{ color: "#e0e5e1", fontSize: 11, lineHeight: 1.55, maxWidth: 460 }}>
           {viewModel.executiveSummary}
         </Text>
         <View style={styles.coverMeta}>
@@ -418,7 +418,7 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
             <View>
               <Text style={[styles.label, { marginBottom: 3 }]}>RETAINED ALTERNATIVES</Text>
               {viewModel.identity.alternatives.map((candidate) => (
-                <View key={candidate.id} style={styles.candidateRow} wrap={false}>
+                <View key={candidate.id} style={styles.candidateRow}>
                   <Text style={styles.candidateName}>{candidate.name}</Text>
                   <Text style={styles.candidateState}>{human(candidate.status)} / {percent(candidate.score)}</Text>
                   <Text style={styles.candidateSignals}>Matched {candidate.matchedSignals.join(", ") || "none"}; conflicts {candidate.conflictingSignals.join(", ") || "none"}</Text>
@@ -435,14 +435,23 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
         </Section>
       </BodyPage>
 
-      <BodyPage viewModel={viewModel} bookmark="Evidence ledger">
-        <Section index="04 / SOURCES" title="Evidence and source ledger">
-          <Text style={[styles.paragraph, styles.muted]}>Stable E-references distinguish exact excerpts from structured API claims. Links remain live; raw provider payloads are excluded.</Text>
-          {viewModel.evidence.length > 0
-            ? viewModel.evidence.map((evidence) => <EvidenceCard key={evidence.id} evidence={evidence} />)
-            : <Text style={styles.paragraph}>No evidence was admitted.</Text>}
-        </Section>
-      </BodyPage>
+      {evidencePages.map((items, pageIndex) => (
+        <BodyPage
+          key={pageIndex}
+          viewModel={viewModel}
+          bookmark={pageIndex === 0 ? "Evidence ledger" : `Evidence ledger ${pageIndex + 1}`}
+        >
+          <Section
+            index={pageIndex === 0 ? "04 / SOURCES" : `04 / SOURCES · ${pageIndex + 1}`}
+            title={pageIndex === 0 ? "Evidence and source ledger" : "Evidence ledger continued"}
+          >
+            {pageIndex === 0 ? <Text style={[styles.paragraph, styles.muted]}>Stable E-references distinguish exact excerpts from structured API claims. Links remain live; raw provider payloads are excluded.</Text> : null}
+            {items.length > 0
+              ? items.map((evidence) => <EvidenceCard key={evidence.id} evidence={evidence} />)
+              : <Text style={styles.paragraph}>No evidence was admitted.</Text>}
+          </Section>
+        </BodyPage>
+      ))}
 
       <BodyPage viewModel={viewModel} bookmark="Search strategy">
         <Section index="05 / SEARCH" title="Search strategy and retained paths">
@@ -457,14 +466,14 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
           <Text style={[styles.paragraph, styles.muted]}>Frontier entries: {frontierCounts}</Text>
           <Text style={[styles.label, { marginBottom: 6 }]}>SOURCE LADDER</Text>
           {viewModel.searchStrategy.sourceLadder.map((tier) => (
-            <View key={tier.tier} style={styles.tierRow} wrap={false}>
+            <View key={tier.tier} style={styles.tierRow}>
               <Text style={styles.tierNumber}>T{tier.tier}</Text>
               <Text style={styles.tierDetail}>{tier.label} / {tier.frontierCount} frontier entries / {tier.verifiedCount} verified / {tier.rejectedCount} rejected / {tier.exhaustedCount} exhausted / {tier.evidenceCount} admitted / {tier.sourceFamilies.join(", ") || "no source family"}</Text>
             </View>
           ))}
           <Text style={[styles.label, { marginTop: 6, marginBottom: 6 }]}>ACCEPTED, REJECTED, AND MUTATION PATHS</Text>
           {viewModel.searchStrategy.paths.length > 0 ? viewModel.searchStrategy.paths.map((path) => (
-            <View key={path.id} style={styles.pathRow} wrap={false}>
+            <View key={path.id} style={styles.pathRow}>
               <Text style={[styles.pathStatus, { color: path.disposition.includes("rejected") ? colors.orange : colors.green }]}>{human(path.disposition)}</Text>
               <Text style={styles.pathText}>{path.path.join(" -> ")}{path.cost === null ? "" : ` / cost ${path.cost.toFixed(3)}`}</Text>
             </View>
@@ -499,7 +508,7 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
             ["GRAPH STANDARD", viewModel.methodology.graphStandard],
             ["SAFETY NOTE", viewModel.methodology.safetyNote],
           ].map(([title, text]) => (
-            <View key={title} style={styles.methodologyCard} wrap={false}>
+            <View key={title} style={styles.methodologyCard}>
               <Text style={styles.methodologyTitle}>{title}</Text>
               <Text style={styles.methodologyText}>{text}</Text>
             </View>

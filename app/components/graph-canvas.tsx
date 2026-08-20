@@ -47,14 +47,14 @@ const nodeWidth = 230;
 const nodeHeight = 78;
 
 const statusColor: Record<GraphVisualStatus, string> = {
-  seed: "#438cff",
-  queued: "#e7b340",
-  selected: "#f5ca5d",
-  running: "#f5ca5d",
-  verified: "#35c978",
-  mutated: "#e98735",
-  rejected: "#e05a47",
-  exhausted: "#738077",
+  seed: "#76a9fa",
+  queued: "#c79e5c",
+  selected: "#d6aa61",
+  running: "#d6aa61",
+  verified: "#62c58a",
+  mutated: "#df8d55",
+  rejected: "#e47670",
+  exhausted: "#727e76",
 };
 
 function flowNodes(graph: CanonicalSearchGraph, selectedNodeId: string | null, focusedStableId: string | null, onSelect: (id: string) => void): AtlasFlowNode[] {
@@ -220,12 +220,12 @@ function GraphCanvasInner({ graph, selectedNodeId, onSelectNode, focusedStableId
       colorMode="dark"
       defaultEdgeOptions={{ interactionWidth: 18 }}
     >
-      <Background variant={BackgroundVariant.Dots} gap={22} size={0.85} color="rgba(155, 170, 160, 0.2)" />
+      <Background variant={BackgroundVariant.Dots} gap={24} size={0.75} color="rgba(114, 126, 118, 0.18)" />
       <Controls className="atlas-flow-controls" showInteractive={false} />
       <MiniMap className="atlas-minimap" nodeColor={(node) => {
         const source = node.data?.source as SearchGraphNode | undefined;
-        return source ? statusColor[nodeVisualStatus(source)] : "#778079";
-      }} nodeStrokeWidth={1} maskColor="rgba(4, 7, 5, .72)" pannable zoomable ariaLabel="Search graph minimap" />
+        return source ? statusColor[nodeVisualStatus(source)] : "#727e76";
+      }} nodeStrokeWidth={1} maskColor="rgba(3, 6, 4, .78)" pannable zoomable ariaLabel="Search graph minimap" />
     </ReactFlow>
   </div>;
 }

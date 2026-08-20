@@ -349,19 +349,20 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       {runStatus === "running"
         ? <button className="run-button is-stop" type="button" onClick={() => abortRef.current?.abort()}><StopIcon /><span>Stop</span></button>
         : <button className="run-button" type="button" onClick={() => document.querySelector<HTMLFormElement>(".command-search")?.requestSubmit()}><PlayIcon /><span>Research</span></button>}
-      <button className="report-button" type="button" onClick={() => setReportOpen(true)} disabled={!report} title="Open intelligence report (R)"><ReportIcon /><span>Report</span>{exporting ? <i aria-label={`Exporting ${exporting}`} /> : null}</button>
+      <button className="report-button" type="button" onClick={() => setReportOpen(true)} disabled={!report} title="Open intelligence report (R)"><ReportIcon /><span>Report</span>{exporting ? <i role="status" aria-label={`Exporting ${exporting}`} /> : null}</button>
     </header>
 
     <main id="graph-workspace" className="atlas-main">
       <div className="workspace-status" role="status" aria-live="polite">
         <span className={`run-status-pip status-${runStatus}`} aria-hidden="true" />
         <strong>{humanize(reportStatus)}</strong>
-        <span>{message}</span>
-        <div><span>{graphStatusLabel(graph, runStatus)}</span><span>{formatDuration(elapsed)}</span><span>{formatUsage(usage)}</span></div>
+        <span className="workspace-message">{message}</span>
+        <div className="workspace-metrics"><span>{graphStatusLabel(graph, runStatus)}</span><span>{formatDuration(elapsed)}</span><span>{formatUsage(usage)}</span></div>
       </div>
 
       <div className="scope-row">
         <fieldset className="modality-toggles" aria-label="Research modalities">
+          <legend className="sr-only">Research modalities</legend>
           {MODALITIES.map((modality) => {
             const active = categories.has(modality.id);
             return <button
