@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "linus-codegraph",
   "title": "Exact email to public codegraph",
   "description": "A scripted reconstruction from source-verified public captures that connects an exact user-supplied email to Linux documentation and bounded GitHub commit metadata while preserving the spoofable-metadata confidence cap.",

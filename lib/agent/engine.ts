@@ -3,6 +3,7 @@ import {
   addCandidateSignals as appendCandidateSignals,
   canMergeCandidates,
   createCandidate,
+  identitySignalGroundedByEvidence,
   mergeCandidates,
 } from "../domain/candidates";
 import { admitEvidence as evaluateEvidenceAdmission } from "../domain/evidence";
@@ -46,6 +47,12 @@ import {
 } from "../domain/types";
 import { parseInvestigationInput } from "../domain/validation";
 import { TraceRecorder } from "./trace";
+import {
+  assertSearchGraph,
+  assertSearchGraphEvolution,
+  emptySearchGraph,
+  markSearchGraphTerminal,
+} from "../search/frontier";
 
 export interface InvestigationEngineOptions {
   budget?: Partial<BudgetLimits>;
@@ -83,6 +90,11 @@ function evidenceCarriesIdentityLabels(
     && labelOccursAsTokenPhrase(evidence.excerpt, subjectLabel)
     && labelOccursAsTokenPhrase(evidence.excerpt, organizationLabel),
   );
+}
+
+function withoutUnverifiedSourceProvenance(signal: IdentitySignal): IdentitySignal {
+  const { sourceEvidenceId: _sourceEvidenceId, sourceFamily: _sourceFamily, ...provisional } = signal;
+  return provisional;
 }
 
 /**
@@ -131,6 +143,8 @@ export class InvestigationEngine {
       candidates: [],
       evidence: [],
       findings: [],
+      // The raw target is copied into graph state only after safety passes.
+      searchGraph: emptySearchGraph(runId, "", startedAt),
       openQuestions: [...new Set(options.openQuestions ?? [])].sort(),
       evidenceTelemetry: {
         admitted: 0,
@@ -199,6 +213,22 @@ export class InvestigationEngine {
     return cloneJson(this.#state);
   }
 
+  /**
+   * Admits a complete JSON-safe orchestration snapshot after the frontier
+   * kernel validates it. This does not grant LangGraph authority over any
+   * candidate, evidence, confidence, budget, or stop state.
+   */
+  replaceSearchGraph(graph: InvestigationState["searchGraph"]): void {
+    this.#ensureRunning();
+    if (graph.runId !== this.#state.runId) {
+      throw new Error(`search graph runId ${graph.runId} does not match ${this.#state.runId}`);
+    }
+    assertSearchGraph(graph);
+    assertSearchGraphEvolution(this.#state.searchGraph, graph);
+    this.#state.searchGraph = cloneJson(graph);
+    this.#touch(graph.updatedAt);
+  }
+
   transition(to: ResearchPhase, payload: JsonObject = {}): void {
     this.#ensureRunning();
     const from = this.#state.phase;
@@ -223,9 +253,22 @@ export class InvestigationEngine {
     if (draft.signals?.some((signal) => signal.kind === "cross_source_match")) {
       throw new TypeError("cross_source_match signals are derived only by the evidence kernel");
     }
+    if (draft.signals?.some((signal) =>
+      signal.sourceEvidenceId
+      || signal.kind === "conflict"
+      || signal.assurance === "verified"
+      || signal.assurance === "corroborated")) {
+      throw new TypeError("new candidate identity signals cannot claim unadmitted high-assurance evidence");
+    }
+    const candidateDraft: CandidateDraft = {
+      ...draft,
+      ...(draft.signals
+        ? { signals: draft.signals.map(withoutUnverifiedSourceProvenance) }
+        : {}),
+    };
     const timestamp = this.clock.now();
     const proposed = createCandidate(
-      draft,
+      candidateDraft,
       this.#state.target,
       this.ids.next("candidate"),
       timestamp,
@@ -297,7 +340,28 @@ export class InvestigationEngine {
     if (signals.some((signal) => signal.kind === "cross_source_match")) {
       throw new TypeError("cross_source_match signals are derived only by the evidence kernel");
     }
-    return this.#applyCandidateSignals(candidateId, signals);
+    const canonicalSignals = signals.map((signal) => {
+      if (!signal.sourceEvidenceId) {
+        if (
+          signal.kind === "conflict"
+          || signal.assurance === "verified"
+          || signal.assurance === "corroborated"
+        ) {
+          throw new TypeError("high-assurance identity signals require admitted evidence");
+        }
+        return withoutUnverifiedSourceProvenance(signal);
+      }
+      const evidence = this.#state.evidence.find((record) => record.id === signal.sourceEvidenceId);
+      if (
+        !evidence
+        || evidence.candidateId !== candidateId
+        || !identitySignalGroundedByEvidence(signal, evidence)
+      ) {
+        throw new TypeError("identity signal evidence provenance does not match its candidate, family, and value");
+      }
+      return signal;
+    });
+    return this.#applyCandidateSignals(candidateId, canonicalSignals);
   }
 
   #reconcileCrossSourceIdentity(
@@ -538,6 +602,30 @@ export class InvestigationEngine {
     const timestamp = this.clock.now();
     this.#state.phase = "terminal";
     this.#state.status = canonicalStatus;
+    // Terminal stops that bypass the runner's graph finalization (safety block,
+    // configuration error, cancellation before any search state) still need the
+    // canonical graph status to match the report status. An unseeded graph may
+    // only become blocked/canceled/failed; exhausted/completed require a seeded
+    // graph, which the runner has already finalized on those paths.
+    const graphStatus = reason === "goal_satisfied"
+      ? "completed"
+      : reason === "unsafe_request"
+        ? "blocked"
+        : reason === "cancelled"
+          ? "canceled"
+          : reason === "fatal_error" || reason === "configuration_error"
+            ? "failed"
+            : "exhausted";
+    const unseededTerminal = graphStatus === "blocked" || graphStatus === "canceled" || graphStatus === "failed";
+    if (this.#state.searchGraph.status === "active"
+      || (this.#state.searchGraph.status === "empty" && unseededTerminal)) {
+      this.#state.searchGraph = markSearchGraphTerminal(
+        this.#state.searchGraph,
+        graphStatus,
+        timestamp,
+        { preserveQueued: reason === "goal_satisfied" },
+      );
+    }
     this.#state.stop = { reason, detail: safeDetail, at: timestamp };
     this.#touch(timestamp);
     this.trace.record("investigation.terminal", {
@@ -595,6 +683,7 @@ export class InvestigationEngine {
   }
 
   assertIntegrity(): void {
+    assertSearchGraph(this.#state.searchGraph);
     const issues = validateReferentialIntegrity(this.#state);
     if (issues.length > 0) {
       throw new Error(

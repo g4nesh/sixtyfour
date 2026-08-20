@@ -8,6 +8,7 @@ import type {
   IdentityResolution,
   InvestigationReport,
   InvestigationState,
+  JsonValue,
   ReportTelemetry,
   SourceSummary,
 } from "./types";
@@ -16,6 +17,44 @@ import { containsRestrictedPublicContent, restrictedJsonContentPaths } from "./c
 
 export const IDENTITY_RESOLUTION_THRESHOLD = 0.78;
 export const IDENTITY_MARGIN_THRESHOLD = 0.15;
+// A single unique, non-spoofable, high-reliability official anchor can resolve
+// identity below the diversity-driven score threshold, mirroring the completion
+// policy's `hasUniqueOfficialAnchor` gate. The floor keeps a merely-plausible
+// candidate from resolving on a weak anchor.
+export const UNIQUE_ANCHOR_RESOLUTION_FLOOR = 0.5;
+
+const UNIQUE_ANCHOR_SOURCE_TYPES = new Set(["official_profile", "company_page"]);
+const UNIQUE_ANCHOR_SIGNAL_KINDS = new Set([
+  "email",
+  "profile_url",
+  "personal_domain",
+  "keybase_proof",
+  "cross_profile_link",
+]);
+
+/**
+ * True when the candidate is anchored by at least one supporting, non-spoofable
+ * official first-party record of high reliability that grounds a strong,
+ * verified/corroborated merge-grade identity signal. This is the same anchor
+ * quality the completion policy accepts in place of two independent families.
+ */
+export function candidateHasUniqueOfficialAnchor(
+  candidate: Candidate,
+  evidence: readonly EvidenceRecord[],
+): boolean {
+  if (candidate.score.conflictingSignals.length > 0) return false;
+  return evidence.some((record) =>
+    record.candidateId === candidate.id
+    && record.disposition === "supports"
+    && UNIQUE_ANCHOR_SOURCE_TYPES.has(record.sourceType)
+    && !record.spoofable
+    && record.reliability >= 0.8
+    && candidate.signals.some((signal) =>
+      signal.sourceEvidenceId === record.id
+      && UNIQUE_ANCHOR_SIGNAL_KINDS.has(signal.kind)
+      && signal.strength === "strong"
+      && (signal.assurance === "verified" || signal.assurance === "corroborated")));
+}
 
 export const DEFAULT_REQUESTED_CATEGORIES: FindingCategory[] = [
   "identity",
@@ -29,7 +68,10 @@ export function requestedCategoriesForInput(
   return [...new Set(input.requestedCategories ?? DEFAULT_REQUESTED_CATEGORIES)].sort();
 }
 
-export function resolveIdentity(candidates: readonly Candidate[]): IdentityResolution {
+export function resolveIdentity(
+  candidates: readonly Candidate[],
+  evidence: readonly EvidenceRecord[] = [],
+): IdentityResolution {
   const ranked = [...candidates]
     .sort((left, right) => right.score.total - left.score.total || left.id.localeCompare(right.id));
   const eligible = ranked.filter((candidate) => candidate.status !== "rejected");
@@ -43,9 +85,21 @@ export function resolveIdentity(candidates: readonly Candidate[]): IdentityResol
   const selectedScore = selected?.score.total ?? 0;
   const runnerUpScore = runnerUp?.score.total ?? 0;
   const runnerUpMargin = roundScore(selectedScore - runnerUpScore);
-  const resolved =
+  const resolvedByDiversity =
     selected?.status === "resolved" &&
-    selectedScore >= IDENTITY_RESOLUTION_THRESHOLD &&
+    selectedScore >= IDENTITY_RESOLUTION_THRESHOLD;
+  // A unique official anchor substitutes for family diversity: it resolves a
+  // clearly-leading candidate whose score sits below the diversity threshold
+  // because its corroboration comes from one authoritative source rather than
+  // many. Candidate separation is still enforced by the margin requirement.
+  const resolvedByAnchor =
+    Boolean(selected) &&
+    selected!.status !== "rejected" &&
+    selectedScore >= UNIQUE_ANCHOR_RESOLUTION_FLOOR &&
+    candidateHasUniqueOfficialAnchor(selected!, evidence);
+  const resolved =
+    Boolean(selected) &&
+    (resolvedByDiversity || resolvedByAnchor) &&
     runnerUpMargin >= IDENTITY_MARGIN_THRESHOLD;
   const ambiguous =
     !resolved &&
@@ -93,7 +147,7 @@ export function summarizeCoverage(
   state: Pick<InvestigationState, "candidates" | "findings" | "evidence" | "openQuestions">,
   requestedCategories: readonly FindingCategory[] = DEFAULT_REQUESTED_CATEGORIES,
 ): CoverageSummary {
-  const selectedCandidateId = resolveIdentity(state.candidates).selectedCandidateId;
+  const selectedCandidateId = resolveIdentity(state.candidates, state.evidence).selectedCandidateId;
   const selectedFindings = selectedCandidateId
     ? state.findings.filter((finding) => finding.candidateId === selectedCandidateId)
     : [];
@@ -195,7 +249,12 @@ export function restrictedReportContentPaths(report: InvestigationReport): strin
       `evidence[${evidenceIndex}].attributes`,
     ),
   ]);
-  return [...new Set([...prosePaths, ...arbitraryJsonPaths])].sort();
+  const graphPaths = restrictedJsonContentPaths(
+    report.searchGraph as unknown as JsonValue,
+    options,
+    "searchGraph",
+  );
+  return [...new Set([...prosePaths, ...arbitraryJsonPaths, ...graphPaths])].sort();
 }
 
 export function buildInvestigationReport(
@@ -205,7 +264,7 @@ export function buildInvestigationReport(
   if (state.status === "running" || state.phase !== "terminal" || !state.stop) {
     throw new Error("a report can be built only from a terminal investigation state");
   }
-  const identity = resolveIdentity(state.candidates);
+  const identity = resolveIdentity(state.candidates, state.evidence);
   const coverage = summarizeCoverage(state, requestedCategoriesForInput(state.input));
   const limitations = [...new Set([
     ...coverage.gaps,
@@ -228,6 +287,7 @@ export function buildInvestigationReport(
     candidates: state.candidates,
     findings: state.findings,
     evidence: state.evidence,
+    searchGraph: state.searchGraph,
     coverage: { ...coverage, score: clamp(coverage.score) },
     sources: summarizeSources(state.evidence),
     telemetry: reportTelemetry(state),

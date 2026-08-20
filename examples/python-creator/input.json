@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "query": "the creator of Python",
   "objective": "Resolve a role-only public figure query using independent direct public sources.",
   "requestedDepth": "quick",

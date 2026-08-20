@@ -62,7 +62,7 @@ function completion(callNumber, argumentsValue, usage = {
 
 async function liveEvents(fetch, signal) {
   const input = domain.parseInvestigationInput({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     query: "Grace Hopper public professional background",
     requestedDepth: "quick",
   });
@@ -132,7 +132,7 @@ test("candidate source authorization is exact, candidate-scoped, and rejects sec
 test("GitHub codegraph accepts every exact email explicitly present in the request", async () => {
   let observedQuery = null;
   const dependencies = createLiveDependencies({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     query: "first@example.com second@example.com",
     requestedDepth: "quick",
   }, {
@@ -146,14 +146,14 @@ test("GitHub codegraph accepts every exact email explicitly present in the reque
     },
   });
   const result = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-email",
     tool: "github_email_codegraph",
     purpose: "Use the second exact supplied email.",
     arguments: { email: "second@example.com" },
     budgetClass: "search",
   }, {
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     state: {
       target: {
         identifiers: [
@@ -206,7 +206,7 @@ test("concurrent model actions cannot reserve beyond the shared LLM budget", asy
   let actionReservations = 0;
   const updates = [];
   for await (const update of agent.runResearch(
-    { schemaVersion: 1, query: "Grace Hopper, US Navy", requestedDepth: "quick" },
+    { schemaVersion: domain.SCHEMA_VERSION, query: "Grace Hopper, US Navy", requestedDepth: "quick" },
     {
       clock,
       ids,
@@ -220,8 +220,9 @@ test("concurrent model actions cannot reserve beyond the shared LLM budget", asy
         return {
           kind: "actions",
           decisionSummary: "Attempt a bounded concurrent batch.",
-          actions: Array.from({ length: 4 }, (_, index) => ({
-            tool: "model_probe",
+          actions: context.selectedFrontierEntries.map((entry, index) => ({
+            frontierEntryId: entry.id,
+            tool: entry.allowedTools[0],
             purpose: `Probe ${index + 1}`,
             arguments: { index },
             budgetClass: "compute",
@@ -243,7 +244,12 @@ test("concurrent model actions cannot reserve beyond the shared LLM budget", asy
       },
     },
     {
-      availableTools: ["model_probe"],
+      availableTools: [
+        "model_probe_1",
+        "model_probe_2",
+        "model_probe_3",
+        "model_probe_4",
+      ],
       budget: { maxLlmCalls: 3, maxActionsPerTurn: 4 },
     },
   )) updates.push(update);

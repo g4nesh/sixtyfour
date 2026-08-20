@@ -1,6 +1,7 @@
 import { isJsonValue, normalizeWhitespace, roundScore } from "./runtime";
 import {
   SCHEMA_VERSION,
+  SEARCH_GRAPH_SCHEMA_VERSION,
   type BudgetLimits,
   type Candidate,
   type EvidenceRecord,
@@ -11,12 +12,33 @@ import {
   type ParsedTarget,
   type ResearchDepth,
   type SafetyDecision,
+  type SearchGraph,
 } from "./types";
+import { validateSearchGraph } from "../search/frontier";
 
 const RESEARCH_DEPTHS = ["quick", "standard", "deep"] as const;
-const TARGET_KINDS = ["email", "named_person", "role_query", "unknown"] as const;
+const TARGET_KINDS = [
+  "email",
+  "named_person",
+  "role_query",
+  "organization",
+  "url",
+  "domain",
+  "repository",
+  "publication",
+  "package",
+  "platform_handle",
+  "unknown",
+] as const;
 const IDENTIFIER_KINDS = [
   "email",
+  "url",
+  "domain",
+  "repository",
+  "doi",
+  "orcid",
+  "package",
+  "platform_handle",
   "profile_url",
   "personal_domain",
   "social_handle",
@@ -113,6 +135,12 @@ const TERMINAL_STATUSES = [
   "failed",
 ] as const;
 const INVESTIGATION_STATUSES = ["running", ...TERMINAL_STATUSES] as const;
+const SEARCH_GRAPH_RUN_STATUSES = ["empty", "active", "exhausted", "completed", "blocked", "canceled", "failed"] as const;
+const SEARCH_GRAPH_NODE_STATUSES = ["queued", "selected", "running", "verified", "rejected", "exhausted", "mutated"] as const;
+const SEARCH_GRAPH_NODE_KINDS = ["seed", "pivot", "action", "source", "evidence", "candidate", "finding", "gap", "report"] as const;
+const SEARCH_GRAPH_EDGE_KINDS = ["expands", "mutates", "supports", "conflicts", "separates", "grounds", "includes"] as const;
+const SEARCH_GRAPH_MUTATION_STRATEGIES = ["exact_phrase", "role_anchor", "organization_anchor", "source_adjacent"] as const;
+const SOURCE_TIERS = [0, 1, 2, 3, 4, 5, 6] as const;
 const STOP_REASONS = [
   "goal_satisfied",
   "budget_exhausted",
@@ -297,7 +325,7 @@ export function parseInvestigationInput(value: unknown): InvestigationInput {
   }
   if (!isInvestigationInput(value)) {
     throwIssues("InvestigationInput", [
-      { path: "$", message: "expected {schemaVersion: 1, query: non-empty string}" },
+      { path: "$", message: `expected {schemaVersion: ${SCHEMA_VERSION}, query: non-empty string}` },
     ]);
   }
   return {
@@ -522,6 +550,152 @@ function isBudgetUsage(value: unknown): boolean {
   );
 }
 
+function isNullableNonEmptyString(value: unknown): boolean {
+  return value === null || isNonEmptyString(value);
+}
+
+function isSourceTier(value: unknown): boolean {
+  return typeof value === "number" && SOURCE_TIERS.includes(value as (typeof SOURCE_TIERS)[number]);
+}
+
+function isSearchGraphNode(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION &&
+    isNonEmptyString(value.id) &&
+    isOneOf(value.kind, SEARCH_GRAPH_NODE_KINDS) &&
+    isNonEmptyString(value.label) &&
+    isOneOf(value.status, SEARCH_GRAPH_NODE_STATUSES) &&
+    (value.sourceTier === null || isSourceTier(value.sourceTier)) &&
+    isNullableNonEmptyString(value.sourceLaneId) &&
+    isNullableNonEmptyString(value.frontierEntryId) &&
+    isNullableNonEmptyString(value.actionId) &&
+    isNullableNonEmptyString(value.candidateId) &&
+    isNullableNonEmptyString(value.evidenceId) &&
+    isNullableNonEmptyString(value.findingId) &&
+    isNonNegativeInteger(value.ordinal) &&
+    isRecord(value.data) &&
+    isJsonValue(value.data) &&
+    isNonEmptyString(value.createdAt) &&
+    isNonEmptyString(value.updatedAt)
+  );
+}
+
+function isSearchGraphEdge(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.fromNodeId) &&
+    isNonEmptyString(value.toNodeId) &&
+    isOneOf(value.kind, SEARCH_GRAPH_EDGE_KINDS) &&
+    isOneOf(value.status, SEARCH_GRAPH_NODE_STATUSES) &&
+    isNullableNonEmptyString(value.frontierEntryId) &&
+    isNullableNonEmptyString(value.actionId) &&
+    typeof value.edgeCost === "number" && Number.isFinite(value.edgeCost) && value.edgeCost > 0 &&
+    typeof value.pathCost === "number" && Number.isFinite(value.pathCost) && value.pathCost > 0 &&
+    isNonNegativeInteger(value.ordinal) &&
+    isNonEmptyString(value.createdAt)
+  );
+}
+
+function isSearchUtility(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return [
+    "relevance", "novelty", "informationGain", "sourceTrust", "executionCost",
+    "policyRisk", "repetition", "depthPenalty",
+  ].every((key) => isScore(value[key]));
+}
+
+function isFrontierMutation(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isOneOf(value.strategy, SEARCH_GRAPH_MUTATION_STRATEGIES) &&
+    isNonEmptyString(value.parentFrontierEntryId) &&
+    isNonNegativeInteger(value.proposalIndex) &&
+    typeof value.temperature === "number" && Number.isFinite(value.temperature) && value.temperature > 0 &&
+    typeof value.logAcceptanceRatio === "number" && Number.isFinite(value.logAcceptanceRatio) &&
+    isScore(value.acceptanceProbability) &&
+    isScore(value.deterministicU) &&
+    isNonNegativeInteger(value.parentNeighborCount) && value.parentNeighborCount > 0 &&
+    isNonNegativeInteger(value.candidateNeighborCount) && value.candidateNeighborCount > 0
+  );
+}
+
+function isSearchFrontierEntry(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === SEARCH_GRAPH_SCHEMA_VERSION &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.frontierEntryId) &&
+    isNonEmptyString(value.actionId) &&
+    isNonEmptyString(value.nodeId) &&
+    isNonEmptyString(value.parentNodeId) &&
+    isNullableNonEmptyString(value.parentFrontierEntryId) &&
+    isOneOf(value.status, SEARCH_GRAPH_NODE_STATUSES) &&
+    isSourceTier(value.sourceTier) &&
+    isNonEmptyString(value.sourceLaneId) &&
+    isStringArray(value.allowedTools, true) && value.allowedTools.length > 0 &&
+    isNonEmptyString(value.intent) &&
+    isNonEmptyString(value.queryHint) &&
+    isNullableNonEmptyString(value.candidateId) &&
+    isNonNegativeInteger(value.depth) &&
+    isNonNegativeInteger(value.ordinal) &&
+    isNonEmptyString(value.dedupeKey) &&
+    isSearchUtility(value.utility) &&
+    typeof value.edgeCost === "number" && Number.isFinite(value.edgeCost) && value.edgeCost > 0 &&
+    typeof value.pathCost === "number" && Number.isFinite(value.pathCost) && value.pathCost > 0 &&
+    (value.mutation === null || isFrontierMutation(value.mutation)) &&
+    isNonEmptyString(value.createdAt) &&
+    isNonEmptyString(value.updatedAt)
+  );
+}
+
+function isSearchGraphTelemetry(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return [
+    "seeded", "enqueued", "selected", "pruned", "expanded", "exhausted", "toolCalls",
+    "mutationToolCalls", "mutationsProposed", "mutationsAccepted", "mutationsRejected",
+  ].every((key) => isNonNegativeInteger(value[key]));
+}
+
+function graphStatusMatchesInvestigationStatus(status: unknown, graphStatus: unknown): boolean {
+  if (status === "running") return graphStatus === "empty" || graphStatus === "active";
+  if (status === "completed") return graphStatus === "completed";
+  if (status === "blocked") return graphStatus === "blocked";
+  if (status === "canceled") return graphStatus === "canceled";
+  if (status === "failed" || status === "configuration_error") return graphStatus === "failed";
+  if (status === "partial" || status === "ambiguous") return graphStatus === "exhausted";
+  return false;
+}
+
+export function isSearchGraph(value: unknown): value is SearchGraph {
+  if (
+    !isRecord(value)
+    || value.schemaVersion !== SEARCH_GRAPH_SCHEMA_VERSION
+    || !isNonEmptyString(value.runId)
+    || !isOneOf(value.status, SEARCH_GRAPH_RUN_STATUSES)
+    || typeof value.seed !== "string"
+    || !isNullableNonEmptyString(value.seedNodeId)
+    || !Array.isArray(value.nodes) || !value.nodes.every(isSearchGraphNode)
+    || !Array.isArray(value.edges) || !value.edges.every(isSearchGraphEdge)
+    || !Array.isArray(value.frontier) || !value.frontier.every(isSearchFrontierEntry)
+    || !isStringArray(value.selectedFrontierEntryIds)
+    || !(value.currentSourceTier === null || isSourceTier(value.currentSourceTier))
+    || !isNonNegativeInteger(value.nextOrdinal)
+    || !isNonNegativeInteger(value.mutationStep)
+    || !isSearchGraphTelemetry(value.telemetry)
+    || !isNonEmptyString(value.createdAt)
+    || !isNonEmptyString(value.updatedAt)
+    || !isJsonValue(value)
+  ) return false;
+  try {
+    return validateSearchGraph(value as unknown as SearchGraph).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 export function isInvestigationState(value: unknown): value is InvestigationState {
   return (
     isVersioned(value) &&
@@ -538,6 +712,9 @@ export function isInvestigationState(value: unknown): value is InvestigationStat
     value.evidence.every(isEvidenceRecord) &&
     Array.isArray(value.findings) &&
     value.findings.every(isFinding) &&
+    isSearchGraph(value.searchGraph) &&
+    value.searchGraph.runId === value.runId &&
+    graphStatusMatchesInvestigationStatus(value.status, value.searchGraph.status) &&
     isStringArray(value.openQuestions) &&
     isEvidenceTelemetry(value.evidenceTelemetry) &&
     isRecord(value.budget) &&
@@ -645,6 +822,9 @@ export function isInvestigationReport(value: unknown): value is InvestigationRep
     value.evidence.every(isEvidenceRecord) &&
     Array.isArray(value.findings) &&
     value.findings.every(isFinding) &&
+    isSearchGraph(value.searchGraph) &&
+    value.searchGraph.runId === value.runId &&
+    graphStatusMatchesInvestigationStatus(value.status, value.searchGraph.status) &&
     isCoverageSummary(value.coverage) &&
     Array.isArray(value.sources) &&
     value.sources.every(isSourceSummary) &&

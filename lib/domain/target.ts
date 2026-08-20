@@ -9,6 +9,14 @@ import {
 import { parseInvestigationInput } from "./validation";
 
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b/gi;
+const HTTPS_URL_PATTERN = /https:\/\/[^\s<>"']+/gi;
+const DOI_PATTERN = /\b10\.\d{4,9}\/[A-Z0-9._;()/:-]+\b/gi;
+const ORCID_PATTERN = /\b(?:https:\/\/orcid\.org\/)?(\d{4}-\d{4}-\d{4}-\d{3}[\dX])\b/gi;
+const REPOSITORY_PATTERN = /\b(?:repo(?:sitory)?|github)\s*[:=]?\s*([A-Z0-9_.-]+\/[A-Z0-9_.-]+)\b/gi;
+const PACKAGE_PATTERN = /\b(?:npm|pypi|package)\s*[:=]\s*(@?[A-Z0-9_.-]+(?:\/[A-Z0-9_.-]+)?)\b/gi;
+const PLATFORM_HANDLE_PATTERN = /\b(github|gitlab|keybase|linkedin|twitter|x)\s*[:=]\s*@?([A-Z0-9_.-]{2,64})\b/gi;
+const DOMAIN_PATTERN = /\b(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,63}\b/gi;
+const ORGANIZATION_MARKER = /\b(?:ai|labs?|inc\.?|llc|ltd\.?|corp(?:oration)?|company|foundation|university|institute|studio|systems?|technologies|ventures?)\b/i;
 
 const ROLE_PATTERNS: Array<{ canonical: string; pattern: RegExp }> = [
   { canonical: "Chief Technology Officer", pattern: /\b(?:cto|chief technology officer)\b/i },
@@ -64,6 +72,25 @@ function addRole(roles: string[], value: string): void {
   }
 }
 
+function addIdentifier(
+  identifiers: TargetIdentifier[],
+  seen: Set<string>,
+  value: string,
+  kind: TargetIdentifier["kind"],
+  normalizedValue = normalizeComparable(value),
+): void {
+  const key = `${kind}:${normalizedValue}`;
+  if (!normalizedValue || seen.has(key)) return;
+  seen.add(key);
+  identifiers.push({
+    kind,
+    value,
+    normalizedValue,
+    assurance: "self_asserted",
+    provenance: "user_input",
+  });
+}
+
 function organizationFromRoleQuery(value: string): string | undefined {
   const match = value.match(
     /\b(?:cto|ceo|cpo|chief\s+[a-z ]+\s+officer|founder|creator|author|inventor|engineer|designer|researcher|investor|partner)\s+(?:at|of|for)\s+(.+?)(?:[?.!]|$)/i,
@@ -84,18 +111,88 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
 
   for (const email of emails) {
     const normalizedValue = email.toLocaleLowerCase("en-US");
-    if (seenIdentifiers.has(normalizedValue)) continue;
-    seenIdentifiers.add(normalizedValue);
-    identifiers.push({
-      kind: "email",
-      value: email,
-      normalizedValue,
-      assurance: "self_asserted",
-      provenance: "user_input",
-    });
+    addIdentifier(identifiers, seenIdentifiers, email, "email", normalizedValue);
   }
 
-  const withoutEmails = normalizeWhitespace(query.replace(EMAIL_PATTERN, " "));
+  const urls = [...query.matchAll(HTTPS_URL_PATTERN)].map((match) =>
+    match[0].replace(/[),.;!?]+$/, ""));
+  for (const value of urls) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.username || url.password) continue;
+      url.hash = "";
+      const canonical = url.toString();
+      addIdentifier(identifiers, seenIdentifiers, canonical, "url", canonical);
+      addIdentifier(
+        identifiers,
+        seenIdentifiers,
+        url.hostname,
+        "domain",
+        url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, ""),
+      );
+      if (url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "") === "github.com") {
+        const [owner, repository] = url.pathname.split("/").filter(Boolean);
+        if (owner && repository) {
+          addIdentifier(
+            identifiers,
+            seenIdentifiers,
+            `${owner}/${repository.replace(/\.git$/i, "")}`,
+            "repository",
+            `${owner}/${repository.replace(/\.git$/i, "")}`.toLocaleLowerCase("en-US"),
+          );
+        }
+      }
+    } catch {
+      // Invalid URL-like text remains ordinary query text and is not promoted.
+    }
+  }
+  for (const match of query.matchAll(DOI_PATTERN)) {
+    addIdentifier(identifiers, seenIdentifiers, match[0], "doi", match[0].toLocaleLowerCase("en-US"));
+  }
+  for (const match of query.matchAll(ORCID_PATTERN)) {
+    const value = match[1];
+    if (value) addIdentifier(identifiers, seenIdentifiers, value, "orcid", value.toUpperCase());
+  }
+  for (const match of query.matchAll(REPOSITORY_PATTERN)) {
+    const value = match[1];
+    if (value) addIdentifier(identifiers, seenIdentifiers, value, "repository", value.toLocaleLowerCase("en-US"));
+  }
+  for (const match of query.matchAll(PACKAGE_PATTERN)) {
+    const value = match[1];
+    if (value) addIdentifier(identifiers, seenIdentifiers, value, "package", value.toLocaleLowerCase("en-US"));
+  }
+  for (const match of query.matchAll(PLATFORM_HANDLE_PATTERN)) {
+    const platform = match[1];
+    const handle = match[2];
+    if (platform && handle) {
+      const value = `${platform.toLocaleLowerCase("en-US")}:${handle}`;
+      addIdentifier(identifiers, seenIdentifiers, value, "platform_handle", value.toLocaleLowerCase("en-US"));
+    }
+  }
+
+  const withoutEmails = normalizeWhitespace(query
+    .replace(EMAIL_PATTERN, " ")
+    .replace(HTTPS_URL_PATTERN, " ")
+    .replace(DOI_PATTERN, " ")
+    .replace(ORCID_PATTERN, " ")
+    .replace(REPOSITORY_PATTERN, " ")
+    .replace(PACKAGE_PATTERN, " ")
+    .replace(PLATFORM_HANDLE_PATTERN, " "));
+  const exactDomainText = normalizeWhitespace(withoutEmails);
+  if (exactDomainText && DOMAIN_PATTERN.test(exactDomainText)) {
+    DOMAIN_PATTERN.lastIndex = 0;
+    const matches = [...exactDomainText.matchAll(DOMAIN_PATTERN)].map((match) => match[0]);
+    if (matches.length === 1 && normalizeComparable(matches[0]) === normalizeComparable(exactDomainText)) {
+      addIdentifier(
+        identifiers,
+        seenIdentifiers,
+        matches[0],
+        "domain",
+        matches[0].toLocaleLowerCase("en-US").replace(/^www\./, ""),
+      );
+    }
+  }
+  DOMAIN_PATTERN.lastIndex = 0;
   const commaParts = withoutEmails
     .split(",")
     .map(normalizeWhitespace)
@@ -108,7 +205,8 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
 
   let name: string | undefined;
   const firstPart = commaParts[0];
-  if (firstPart && looksLikePersonName(firstPart)) {
+  const firstPartLooksOrganizational = Boolean(firstPart && ORGANIZATION_MARKER.test(firstPart));
+  if (firstPart && !firstPartLooksOrganizational && looksLikePersonName(firstPart)) {
     name = titleCaseName(firstPart);
   }
 
@@ -147,10 +245,25 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
   let kind: ParsedTarget["kind"] = "unknown";
   if (identifiers.some((identifier) => identifier.kind === "email")) {
     kind = "email";
+  } else if (identifiers.some((identifier) => identifier.kind === "repository")) {
+    kind = "repository";
+  } else if (identifiers.some((identifier) => identifier.kind === "doi" || identifier.kind === "orcid")) {
+    kind = "publication";
+  } else if (identifiers.some((identifier) => identifier.kind === "package")) {
+    kind = "package";
+  } else if (identifiers.some((identifier) => identifier.kind === "platform_handle")) {
+    kind = "platform_handle";
+  } else if (identifiers.some((identifier) => identifier.kind === "url")) {
+    kind = "url";
+  } else if (identifiers.some((identifier) => identifier.kind === "domain")) {
+    kind = "domain";
   } else if (name) {
     kind = "named_person";
   } else if (roleHints.length > 0 && organizationHints.length > 0) {
     kind = "role_query";
+  } else if (firstPartLooksOrganizational && firstPart) {
+    kind = "organization";
+    addOrganization(organizationHints, firstPart, "unspecified");
   }
 
   return {

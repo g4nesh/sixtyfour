@@ -107,6 +107,7 @@ type DirectDraft = Omit<
 export function verifiedDirectEvidence(
   requestId: VerifiedRequestId,
   excerptIndex: number,
+  actionId: string,
   draft: DirectDraft,
 ): EvidenceDraft {
   const capture = VERIFIED_PUBLIC_CAPTURES[requestId];
@@ -118,7 +119,7 @@ export function verifiedDirectEvidence(
     claim: excerpt,
     excerpt,
     contentHash: `sha256:${capture.bodySha256}`,
-    toolCallId: requestId,
+    toolCallId: actionId,
     verificationMethod: "direct_fetch",
   };
 }
@@ -130,6 +131,7 @@ type ApiDraft = Omit<
 
 export function verifiedApiEvidence(
   requestId: VerifiedRequestId,
+  actionId: string,
   draft: ApiDraft,
 ): EvidenceDraft {
   const capture = VERIFIED_PUBLIC_CAPTURES[requestId];
@@ -141,7 +143,7 @@ export function verifiedApiEvidence(
     claim: capture.apiClaim,
     canonicalSubset: capture.canonicalSubset,
     contentHash: `sha256:${capture.bodySha256}`,
-    toolCallId: requestId,
+    toolCallId: actionId,
     verificationMethod: "api_response",
   };
 }
@@ -154,14 +156,20 @@ export function applyVerifiedCaptureMetadata(cassette: JsonObject): void {
       throw new Error("cassette request is invalid");
     }
     const requestId = request.id;
-    if (typeof requestId !== "string" || !(requestId in VERIFIED_PUBLIC_CAPTURES)) {
+    const captureId = request.captureId ?? requestId;
+    if (
+      typeof requestId !== "string"
+      || typeof captureId !== "string"
+      || !(captureId in VERIFIED_PUBLIC_CAPTURES)
+    ) {
       throw new Error(`cassette request ${String(requestId)} has no verified capture`);
     }
     const response = request.response;
     if (response === null || Array.isArray(response) || typeof response !== "object") {
       throw new Error(`cassette request ${requestId} has no response`);
     }
-    const capture = VERIFIED_PUBLIC_CAPTURES[requestId as VerifiedRequestId];
+    const capture = VERIFIED_PUBLIC_CAPTURES[captureId as VerifiedRequestId];
+    request.captureId = captureId;
     if ("requestFingerprint" in capture && capture.requestFingerprint) {
       request.fingerprint = capture.requestFingerprint;
     }
@@ -178,12 +186,21 @@ function sameJson(left: JsonValue, right: JsonValue): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-export function assertVerifiedEvidenceContract(evidence: readonly EvidenceRecord[]): void {
+export function assertVerifiedEvidenceContract(
+  evidence: readonly EvidenceRecord[],
+  actionCaptureIds: Readonly<Record<string, VerifiedRequestId>> = {},
+): void {
   for (const record of evidence) {
-    if (!record.toolCallId || !(record.toolCallId in VERIFIED_PUBLIC_CAPTURES)) {
+    const captureId = record.toolCallId
+      ? actionCaptureIds[record.toolCallId]
+        ?? (record.toolCallId in VERIFIED_PUBLIC_CAPTURES
+          ? record.toolCallId as VerifiedRequestId
+          : undefined)
+      : undefined;
+    if (!captureId) {
       throw new Error(`evidence ${record.id} has no verified capture request`);
     }
-    const capture = VERIFIED_PUBLIC_CAPTURES[record.toolCallId as VerifiedRequestId];
+    const capture = VERIFIED_PUBLIC_CAPTURES[captureId];
     if (record.contentHash !== `sha256:${capture.bodySha256}`) {
       throw new Error(`evidence ${record.id} does not use the verified response hash`);
     }

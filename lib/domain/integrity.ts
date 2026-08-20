@@ -9,7 +9,13 @@ import {
   type InvestigationState,
 } from "./types";
 import { assessConfidence } from "./confidence";
+import {
+  candidateStatus,
+  identitySignalGroundedByEvidence,
+  scoreCandidate,
+} from "./candidates";
 import { containsRestrictedPublicContent } from "./content-policy";
+import { sourceLaneForFrontierEntry, sourceTierForUrl } from "../search/source-hierarchy";
 
 export interface IntegrityIssue {
   code:
@@ -18,6 +24,17 @@ export interface IntegrityIssue {
     | "duplicate_finding_id"
     | "unknown_candidate"
     | "unknown_evidence"
+    | "unknown_finding"
+    | "action_evidence_join_mismatch"
+    | "graph_evidence_candidate_mismatch"
+    | "action_evidence_candidate_mismatch"
+    | "missing_graph_entity_node"
+    | "duplicate_graph_entity_node"
+    | "graph_entity_projection_mismatch"
+    | "evidence_source_lane_mismatch"
+    | "candidate_signal_provenance_mismatch"
+    | "candidate_score_mismatch"
+    | "missing_candidate_separation_edge"
     | "cross_candidate_evidence"
     | "discovery_only_evidence"
     | "supporting_evidence_not_supporting"
@@ -116,11 +133,13 @@ export function isFindingGrounded(
 }
 
 export function validateReferentialIntegrity(
-  state: Pick<InvestigationState, "candidates" | "evidence" | "findings">,
+  state: Pick<InvestigationState, "candidates" | "evidence" | "findings"> &
+    Partial<Pick<InvestigationState, "searchGraph" | "target">>,
 ): IntegrityIssue[] {
   const issues: IntegrityIssue[] = [];
   const candidateIds = new Set(state.candidates.map((candidate) => candidate.id));
   const evidenceById = new Map(state.evidence.map((evidence) => [evidence.id, evidence]));
+  const findingIds = new Set(state.findings.map((finding) => finding.id));
 
   for (const id of duplicates(state.candidates.map((candidate) => candidate.id))) {
     issues.push({
@@ -165,6 +184,70 @@ export function validateReferentialIntegrity(
         });
       }
     });
+    candidate.signals.forEach((signal, signalIndex) => {
+      const path = `candidates[${candidateIndex}].signals[${signalIndex}]`;
+      if (signal.kind === "cross_source_match") {
+        const source = signal.sourceEvidenceId
+          ? evidenceById.get(signal.sourceEvidenceId)
+          : undefined;
+        const families = signal.sourceFamily?.startsWith("cross-source:")
+          ? signal.sourceFamily.slice("cross-source:".length).split("+").filter(Boolean)
+          : [];
+        const candidateFamilies = new Set(state.evidence
+          .filter((evidence) =>
+            evidence.candidateId === candidate.id
+            && evidence.disposition === "supports"
+            && evidence.verificationMethod === "direct_fetch")
+          .map((evidence) => evidence.sourceFamily));
+        if (
+          signal.assurance !== "corroborated"
+          || signal.strength !== "strong"
+          || !source
+          || source.candidateId !== candidate.id
+          || families.length < 2
+          || families.some((family) => !candidateFamilies.has(family))
+        ) {
+          issues.push({
+            code: "candidate_signal_provenance_mismatch",
+            path,
+            message: "cross-source identity signal is not backed by two canonical candidate sources",
+          });
+        }
+        return;
+      }
+      const source = signal.sourceEvidenceId
+        ? evidenceById.get(signal.sourceEvidenceId)
+        : undefined;
+      if (
+        signal.sourceEvidenceId
+          ? !source
+            || source.candidateId !== candidate.id
+            || !identitySignalGroundedByEvidence(signal, source)
+          : Boolean(signal.sourceFamily)
+            || signal.kind === "conflict"
+            || signal.assurance === "verified"
+            || signal.assurance === "corroborated"
+      ) {
+        issues.push({
+          code: "candidate_signal_provenance_mismatch",
+          path,
+          message: "identity signal is not grounded by same-candidate evidence and canonical source family",
+        });
+      }
+    });
+    if (state.target) {
+      const expectedScore = scoreCandidate(candidate, state.target);
+      if (
+        JSON.stringify(candidate.score) !== JSON.stringify(expectedScore)
+        || candidate.status !== candidateStatus(candidate.signals, expectedScore)
+      ) {
+        issues.push({
+          code: "candidate_score_mismatch",
+          path: `candidates[${candidateIndex}].score`,
+          message: "candidate score/status does not match deterministic identity signals",
+        });
+      }
+    }
   });
 
   state.findings.forEach((finding, findingIndex) => {
@@ -312,6 +395,248 @@ export function validateReferentialIntegrity(
       path: "findings",
       message: `evidence ${evidenceId} is reused across categories ${[...categories].sort().join(", ")}`,
     });
+  }
+
+  if (state.searchGraph) {
+    const graph = state.searchGraph;
+    graph.nodes.forEach((node, nodeIndex) => {
+      if (node.candidateId !== null && !candidateIds.has(node.candidateId)) {
+        issues.push({
+          code: "unknown_candidate",
+          path: `searchGraph.nodes[${nodeIndex}].candidateId`,
+          message: `graph node ${node.id} references unknown candidate ${node.candidateId}`,
+        });
+      }
+      if (node.evidenceId !== null && !evidenceById.has(node.evidenceId)) {
+        issues.push({
+          code: "unknown_evidence",
+          path: `searchGraph.nodes[${nodeIndex}].evidenceId`,
+          message: `graph node ${node.id} references unknown evidence ${node.evidenceId}`,
+        });
+      }
+      if (node.findingId !== null && !findingIds.has(node.findingId)) {
+        issues.push({
+          code: "unknown_finding",
+          path: `searchGraph.nodes[${nodeIndex}].findingId`,
+          message: `graph node ${node.id} references unknown finding ${node.findingId}`,
+        });
+      }
+      if (node.evidenceId !== null && node.actionId !== null) {
+        const evidence = evidenceById.get(node.evidenceId);
+        if (evidence && evidence.toolCallId !== node.actionId) {
+          issues.push({
+            code: "action_evidence_join_mismatch",
+            path: `searchGraph.nodes[${nodeIndex}].actionId`,
+            message: `graph action ${node.actionId} does not match evidence tool call ${evidence.toolCallId}`,
+          });
+        }
+        if (evidence && node.candidateId !== evidence.candidateId) {
+          issues.push({
+            code: "graph_evidence_candidate_mismatch",
+            path: `searchGraph.nodes[${nodeIndex}].candidateId`,
+            message: `graph evidence candidate ${node.candidateId} does not match ${evidence.candidateId}`,
+          });
+        }
+        const actionNode = graph.nodes.find((candidate) =>
+          candidate.kind === "action" && candidate.actionId === node.actionId);
+        const frontierEntry = graph.frontier.find((entry) => entry.actionId === node.actionId);
+        const boundCandidateId = actionNode?.candidateId ?? frontierEntry?.candidateId ?? null;
+        if (evidence && boundCandidateId !== null && evidence.candidateId !== boundCandidateId) {
+          issues.push({
+            code: "action_evidence_candidate_mismatch",
+            path: `searchGraph.nodes[${nodeIndex}].candidateId`,
+            message: `action ${node.actionId} is bound to ${boundCandidateId}, not ${evidence.candidateId}`,
+          });
+        }
+      }
+    });
+    if (graph.seedNodeId !== null) {
+      for (const candidate of state.candidates) {
+        const nodes = graph.nodes.filter((node) =>
+          node.kind === "candidate" && node.candidateId === candidate.id);
+        if (nodes.length !== 1) {
+          issues.push({
+            code: nodes.length === 0 ? "missing_graph_entity_node" : "duplicate_graph_entity_node",
+            path: "searchGraph.nodes",
+            message: `candidate ${candidate.id} requires exactly one entity node`,
+          });
+          continue;
+        }
+        const node = nodes[0];
+        const allowedData = new Set(["entityKey"]);
+        if (
+          node.label !== candidate.displayName
+          || node.data.entityKey !== `candidate:${candidate.id}`
+          || Object.keys(node.data).some((key) => !allowedData.has(key))
+        ) {
+          issues.push({
+            code: "graph_entity_projection_mismatch",
+            path: `searchGraph.nodes[${graph.nodes.indexOf(node)}]`,
+            message: `candidate node ${node.id} is not a canonical projection`,
+          });
+        }
+      }
+      for (const evidence of state.evidence) {
+        const nodes = graph.nodes.filter((node) =>
+          node.kind === "evidence" && node.evidenceId === evidence.id);
+        if (nodes.length !== 1) {
+          issues.push({
+            code: nodes.length === 0 ? "missing_graph_entity_node" : "duplicate_graph_entity_node",
+            path: "searchGraph.nodes",
+            message: `evidence ${evidence.id} requires exactly one entity node`,
+          });
+          continue;
+        }
+        const node = nodes[0];
+        const allowedData = new Set([
+          "contentHash", "disposition", "entityKey", "sourceFamily", "sourceType", "sourceUrl",
+          "verificationMethod",
+        ]);
+        if (
+          node.label !== evidence.claim
+          || node.candidateId !== evidence.candidateId
+          || node.actionId !== evidence.toolCallId
+          || node.data.sourceUrl !== evidence.sourceUrl
+          || node.data.sourceFamily !== evidence.sourceFamily
+          || node.data.sourceType !== evidence.sourceType
+          || node.data.disposition !== evidence.disposition
+          || node.data.contentHash !== evidence.contentHash
+          || node.data.entityKey !== `evidence:${evidence.id}`
+          || (node.data.verificationMethod !== undefined
+            && node.data.verificationMethod !== evidence.verificationMethod)
+          || Object.keys(node.data).some((key) => !allowedData.has(key))
+        ) {
+          issues.push({
+            code: "graph_entity_projection_mismatch",
+            path: `searchGraph.nodes[${graph.nodes.indexOf(node)}]`,
+            message: `evidence node ${node.id} is not a canonical projection`,
+          });
+        }
+        const sourceNodes = graph.nodes.filter((candidate) =>
+          candidate.kind === "source" && candidate.evidenceId === evidence.id);
+        if (sourceNodes.length !== 1) {
+          issues.push({
+            code: sourceNodes.length === 0 ? "missing_graph_entity_node" : "duplicate_graph_entity_node",
+            path: "searchGraph.nodes",
+            message: `evidence ${evidence.id} requires exactly one canonical source node`,
+          });
+        } else {
+          const sourceNode = sourceNodes[0];
+          const allowedSourceData = new Set(["entityKey", "sourceFamily", "sourceType", "sourceUrl"]);
+          if (
+            sourceNode.label !== (evidence.title ?? evidence.sourceFamily)
+            || sourceNode.candidateId !== evidence.candidateId
+            || sourceNode.actionId !== evidence.toolCallId
+            || sourceNode.frontierEntryId !== node.frontierEntryId
+            || sourceNode.sourceLaneId !== node.sourceLaneId
+            || sourceNode.sourceTier !== node.sourceTier
+            || sourceNode.data.sourceUrl !== evidence.sourceUrl
+            || sourceNode.data.sourceFamily !== evidence.sourceFamily
+            || sourceNode.data.sourceType !== evidence.sourceType
+            || sourceNode.data.entityKey !== `source:${evidence.id}`
+            || Object.keys(sourceNode.data).some((key) => !allowedSourceData.has(key))
+          ) {
+            issues.push({
+              code: "graph_entity_projection_mismatch",
+              path: `searchGraph.nodes[${graph.nodes.indexOf(sourceNode)}]`,
+              message: `source node ${sourceNode.id} is not a canonical evidence projection`,
+            });
+          }
+        }
+        const entry = node.frontierEntryId
+          ? graph.frontier.find((item) => item.id === node.frontierEntryId)
+          : undefined;
+        const lane = entry ? sourceLaneForFrontierEntry(entry) : undefined;
+        const discoveryOnly = evidence.disposition === "discovery_only";
+        const derivedTier = entry
+          ? sourceTierForUrl(evidence.sourceUrl, evidence.sourceType, entry.sourceTier === 0)
+          : null;
+        const tierMismatch = entry?.sourceTier === 1
+          ? false
+          : derivedTier !== null && entry !== undefined && derivedTier !== entry.sourceTier;
+        if (
+          !entry
+          || !lane
+          || (!discoveryOnly && lane.admission === "discovery_only")
+          || (!discoveryOnly && !lane.sourceTypes.includes(evidence.sourceType))
+          || (!discoveryOnly && tierMismatch)
+        ) {
+          issues.push({
+            code: "evidence_source_lane_mismatch",
+            path: `searchGraph.nodes[${graph.nodes.indexOf(node)}].sourceLaneId`,
+            message: `evidence ${evidence.id} does not match its admitted source lane and tier`,
+          });
+        }
+      }
+      for (const finding of state.findings) {
+        const nodes = graph.nodes.filter((node) =>
+          node.kind === "finding" && node.findingId === finding.id);
+        if (nodes.length !== 1) {
+          issues.push({
+            code: nodes.length === 0 ? "missing_graph_entity_node" : "duplicate_graph_entity_node",
+            path: "searchGraph.nodes",
+            message: `finding ${finding.id} requires exactly one entity node`,
+          });
+          continue;
+        }
+        const node = nodes[0];
+        const allowedData = new Set(["category", "confidence", "entityKey"]);
+        if (
+          node.label !== finding.title
+          || node.candidateId !== finding.candidateId
+          || node.data.category !== finding.category
+          || node.data.confidence !== finding.confidence.score
+          || node.data.entityKey !== `finding:${finding.id}`
+          || Object.keys(node.data).some((key) => !allowedData.has(key))
+        ) {
+          issues.push({
+            code: "graph_entity_projection_mismatch",
+            path: `searchGraph.nodes[${graph.nodes.indexOf(node)}]`,
+            message: `finding node ${node.id} is not a canonical projection`,
+          });
+        }
+      }
+    }
+    graph.frontier.forEach((entry, entryIndex) => {
+      if (entry.candidateId !== null && !candidateIds.has(entry.candidateId)) {
+        issues.push({
+          code: "unknown_candidate",
+          path: `searchGraph.frontier[${entryIndex}].candidateId`,
+          message: `frontier ${entry.id} references unknown candidate ${entry.candidateId}`,
+        });
+      }
+    });
+    const candidateNodeById = new Map(
+      graph.nodes
+        .filter((node) => node.kind === "candidate" && node.candidateId !== null)
+        .map((node) => [node.candidateId as string, node.id]),
+    );
+    const candidatesByName = new Map<string, string[]>();
+    for (const candidate of state.candidates) {
+      const group = candidatesByName.get(candidate.normalizedName) ?? [];
+      group.push(candidate.id);
+      candidatesByName.set(candidate.normalizedName, group);
+    }
+    for (const ids of candidatesByName.values()) {
+      if (ids.length < 2 || ids.some((id) => !candidateNodeById.has(id))) continue;
+      for (let leftIndex = 0; leftIndex < ids.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < ids.length; rightIndex += 1) {
+          const leftNodeId = candidateNodeById.get(ids[leftIndex]) as string;
+          const rightNodeId = candidateNodeById.get(ids[rightIndex]) as string;
+          const separated = graph.edges.some((edge) =>
+            edge.kind === "separates"
+            && ((edge.fromNodeId === leftNodeId && edge.toNodeId === rightNodeId)
+              || (edge.fromNodeId === rightNodeId && edge.toNodeId === leftNodeId)));
+          if (!separated) {
+            issues.push({
+              code: "missing_candidate_separation_edge",
+              path: "searchGraph.edges",
+              message: `same-name candidates ${ids[leftIndex]} and ${ids[rightIndex]} are not separated`,
+            });
+          }
+        }
+      }
+    }
   }
 
   return issues;

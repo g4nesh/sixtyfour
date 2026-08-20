@@ -14,6 +14,7 @@ const vite = await createServer({
 
 const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 const agent = await vite.ssrLoadModule("/lib/agent/index.ts");
+const search = await vite.ssrLoadModule("/lib/search/index.ts");
 const {
   createLiveDependencies,
   establishedSourceForCandidate,
@@ -102,7 +103,7 @@ function createEngine(query, seed = "release") {
   const clock = domain.createSequenceClock("2026-08-18T20:00:00.000Z", 2);
   const ids = domain.createDeterministicIdFactory(seed);
   return new agent.InvestigationEngine(
-    { schemaVersion: 1, query, requestedDepth: "standard" },
+    { schemaVersion: domain.SCHEMA_VERSION, query, requestedDepth: "standard" },
     { clock, ids },
   );
 }
@@ -111,13 +112,56 @@ function addCandidate(engine, displayName, signals = []) {
   return engine.addCandidate({ displayName, signals }).candidate;
 }
 
+// Admit an official company page and bind a grounded, verified organization
+// signal — the strong binding the candidate gate requires. High-assurance
+// signals can only be added after their grounding evidence.
+function bindStrongOrganization(engine, candidateId, organization, family, url) {
+  const evidence = engine.admitEvidence({
+    candidateId,
+    claim: `A public company page names the organization ${organization}.`,
+    sourceUrl: url,
+    sourceType: "company_page",
+    sourceFamily: family,
+    excerpt: `This official company page presents ${organization} and its leadership team.`,
+    reliability: 1,
+    spoofable: false,
+  }).evidence;
+  engine.addCandidateSignals(candidateId, [{
+    kind: "organization",
+    value: organization,
+    normalizedValue: domain.normalizeComparable(organization),
+    strength: "strong",
+    assurance: "verified",
+    sourceFamily: family,
+    sourceEvidenceId: evidence.id,
+  }]);
+  return evidence;
+}
+
 function contextFor(engine, accounting, signal) {
   return {
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     state: engine.snapshot(),
     modelAccounting: accounting,
     ...(signal ? { signal } : {}),
   };
+}
+
+function selectedPlannerFrontier(engine, availableTools, seed) {
+  const state = engine.snapshot();
+  const ids = domain.createDeterministicIdFactory(seed);
+  const seeded = search.seedFrontier(
+    state.searchGraph,
+    state.target,
+    availableTools,
+    ids,
+    state.updatedAt,
+  );
+  return search.selectFrontierBatch(
+    seeded.graph,
+    Math.min(4, availableTools.length),
+    state.updatedAt,
+  ).value;
 }
 
 test("provider annotations authorize only their opaque candidate-scoped lead, while content URLs and query variants do not", async () => {
@@ -197,7 +241,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
 
   const searchAccounting = modelAccounting();
   const searchResult = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-search",
     tool: "search_web",
     purpose: "Find a direct public professional profile.",
@@ -220,17 +264,22 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.equal(sourceAllowedForCandidate(stateWithLead, PROVIDER_URL, primary.id), null);
   assert.equal(establishedSourceForCandidate(stateWithLead, PROVIDER_URL, primary.id), null);
   await dependencies.planner({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     state: stateWithLead,
     availableTools: ["fetch_public_source"],
     legalNextPhases: ["classify"],
+    selectedFrontierEntries: selectedPlannerFrontier(
+      engine,
+      ["fetch_public_source"],
+      "lead-planner-frontier",
+    ),
     modelAccounting: modelAccounting().value,
   });
   assert.match(JSON.stringify(plannerBody), new RegExp(String(leadId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(JSON.stringify(plannerBody), new RegExp(PROVIDER_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
   const variantResult = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-variant",
     tool: "fetch_public_source",
     purpose: "Try a rewritten query variant without the opaque lead.",
@@ -242,7 +291,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.equal(variantResult.diagnostics[0].code, "source_url_not_linked");
 
   const crossCandidate = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-cross-candidate",
     tool: "fetch_public_source",
     purpose: "Try to reuse another candidate's discovery lead.",
@@ -256,7 +305,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
 
   const fetchAccounting = modelAccounting();
   const fetched = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-fetch",
     tool: "fetch_public_source",
     purpose: "Fetch the exact provider-authorized lead.",
@@ -280,7 +329,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.deepEqual(fetchAccounting.counts(), { reservations: 1, settlements: 1 });
 
   const contentOnly = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-content-only",
     tool: "search_web",
     purpose: "Search again.",
@@ -320,28 +369,16 @@ test("extracted pages must name the candidate and satisfy every known organizati
   );
 
   const sameNameEngine = createEngine("Chris Anderson public professional background", "candidate-gate-same-name");
-  const sameName = addCandidate(sameNameEngine, "Chris Anderson", [{
-    kind: "organization",
-    value: "3D Robotics",
-    normalizedValue: "3d robotics",
-    strength: "strong",
-    assurance: "verified",
-    sourceFamily: "3dr.com",
-  }]);
+  const sameName = addCandidate(sameNameEngine, "Chris Anderson");
+  bindStrongOrganization(sameNameEngine, sameName.id, "3D Robotics", "3dr.com", "https://3dr.com/team/chris-anderson");
   assert.deepEqual(
     gateExtractedCandidate(sameNameEngine.snapshot(), sameName.id, "Chris Anderson", "TED"),
     { allowed: false, reason: "organization_mismatch" },
     "a same-name page for another organization must remain a separate identity",
   );
 
-  const conflictingCandidate = addCandidate(targetEngine, "Chris Anderson", [{
-    kind: "organization",
-    value: "3D Robotics",
-    normalizedValue: "3d robotics",
-    strength: "strong",
-    assurance: "verified",
-    sourceFamily: "3dr.com",
-  }]);
+  const conflictingCandidate = addCandidate(targetEngine, "Chris Anderson");
+  bindStrongOrganization(targetEngine, conflictingCandidate.id, "3D Robotics", "3dr.com", "https://3dr.com/leadership/chris-anderson");
   assert.deepEqual(
     gateExtractedCandidate(targetEngine.snapshot(), conflictingCandidate.id, "Chris Anderson", "TED"),
     { allowed: false, reason: "organization_mismatch" },
@@ -467,10 +504,15 @@ test("structured planner calls disable provider parallelism and repair multiple 
   });
   const accounting = modelAccounting();
   const decision = await dependencies.planner({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     state: engine.snapshot(),
     availableTools: ["search_web"],
     legalNextPhases: ["classify"],
+    selectedFrontierEntries: selectedPlannerFrontier(
+      engine,
+      ["search_web"],
+      "single-submit-frontier",
+    ),
     modelAccounting: accounting.value,
   });
 
@@ -541,7 +583,7 @@ test("action policy scans nested string values and the runner ignores model-supp
   const executed = [];
   const updates = [];
   for await (const update of agent.runResearch(
-    { schemaVersion: 1, query: "Grace Hopper, US Navy", requestedDepth: "quick" },
+    { schemaVersion: domain.SCHEMA_VERSION, query: "Grace Hopper, US Navy", requestedDepth: "quick" },
     {
       clock: domain.createSequenceClock("2026-08-18T21:00:00.000Z", 2),
       ids: domain.createDeterministicIdFactory("budget-class"),
@@ -581,7 +623,32 @@ test("action policy scans nested string values and the runner ignores model-supp
 
 test("resolved identity with two sources and two findings still finishes partial when category breadth is missing", () => {
   const engine = createEngine("Ada Lovelace, Analytical Engine", "category-gap");
-  const candidate = addCandidate(engine, "Ada Lovelace", [
+  // A candidate is created without high-assurance signals; those are admitted
+  // only after their grounding evidence, then two official records resolve the
+  // identity through the unique-official-anchor path.
+  const candidate = addCandidate(engine, "Ada Lovelace");
+
+  const firstEvidence = engine.admitEvidence({
+    candidateId: candidate.id,
+    claim: "A public archive describes Ada's Analytical Engine work.",
+    sourceUrl: "https://archive.example/ada",
+    sourceType: "company_page",
+    excerpt: "Ada Lovelace authored the Analytical Engine notes in this public archive.",
+    reliability: 1,
+    spoofable: false,
+  }).evidence;
+  const secondEvidence = engine.admitEvidence({
+    candidateId: candidate.id,
+    claim: "A library catalog describes Ada's Analytical Engine work.",
+    sourceUrl: "https://library.example/ada",
+    sourceType: "company_page",
+    excerpt: "The catalog records Ada Lovelace's published notes about her work.",
+    reliability: 1,
+    spoofable: false,
+  }).evidence;
+  assert.ok(firstEvidence && secondEvidence);
+
+  engine.addCandidateSignals(candidate.id, [
     {
       kind: "organization",
       value: "Analytical Engine",
@@ -589,41 +656,31 @@ test("resolved identity with two sources and two findings still finishes partial
       strength: "strong",
       assurance: "verified",
       sourceFamily: "archive.example",
+      sourceEvidenceId: firstEvidence.id,
     },
     {
       kind: "profile_url",
-      value: "https://profile.example/ada",
-      normalizedValue: "https profile example ada",
+      value: "https://archive.example/ada",
+      normalizedValue: "https archive.example ada",
       strength: "strong",
       assurance: "verified",
-      sourceFamily: "profile.example",
+      sourceFamily: "archive.example",
+      sourceEvidenceId: firstEvidence.id,
     },
     {
       kind: "cross_profile_link",
-      value: "profile.example -> library.example",
-      normalizedValue: "profile example library example",
+      value: "Ada Lovelace's published notes",
+      normalizedValue: "ada lovelace s published notes",
       strength: "strong",
       assurance: "corroborated",
       sourceFamily: "library.example",
+      sourceEvidenceId: secondEvidence.id,
     },
   ]);
-  assert.equal(domain.resolveIdentity(engine.snapshot().candidates).status, "resolved");
-
-  const firstEvidence = engine.admitEvidence({
-    candidateId: candidate.id,
-    claim: "A public archive describes Ada's Analytical Engine work.",
-    sourceUrl: "https://archive.example/ada",
-    sourceType: "company_page",
-    excerpt: "Ada authored public notes about the Analytical Engine.",
-  }).evidence;
-  const secondEvidence = engine.admitEvidence({
-    candidateId: candidate.id,
-    claim: "A library catalog describes Ada's Analytical Engine work.",
-    sourceUrl: "https://library.example/ada",
-    sourceType: "company_page",
-    excerpt: "The catalog independently records Ada's published notes.",
-  }).evidence;
-  assert.ok(firstEvidence && secondEvidence);
+  assert.equal(
+    domain.resolveIdentity(engine.snapshot().candidates, engine.snapshot().evidence).status,
+    "resolved",
+  );
 
   engine.addFinding({
     candidateId: candidate.id,
@@ -670,7 +727,7 @@ test("resolved identity with two sources and two findings still finishes partial
 test("a unique official anchor can complete alone, but spoofable anchors and stop-condition precedence cannot distort status", () => {
   const clock = domain.createSequenceClock("2026-08-18T20:30:00.000Z", 2);
   const engine = new agent.InvestigationEngine({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     query: "Chris Anderson, TED",
     requestedDepth: "standard",
     requestedCategories: ["identity"],
@@ -712,18 +769,11 @@ test("a unique official anchor can complete alone, but spoofable anchors and sto
     },
     {
       kind: "cross_profile_link",
-      value: "Chris Anderson at TED",
-      normalizedValue: "chris anderson at ted",
+      value: "Chris Anderson is the chair",
+      normalizedValue: "chris anderson is the chair",
       strength: "strong",
       assurance: "corroborated",
-      sourceEvidenceId: evidence.id,
-    },
-    {
-      kind: "social_handle",
-      value: "TEDchris",
-      normalizedValue: "tedchris",
-      strength: "strong",
-      assurance: "corroborated",
+      sourceFamily: "ted.com",
       sourceEvidenceId: evidence.id,
     },
   ]);
@@ -740,7 +790,7 @@ test("a unique official anchor can complete alone, but spoofable anchors and sto
   ]) engine.transition(phase);
 
   const satisfied = engine.snapshot();
-  assert.equal(domain.resolveIdentity(satisfied.candidates).status, "resolved");
+  assert.equal(domain.resolveIdentity(satisfied.candidates, satisfied.evidence).status, "resolved");
   assert.equal(domain.summarizeCoverage(satisfied).independentSourceFamilyCount, 1);
   assert.equal(domain.evaluateStop(satisfied).reason, "goal_satisfied");
   assert.equal(domain.evaluateStop(satisfied, { noLegalActions: true }).reason, "goal_satisfied");
@@ -757,12 +807,16 @@ async function runTwoSourcePromotionScenario(batchSources) {
   const clock = domain.createSequenceClock("2026-08-18T21:30:00.000Z", 2);
   const ids = domain.createDeterministicIdFactory(batchSources ? "promotion-batch" : "promotion-sequential");
   const fetchSnapshots = [];
-  const planner = async ({ state }) => {
+  const planner = async ({ state, selectedFrontierEntries }) => {
     if (state.candidates.length === 0) {
+      const entry = selectedFrontierEntries.find((item) =>
+        item.allowedTools.includes("discover_subject"));
+      assert.ok(entry, "candidate discovery must bind to a selected frontier entry");
       return {
         kind: "actions",
         decisionSummary: "Create one separated candidate before source admission.",
         actions: [{
+          frontierEntryId: entry.id,
           tool: "discover_subject",
           purpose: "Create the requested public professional candidate.",
           arguments: {},
@@ -773,14 +827,22 @@ async function runTwoSourcePromotionScenario(batchSources) {
       const remaining = state.evidence.length === 0
         ? ["one.example", "two.example"]
         : ["two.example"];
-      const selected = batchSources ? remaining : remaining.slice(0, 1);
+      const selectedEntries = batchSources
+        ? selectedFrontierEntries.slice(0, remaining.length)
+        : selectedFrontierEntries.slice(0, 1);
+      assert.equal(
+        selectedEntries.length,
+        batchSources ? remaining.length : 1,
+        "each requested fetch requires its own selected frontier entry",
+      );
       return {
         kind: "actions",
         decisionSummary: "Fetch independent direct pages for ordered kernel admission.",
-        actions: selected.map((family) => ({
-          tool: "fetch_direct_page",
+        actions: selectedEntries.map((entry, index) => ({
+          frontierEntryId: entry.id,
+          tool: entry.allowedTools[0],
           purpose: "Fetch an exact public professional quote.",
-          arguments: { family },
+          arguments: { family: remaining[index] },
           candidateId: state.candidates[0].id,
         })),
       };
@@ -851,12 +913,16 @@ async function runTwoSourcePromotionScenario(batchSources) {
 
   let completed;
   for await (const update of agent.runResearch({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     query: "Alex Kim, Acme Labs",
     requestedDepth: "standard",
     requestedCategories: ["identity"],
   }, { clock, ids, planner, executeAction, synthesize }, {
-    availableTools: ["discover_subject", "fetch_direct_page"],
+    availableTools: [
+      "discover_subject",
+      "fetch_direct_page_one",
+      "fetch_direct_page_two",
+    ],
     minimumFindings: 2,
     minimumIndependentSourceFamilies: 2,
   })) {
@@ -935,7 +1001,7 @@ test("finding admission materializes only extractive claims and ignores hostile 
 test("model-selected category tags cannot forge requested coverage", () => {
   const clock = domain.createSequenceClock("2026-08-18T22:45:00.000Z", 2);
   const engine = new agent.InvestigationEngine({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     query: "Chris Anderson, TED",
     requestedDepth: "standard",
     requestedCategories: ["education", "publication"],
@@ -1439,6 +1505,13 @@ test("sensitive content is rejected at both evidence and finding admission bound
   for (const [field, value] of [
     ["canonicalSubset", { nested: { note: "private-contact@example.net" } }],
     ["attributes", { nested: { phone: "+1 (602) 555-0199" } }],
+    ["attributes", { nested: { phone: 6025550199 } }],
+    ["canonicalSubset", { nested: { telephone: 16025550199 } }],
+    ["attributes", { nested: { query: 6025550199 } }],
+    ["attributes", { nested: { query: "６０２５５５０１９９" } }],
+    ["attributes", { nested: { query: "٦٠٢٥٥٥٠١٩٩" } }],
+    ["attributes", { nested: { "ｐｈｏｎｅ": "６０２－５５５－０１９９" } }],
+    ["canonicalSubset", { nested: { "ｈｏｍｅａｄｄｒｅｓｓ": "１２３ Main St" } }],
     ["attributes", { nested: { address: "123 Main Street, Phoenix, AZ 85001" } }],
   ]) {
     const nested = domain.admitEvidence({
@@ -1527,7 +1600,7 @@ test("cancellation during model extraction returns canceled and admits no fetche
   const controller = new AbortController();
   const accounting = modelAccounting();
   const resultPromise = dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-cancel-extraction",
     tool: "fetch_public_source",
     purpose: "Extract one public professional fact.",
@@ -1581,7 +1654,7 @@ test("Wayback refuses discovery-only and self-asserted candidate links without n
     },
   });
   const result = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-wayback-denied",
     tool: "wayback_profile_history",
     purpose: "Inspect bounded historical profile changes.",
@@ -1589,7 +1662,7 @@ test("Wayback refuses discovery-only and self-asserted candidate links without n
     candidateId: candidate.id,
     budgetClass: "search",
   }, {
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     state,
     modelAccounting: modelAccounting().value,
   });

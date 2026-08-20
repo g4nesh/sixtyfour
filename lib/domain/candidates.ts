@@ -4,6 +4,7 @@ import {
   type Candidate,
   type CandidateDraft,
   type CandidateScoreBreakdown,
+  type EvidenceRecord,
   type IdentitySignal,
   type IdentitySignalKind,
   type ParsedTarget,
@@ -122,7 +123,73 @@ function matchesTarget(signal: IdentitySignal, target: ParsedTarget): boolean {
 }
 
 function isIndependent(signal: IdentitySignal): boolean {
-  return Boolean(signal.sourceFamily) || signal.kind === "email" || signal.kind === "name";
+  return Boolean(signal.sourceFamily && signal.sourceEvidenceId)
+    || signal.kind === "email"
+    || signal.kind === "name";
+}
+
+/**
+ * Tool-proposed identity signals become trust-bearing only when their value,
+ * candidate, and source family are all grounded by one admitted record.
+ */
+export function identitySignalGroundedByEvidence(
+  signal: IdentitySignal,
+  evidence: EvidenceRecord,
+): boolean {
+  if (
+    evidence.disposition !== (signal.kind === "conflict" ? "contradicts" : "supports")
+    || evidence.sourceType === "search_result"
+    || signal.sourceEvidenceId !== evidence.id
+    || signal.sourceFamily?.toLocaleLowerCase("en-US") !== evidence.sourceFamily
+  ) return false;
+  const needle = normalizeComparable(signal.value);
+  if (needle.replace(/\s+/g, "").length < 3) return false;
+  const rawMaterial = [
+    evidence.claim,
+    evidence.excerpt ?? "",
+    evidence.title ?? "",
+    evidence.publisher ?? "",
+    evidence.sourceUrl,
+    evidence.canonicalUrl,
+    evidence.canonicalSubset ? JSON.stringify(evidence.canonicalSubset) : "",
+    JSON.stringify(evidence.attributes),
+  ];
+  if (signal.kind === "profile_url" || signal.kind === "personal_domain") {
+    try {
+      const proposed = new URL(signal.value);
+      if (proposed.protocol !== "https:") return false;
+      if (signal.kind === "profile_url") {
+        const canonical = proposed.toString().replace(/\/$/, "");
+        return [evidence.sourceUrl, evidence.canonicalUrl]
+          .map((value) => {
+            try {
+              return new URL(value).toString().replace(/\/$/, "");
+            } catch {
+              return "";
+            }
+          })
+          .includes(canonical);
+      }
+      const host = proposed.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "");
+      return [evidence.sourceUrl, evidence.canonicalUrl].some((value) => {
+        try {
+          const evidenceHost = new URL(value).hostname.toLocaleLowerCase("en-US").replace(/^www\./, "");
+          return evidenceHost === host;
+        } catch {
+          return false;
+        }
+      });
+    } catch {
+      return false;
+    }
+  }
+  if (signal.kind === "email" || signal.kind === "github_commit_email") {
+    const email = signal.value.toLocaleLowerCase("en-US");
+    return rawMaterial.some((value) => value.toLocaleLowerCase("en-US").includes(email));
+  }
+  const tokenPhrase = ` ${needle} `;
+  return rawMaterial.some((value) =>
+    ` ${normalizeComparable(value)} `.includes(tokenPhrase));
 }
 
 function isMergeGrade(signal: IdentitySignal): boolean {
@@ -235,7 +302,8 @@ export function candidateStatus(
           signal.assurance !== "spoofable" &&
           signal.kind !== "name" &&
           signal.kind !== "conflict" &&
-          signal.sourceFamily,
+          signal.sourceFamily &&
+          signal.sourceEvidenceId,
       )
       .map((signal) => signal.sourceFamily),
   ).size;

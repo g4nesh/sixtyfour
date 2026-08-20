@@ -62,6 +62,10 @@ test("safety policy permits public professional research and blocks dangerous sc
 
   const blocked = [
     ["Henry's phone number", "precise_location_or_contact"],
+    ["find 6025550199", "sensitive_personal_data"],
+    ["6025550199", "sensitive_personal_data"],
+    ["find ６０２５５５０１９９", "sensitive_personal_data"],
+    ["find ٦٠٢٥٥٥٠١٩٩", "sensitive_personal_data"],
     ["map his spouse and children", "family_or_relationship_mapping"],
     ["automate outreach and email them", "contact_automation"],
     ["background check this candidate before hiring", "high_impact_decision"],
@@ -77,6 +81,23 @@ test("safety policy permits public professional research and blocks dangerous sc
     const decision = domain.classifySafety(query);
     assert.equal(decision.level, "block", query);
     assert.ok(decision.reasons.some((reason) => reason.code === expectedCode), query);
+  }
+  assert.equal(agent.isActionPolicyCompliant({
+    tool: "search_web",
+    purpose: "Research a public professional profile",
+    arguments: { phone: 6025550199 },
+  }, ["search_web"]).allowed, false);
+  assert.equal(agent.isActionPolicyCompliant({
+    tool: "search_web",
+    purpose: "Research a public professional profile",
+    arguments: { query: 6025550199 },
+  }, ["search_web"]).allowed, false);
+  for (const query of ["６０２５５５０１９９", "٦٠٢٥٥٥٠١٩٩"]) {
+    assert.equal(agent.isActionPolicyCompliant({
+      tool: "search_web",
+      purpose: "Find the supplied number",
+      arguments: { query },
+    }, ["search_web"]).allowed, false, query);
   }
 });
 
@@ -420,6 +441,7 @@ test("trace recorder is append-only, balanced, JSON-safe, and never persists cha
   });
   trace.assertBalanced();
   const events = trace.snapshot();
+  assert.equal(events.every((event) => event.schemaVersion === domain.SCHEMA_VERSION), true);
   assert.deepEqual(events.map((event) => event.seq), [1, 2]);
   assert.ok(events[1].elapsedMs >= events[0].elapsedMs);
   assert.equal(events[0].spanId, span);

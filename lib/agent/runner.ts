@@ -3,15 +3,19 @@ import { evaluateStop, type StopEvaluationOptions } from "../domain/stopping";
 import { classifySafety } from "../domain/safety";
 import {
   containsRestrictedPublicContent,
+  isCompactPhoneNumberValue,
+  isRestrictedJsonFieldKey,
   urlContainsRestrictedParameters,
 } from "../domain/content-policy";
 import type { Clock, IdFactory } from "../domain/runtime";
 import { cloneJson, isJsonValue } from "../domain/runtime";
+import { identitySignalGroundedByEvidence } from "../domain/candidates";
 import {
   SCHEMA_VERSION,
   type BudgetLimits,
   type CandidateDraft,
   type EvidenceDraft,
+  type EvidenceRecord,
   type FindingDraft,
   type IdentitySignal,
   type InvestigationInput,
@@ -20,10 +24,38 @@ import {
   type JsonObject,
   type JsonValue,
   type ResearchPhase,
+  type SearchFrontierEntry,
+  type SearchGraph,
+  type SearchGraphStatus,
+  type SourceTier,
   type TokenUsage,
 } from "../domain/types";
 import { InvestigationEngine, type InvestigationEngineOptions } from "./engine";
 import type { TraceEnvelopeV1, TraceEvent, TraceSpanStatus } from "./trace";
+import {
+  admitGraphEdge,
+  admitGraphNode,
+  assertSearchGraph,
+  enqueueCandidateFrontier,
+  frontierEntryById,
+  isDeniedResearchSource,
+  isDeniedResearchTool,
+  markSearchGraphTerminal,
+  proposeBoundedMutation,
+  recordFrontierOutcome,
+  requeueFrontier,
+  seedFrontier,
+  selectFrontierBatch,
+  setFrontierStatus,
+  sourceLaneForFrontierEntry,
+  sourceTierForUrl,
+  type SearchKernelEvent,
+} from "../search";
+import {
+  compileFrontierHarness,
+  initialFrontierHarnessState,
+  type FrontierHarnessRoute,
+} from "../harness";
 
 export type ActionStatus =
   | "succeeded"
@@ -39,16 +71,22 @@ export const MAX_OUTBOUND_CONCURRENCY = 4;
 export interface ResearchActionV1 {
   schemaVersion: typeof SCHEMA_VERSION;
   id: string;
+  frontierEntryId: string;
   tool: string;
   purpose: string;
   arguments: JsonObject;
   candidateId?: string;
   budgetClass: "search" | "fetch" | "compute";
+  sourceTier: SourceTier;
+  sourceLaneId: string;
+  pathCost: number;
+  mutated: boolean;
 }
 
 export type ResearchAction = ResearchActionV1;
 
 export interface ProposedResearchAction {
+  frontierEntryId?: string;
   tool: string;
   purpose: string;
   arguments: JsonObject;
@@ -61,6 +99,7 @@ export interface PlannerContextV1 {
   state: InvestigationState;
   availableTools: string[];
   legalNextPhases: ResearchPhase[];
+  selectedFrontierEntries: SearchFrontierEntry[];
   signal?: AbortSignal;
   modelAccounting: ModelAttemptAccounting;
 }
@@ -202,11 +241,8 @@ export type ResearchUpdate =
       trace: TraceEnvelopeV1;
     };
 
-const PROHIBITED_TOOL_PATTERN =
-  /(?:breach|credential|password|private[_-]?contact|phone[_-]?lookup|address[_-]?lookup|face[_-]?recognition|data[_-]?broker)/i;
-
 const PROHIBITED_ARGUMENT_KEY_PATTERN =
-  /(?:homeaddress|residentialaddress|personalphone|password|credential|ssn|socialsecurity|realtimelocation|clientsecret|authtoken|sessionid|authorizationcode|oauthcode)/i;
+  /(?:homeaddress|residentialaddress|personalphone|phonenumber|phone|telephone|tel|mobile|cell|contactnumber|directnumber|whatsapp|password|credential|ssn|socialsecurity|realtimelocation|clientsecret|authtoken|sessionid|authorizationcode|oauthcode)/i;
 
 function actionBudgetClass(
   action: Pick<ProposedResearchAction, "tool" | "budgetClass">,
@@ -218,10 +254,12 @@ function actionBudgetClass(
 }
 
 function containsProhibitedArgument(value: JsonValue): boolean {
+  if (isCompactPhoneNumberValue(value)) return true;
   if (Array.isArray(value)) return value.some(containsProhibitedArgument);
   if (value !== null && typeof value === "object") {
     return Object.entries(value).some(
       ([key, child]) =>
+        isRestrictedJsonFieldKey(key) ||
         PROHIBITED_ARGUMENT_KEY_PATTERN.test(key.replace(/[^a-z0-9]/gi, "")) ||
         containsProhibitedArgument(child),
     );
@@ -285,13 +323,16 @@ export function isActionPolicyCompliant(
   if (availableTools.length > 0 && !availableTools.includes(action.tool)) {
     return { allowed: false, reason: `tool ${action.tool} is not allowlisted` };
   }
-  if (PROHIBITED_TOOL_PATTERN.test(action.tool)) {
+  if (isDeniedResearchTool(action.tool)) {
     return { allowed: false, reason: "tool is outside the public-professional safety scope" };
   }
   if (containsProhibitedArgument(action.arguments)) {
     return { allowed: false, reason: "arguments request prohibited private or sensitive data" };
   }
   const outboundStrings = [action.purpose, ...collectStringArguments(action.arguments)];
+  if (outboundStrings.some(isDeniedResearchSource)) {
+    return { allowed: false, reason: "action targets a denied people-search, contact, property, tax, family, or credential source" };
+  }
   const allowedEmails = context.allowedEmails ?? new Set<string>();
   if (outboundStrings.some((value) =>
     emailTokens(value).some((email) => !allowedEmails.has(email)))) {
@@ -335,6 +376,51 @@ function safeError(error: unknown): JsonObject {
     };
   }
   return { name: "UnknownError", message: String(error).slice(0, 500) };
+}
+
+function bindToolProposedSignal(
+  signal: IdentitySignal,
+  candidateId: string,
+  actionId: string,
+  evidence: readonly EvidenceRecord[],
+): { signal?: IdentitySignal; reason?: string } {
+  if (signal.kind === "cross_source_match") {
+    return { reason: "cross_source_match_is_kernel_derived" };
+  }
+  if (signal.sourceEvidenceId) {
+    const record = evidence.find((item) => item.id === signal.sourceEvidenceId);
+    if (
+      !record
+      || record.candidateId !== candidateId
+      || record.toolCallId !== actionId
+      || !identitySignalGroundedByEvidence(signal, record)
+    ) return { reason: "signal_evidence_provenance_mismatch" };
+    return { signal };
+  }
+  const matching = evidence
+    .filter((record) => record.candidateId === candidateId && record.toolCallId === actionId)
+    .map((record) => ({
+      record,
+      bound: {
+        ...signal,
+        sourceEvidenceId: record.id,
+        sourceFamily: record.sourceFamily,
+      } satisfies IdentitySignal,
+    }))
+    .filter(({ record, bound }) =>
+      (!signal.sourceFamily
+        || signal.sourceFamily.toLocaleLowerCase("en-US") === record.sourceFamily)
+      && identitySignalGroundedByEvidence(bound, record));
+  if (matching.length === 1) return { signal: matching[0].bound };
+  if (
+    signal.kind === "conflict"
+    || signal.assurance === "verified"
+    || signal.assurance === "corroborated"
+  ) {
+    return { reason: matching.length > 1 ? "ambiguous_signal_evidence" : "ungrounded_high_assurance_signal" };
+  }
+  const { sourceEvidenceId: _sourceEvidenceId, sourceFamily: _sourceFamily, ...provisional } = signal;
+  return { signal: provisional };
 }
 
 function zeroSafeTokens(tokens: Partial<TokenUsage> | undefined): Partial<TokenUsage> {
@@ -504,6 +590,7 @@ async function invokePlanner(
   engine: InvestigationEngine,
   dependencies: ResearchDependencies,
   availableTools: string[],
+  selectedFrontierEntries: SearchFrontierEntry[],
   signal?: AbortSignal,
 ): Promise<PlannerDecision> {
   const state = engine.snapshot();
@@ -516,6 +603,7 @@ async function invokePlanner(
       candidateCount: state.candidates.length,
       evidenceCount: state.evidence.length,
       findingCount: state.findings.length,
+      selectedFrontierEntryIds: selectedFrontierEntries.map((entry) => entry.id),
     },
   });
   try {
@@ -535,6 +623,7 @@ async function invokePlanner(
           "report",
           "terminal",
         ].filter((phase) => canTransitionPhase(state.phase, phase as ResearchPhase)) as ResearchPhase[],
+        selectedFrontierEntries: cloneJson(selectedFrontierEntries),
         ...(signal ? { signal } : {}),
         modelAccounting,
       }),
@@ -580,19 +669,89 @@ async function invokePlanner(
 }
 
 interface ExecutedAction {
+  entry: SearchFrontierEntry;
   action: ResearchAction;
+  actionNodeId: string;
   spanId: string;
   modelAccounting: InternalModelAccounting;
   result: ResearchActionResult;
+}
+
+interface ActionBatchExecution {
+  mutations: number;
+  graph: SearchGraph;
+  executedEntries: SearchFrontierEntry[];
+}
+
+function recordSearchEvents(
+  engine: InvestigationEngine,
+  events: readonly SearchKernelEvent[],
+  parentSpanId?: string,
+): void {
+  for (const event of events) {
+    engine.trace.record(event.name, {
+      phase: engine.phase,
+      ...(parentSpanId ? { parentSpanId } : {}),
+      payload: event.payload,
+    });
+  }
+}
+
+function publicHostname(value: string): string | null {
+  try {
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.protocol === "https:"
+      ? url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function sourceTierContextForAction(
+  state: InvestigationState,
+  candidateId: string | undefined,
+): { firstPartyHosts: string[]; organizationNames: string[] } {
+  const firstPartyHosts = new Set<string>();
+  for (const identifier of state.target.identifiers) {
+    if (identifier.provenance !== "user_input") continue;
+    const host = identifier.kind === "email"
+      ? identifier.normalizedValue.split("@")[1] ?? null
+      : publicHostname(identifier.value);
+    if (host) firstPartyHosts.add(host);
+  }
+  const candidate = candidateId
+    ? state.candidates.find((item) => item.id === candidateId)
+    : undefined;
+  for (const signal of candidate?.signals ?? []) {
+    if (
+      !["profile_url", "personal_domain"].includes(signal.kind)
+      || !["verified", "corroborated"].includes(signal.assurance)
+      || !signal.sourceEvidenceId
+      || !state.evidence.some((evidence) =>
+        evidence.id === signal.sourceEvidenceId
+        && evidence.candidateId === candidateId
+        && evidence.disposition === "supports")
+    ) continue;
+    const host = publicHostname(signal.value);
+    if (host) firstPartyHosts.add(host);
+  }
+  return {
+    firstPartyHosts: [...firstPartyHosts].sort(),
+    organizationNames: state.target.organizationHints.map((organization) => organization.name),
+  };
 }
 
 async function executeActions(
   engine: InvestigationEngine,
   dependencies: ResearchDependencies,
   proposals: ProposedResearchAction[],
+  graphValue: SearchGraph,
+  selectedEntries: SearchFrontierEntry[],
   availableTools: string[],
   signal?: AbortSignal,
-): Promise<number> {
+): Promise<ActionBatchExecution> {
+  let graph = cloneJson(graphValue);
   const state = engine.snapshot();
   const remainingCalls = Math.max(0, state.budget.limits.maxToolCalls - state.budget.usage.toolCalls);
   const batchLimit = Math.min(
@@ -600,12 +759,43 @@ async function executeActions(
     remainingCalls,
     MAX_OUTBOUND_CONCURRENCY,
   );
-  const initialBatch = proposals.slice(0, batchLimit);
+  const claimedEntries = new Set<string>();
+  const bound: Array<{ proposal: ProposedResearchAction; entry: SearchFrontierEntry }> = [];
+  for (const proposal of proposals) {
+    if (bound.length >= batchLimit) break;
+    const explicit = proposal.frontierEntryId
+      ? selectedEntries.find((entry) => entry.id === proposal.frontierEntryId)
+      : undefined;
+    const entry = explicit ?? selectedEntries.find((candidate) =>
+      !claimedEntries.has(candidate.id)
+      && candidate.allowedTools.includes(proposal.tool)
+      && (candidate.candidateId === null
+        || proposal.candidateId === candidate.candidateId));
+    if (
+      !entry
+      || claimedEntries.has(entry.id)
+      || !entry.allowedTools.includes(proposal.tool)
+      || proposal.candidateId !== (entry.candidateId ?? undefined)
+    ) {
+      engine.trace.record("action.rejected", {
+        phase: state.phase,
+        payload: {
+          frontierEntryId: proposal.frontierEntryId ?? null,
+          tool: proposal.tool,
+          reason: "action is not bound to one selected compatible frontier entry",
+        },
+      });
+      continue;
+    }
+    claimedEntries.add(entry.id);
+    bound.push({ proposal: { ...proposal, frontierEntryId: entry.id }, entry });
+  }
+  const initialBatch = bound;
   let remainingSearchCalls = Math.max(
     0,
     state.budget.limits.maxSearchCalls - state.budget.usage.searchCalls,
   );
-  const bounded = initialBatch.filter((proposal) => {
+  const bounded = initialBatch.filter(({ proposal }) => {
     if (actionBudgetClass(proposal) !== "search") return true;
     if (remainingSearchCalls <= 0) return false;
     remainingSearchCalls -= 1;
@@ -622,7 +812,9 @@ async function executeActions(
   }
 
   const executable: Array<{
+    entry: SearchFrontierEntry;
     action: ResearchAction;
+    actionNodeId: string;
     spanId: string;
     modelAccounting: InternalModelAccounting;
   }> = [];
@@ -632,13 +824,14 @@ async function executeActions(
       .map((identifier) => identifier.normalizedValue)),
     currentYear: new Date(engine.clock.now()).getUTCFullYear(),
   };
-  for (const proposal of bounded) {
+  for (const { proposal, entry } of bounded) {
     const policy = isActionPolicyCompliant(proposal, availableTools, actionPolicyContext);
     if (!policy.allowed) {
       engine.trace.record("action.rejected", {
         phase: state.phase,
         payload: {
           tool: proposal.tool,
+          frontierEntryId: entry.id,
           reason: policy.reason,
         },
       });
@@ -646,41 +839,104 @@ async function executeActions(
     }
     const action: ResearchAction = {
       schemaVersion: SCHEMA_VERSION,
-      id: engine.ids.next("action"),
+      id: entry.actionId,
+      frontierEntryId: entry.id,
       tool: proposal.tool.trim(),
       purpose: proposal.purpose.trim(),
       arguments: cloneJson(proposal.arguments),
-      ...(proposal.candidateId ? { candidateId: proposal.candidateId } : {}),
+      ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
       budgetClass: actionBudgetClass(proposal),
+      sourceTier: entry.sourceTier,
+      sourceLaneId: entry.sourceLaneId,
+      pathCost: entry.pathCost,
+      mutated: entry.mutation !== null,
     };
+    const actionNodeAdmission = admitGraphNode(graph, {
+      kind: "action",
+      label: `${action.tool} — ${action.purpose}`,
+      status: "running",
+      sourceTier: entry.sourceTier,
+      sourceLaneId: entry.sourceLaneId,
+      frontierEntryId: entry.id,
+      actionId: action.id,
+      candidateId: action.candidateId ?? null,
+      data: {
+        tool: action.tool,
+        budgetClass: action.budgetClass,
+        pathCost: action.pathCost,
+        mutated: action.mutated,
+      },
+      dedupeEntityKey: `action:${action.id}`,
+    }, engine.ids, engine.clock.now());
+    graph = actionNodeAdmission.graph;
+    recordSearchEvents(engine, actionNodeAdmission.events);
+    const actionEdgeAdmission = admitGraphEdge(graph, {
+      fromNodeId: entry.nodeId,
+      toNodeId: actionNodeAdmission.value.id,
+      kind: entry.mutation ? "mutates" : "expands",
+      status: "running",
+      frontierEntryId: entry.id,
+      actionId: action.id,
+      edgeCost: 0.05,
+      pathCost: entry.pathCost + 0.05,
+    }, engine.ids, engine.clock.now());
+    graph = actionEdgeAdmission.graph;
+    recordSearchEvents(engine, actionEdgeAdmission.events);
     const spanId = engine.trace.startSpan({
       name: `tool.${action.tool}`,
       phase: state.phase,
       payload: {
         actionId: action.id,
+        frontierEntryId: action.frontierEntryId,
+        sourceTier: action.sourceTier,
+        sourceLaneId: action.sourceLaneId,
+        pathCost: action.pathCost,
+        mutated: action.mutated,
         purpose: action.purpose,
         arguments: action.arguments,
         candidateId: action.candidateId ?? null,
       },
     });
-    executable.push({ action, spanId, modelAccounting: createModelAccounting(engine) });
+    executable.push({
+      entry,
+      action,
+      actionNodeId: actionNodeAdmission.value.id,
+      spanId,
+      modelAccounting: createModelAccounting(engine),
+    });
   }
+
+  const unusedSelected = selectedEntries
+    .filter((entry) => !executable.some((item) => item.entry.id === entry.id))
+    .map((entry) => entry.id);
+  graph = requeueFrontier(graph, unusedSelected, engine.clock.now());
+  graph = setFrontierStatus(
+    graph,
+    executable.map((item) => item.entry.id),
+    "running",
+    engine.clock.now(),
+  );
+  assertSearchGraph(graph);
+  engine.replaceSearchGraph(graph);
+  const actionState = engine.snapshot();
 
   // Adapters run concurrently, but results are admitted in proposal order so
   // IDs, evidence ordering, and traces remain deterministic under replay.
   const settled = await Promise.all(
-    executable.map(async ({ action, spanId, modelAccounting }): Promise<ExecutedAction> => {
+    executable.map(async ({ entry, action, actionNodeId, spanId, modelAccounting }): Promise<ExecutedAction> => {
       try {
         const result = await dependencies.executeAction(action, {
           schemaVersion: SCHEMA_VERSION,
-          state,
+          state: actionState,
           ...(signal ? { signal } : {}),
           modelAccounting,
         });
-        return { action, spanId, modelAccounting, result };
+        return { entry, action, actionNodeId, spanId, modelAccounting, result };
       } catch (error) {
         return {
+          entry,
           action,
+          actionNodeId,
           spanId,
           modelAccounting,
           result: {
@@ -701,13 +957,99 @@ async function executeActions(
   );
 
   let mutations = 0;
-  for (const { action, spanId, modelAccounting, result } of settled) {
+  const executedEntries: SearchFrontierEntry[] = [];
+  for (const { entry, action, actionNodeId, spanId, modelAccounting, result } of settled) {
+    executedEntries.push(entry);
+    let actionMutations = 0;
     const localCandidateIds = new Map<string, string>();
+    const pendingSignalUpdates: CandidateSignalUpdate[] = [];
     for (const draft of result.candidates ?? []) {
+      if (action.candidateId) {
+        engine.trace.record("candidate.rejected", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            reason: "candidate_bound_action_cannot_create_candidates",
+            expectedCandidateId: action.candidateId,
+          },
+        });
+        continue;
+      }
       try {
-        const mutation = engine.addCandidate(draft);
-        if (draft.ref) localCandidateIds.set(draft.ref, mutation.candidate.id);
-        if (mutation.created) mutations += 1;
+        const { signals: proposedSignals, ...identityDraft } = draft;
+        const candidateMutation = engine.addCandidate(identityDraft);
+        if (draft.ref) localCandidateIds.set(draft.ref, candidateMutation.candidate.id);
+        if (proposedSignals?.length) {
+          pendingSignalUpdates.push({
+            candidateId: candidateMutation.candidate.id,
+            signals: proposedSignals,
+          });
+        }
+        if (candidateMutation.created) {
+          mutations += 1;
+          actionMutations += 1;
+        }
+        const candidateNodeAdmission = admitGraphNode(graph, {
+          kind: "candidate",
+          label: candidateMutation.candidate.displayName,
+          status: candidateMutation.created ? "verified" : "selected",
+          sourceTier: entry.sourceTier,
+          sourceLaneId: entry.sourceLaneId,
+          frontierEntryId: entry.id,
+          actionId: action.id,
+          candidateId: candidateMutation.candidate.id,
+          data: {},
+          dedupeEntityKey: `candidate:${candidateMutation.candidate.id}`,
+        }, engine.ids, engine.clock.now());
+        graph = candidateNodeAdmission.graph;
+        recordSearchEvents(engine, candidateNodeAdmission.events, spanId);
+        const candidateEdgeAdmission = admitGraphEdge(graph, {
+          fromNodeId: actionNodeId,
+          toNodeId: candidateNodeAdmission.value.id,
+          kind: "expands",
+          status: "verified",
+          frontierEntryId: entry.id,
+          actionId: action.id,
+          edgeCost: 0.06,
+          pathCost: entry.pathCost + 0.11,
+        }, engine.ids, engine.clock.now());
+        graph = candidateEdgeAdmission.graph;
+        recordSearchEvents(engine, candidateEdgeAdmission.events, spanId);
+
+        const snapshotCandidates = engine.snapshot().candidates;
+        for (const other of snapshotCandidates.filter((item) =>
+          item.id !== candidateMutation.candidate.id
+          && item.normalizedName === candidateMutation.candidate.normalizedName)) {
+          const otherNode = graph.nodes.find((node) => node.candidateId === other.id);
+          if (!otherNode) continue;
+          const separation = admitGraphEdge(graph, {
+            fromNodeId: otherNode.id,
+            toNodeId: candidateNodeAdmission.value.id,
+            kind: "separates",
+            status: "verified",
+            frontierEntryId: entry.id,
+            actionId: action.id,
+            edgeCost: 0.07,
+            pathCost: entry.pathCost + 0.12,
+          }, engine.ids, engine.clock.now());
+          graph = separation.graph;
+          recordSearchEvents(engine, separation.events, spanId);
+        }
+
+        if (candidateMutation.created) {
+          const candidateFrontier = enqueueCandidateFrontier(
+            graph,
+            state.target,
+            candidateMutation.candidate,
+            entry,
+            candidateNodeAdmission.value.id,
+            availableTools,
+            engine.ids,
+            engine.clock.now(),
+          );
+          graph = candidateFrontier.graph;
+          recordSearchEvents(engine, candidateFrontier.events, spanId);
+        }
       } catch (error) {
         engine.trace.record("candidate.rejected", {
           phase: engine.phase,
@@ -716,10 +1058,287 @@ async function executeActions(
         });
       }
     }
-    for (const update of result.candidateSignals ?? []) {
-      try {
-        engine.addCandidateSignals(update.candidateId, update.signals);
+    const sourceLane = sourceLaneForFrontierEntry(entry);
+    const sourceTierContext = sourceTierContextForAction(state, action.candidateId);
+    for (const draft of result.evidence ?? []) {
+      const candidateFromRef = draft.candidateRef
+        ? localCandidateIds.get(draft.candidateRef)
+        : undefined;
+      const candidateId =
+        draft.candidateId ??
+        candidateFromRef ??
+        action.candidateId;
+      if (draft.candidateRef && !candidateFromRef) {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "unknown_candidate_ref",
+            evidenceId: null,
+            candidateId: candidateId ?? null,
+            sourceType: draft.sourceType,
+            candidateRef: draft.candidateRef,
+          },
+        });
+        continue;
+      }
+      if (draft.candidateId && candidateFromRef && draft.candidateId !== candidateFromRef) {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "candidate_reference_mismatch",
+            evidenceId: null,
+            candidateId: draft.candidateId,
+            referencedCandidateId: candidateFromRef,
+            sourceType: draft.sourceType,
+          },
+        });
+        continue;
+      }
+      if (action.candidateId && candidateId !== action.candidateId) {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "foreign_candidate_id",
+            evidenceId: null,
+            candidateId: candidateId ?? null,
+            expectedCandidateId: action.candidateId,
+            sourceType: draft.sourceType,
+          },
+        });
+        continue;
+      }
+      if (draft.toolCallId !== undefined && draft.toolCallId !== action.id) {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "foreign_tool_call_id",
+            evidenceId: null,
+            candidateId: candidateId ?? null,
+            sourceType: draft.sourceType,
+            expectedActionId: action.id,
+          },
+        });
+        continue;
+      }
+      if (isDeniedResearchSource(draft.sourceUrl)) {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "unsafe_url",
+            evidenceId: null,
+            candidateId: candidateId ?? null,
+            sourceType: draft.sourceType,
+          },
+        });
+        continue;
+      }
+      const discoveryOnly = draft.sourceType === "search_result"
+        || draft.disposition === "discovery_only";
+      if (!sourceLane) {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "illegal_source_lane",
+            evidenceId: null,
+            candidateId: candidateId ?? null,
+            sourceType: draft.sourceType,
+          },
+        });
+        continue;
+      }
+      if (!discoveryOnly && sourceLane.admission === "discovery_only") {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "source_lane_discovery_only",
+            evidenceId: null,
+            candidateId: candidateId ?? null,
+            sourceType: draft.sourceType,
+            sourceLaneId: entry.sourceLaneId,
+          },
+        });
+        continue;
+      }
+      if (!discoveryOnly && !sourceLane.sourceTypes.includes(draft.sourceType)) {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "source_type_outside_lane",
+            evidenceId: null,
+            candidateId: candidateId ?? null,
+            sourceType: draft.sourceType,
+            sourceLaneId: entry.sourceLaneId,
+          },
+        });
+        continue;
+      }
+      const derivedSourceTier = sourceTierForUrl(
+        draft.sourceUrl,
+        draft.sourceType,
+        entry.sourceTier === 0,
+        sourceTierContext,
+      );
+      if (!discoveryOnly && derivedSourceTier !== null && derivedSourceTier !== entry.sourceTier) {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "source_tier_mismatch",
+            evidenceId: null,
+            candidateId: candidateId ?? null,
+            sourceType: draft.sourceType,
+            sourceLaneId: entry.sourceLaneId,
+            expectedSourceTier: entry.sourceTier,
+            derivedSourceTier,
+          },
+        });
+        continue;
+      }
+      const admission = engine.admitEvidence({
+        ...draft,
+        ...(candidateId ? { candidateId } : {}),
+        toolCallId: action.id,
+      });
+      if (admission.admitted && admission.evidence) {
         mutations += 1;
+        actionMutations += 1;
+        const sourceNodeAdmission = admitGraphNode(graph, {
+          kind: "source",
+          label: admission.evidence.title ?? admission.evidence.sourceFamily,
+          status: "verified",
+          sourceTier: entry.sourceTier,
+          sourceLaneId: entry.sourceLaneId,
+          frontierEntryId: entry.id,
+          actionId: action.id,
+          candidateId: admission.evidence.candidateId,
+          evidenceId: admission.evidence.id,
+          data: {
+            sourceUrl: admission.evidence.sourceUrl,
+            sourceFamily: admission.evidence.sourceFamily,
+            sourceType: admission.evidence.sourceType,
+          },
+          dedupeEntityKey: `source:${admission.evidence.id}`,
+        }, engine.ids, engine.clock.now());
+        graph = sourceNodeAdmission.graph;
+        recordSearchEvents(engine, sourceNodeAdmission.events, spanId);
+        const actionSourceEdge = admitGraphEdge(graph, {
+          fromNodeId: actionNodeId,
+          toNodeId: sourceNodeAdmission.value.id,
+          kind: "expands",
+          status: "verified",
+          frontierEntryId: entry.id,
+          actionId: action.id,
+          edgeCost: 0.04,
+          pathCost: entry.pathCost + 0.09,
+        }, engine.ids, engine.clock.now());
+        graph = actionSourceEdge.graph;
+        recordSearchEvents(engine, actionSourceEdge.events, spanId);
+        const evidenceNodeAdmission = admitGraphNode(graph, {
+          kind: "evidence",
+          label: admission.evidence.claim,
+          status: admission.evidence.disposition === "contradicts" ? "rejected" : "verified",
+          sourceTier: entry.sourceTier,
+          sourceLaneId: entry.sourceLaneId,
+          frontierEntryId: entry.id,
+          actionId: action.id,
+          candidateId: admission.evidence.candidateId,
+          evidenceId: admission.evidence.id,
+          data: {
+            disposition: admission.evidence.disposition,
+            sourceUrl: admission.evidence.sourceUrl,
+            sourceFamily: admission.evidence.sourceFamily,
+            sourceType: admission.evidence.sourceType,
+            contentHash: admission.evidence.contentHash,
+            verificationMethod: admission.evidence.verificationMethod,
+          },
+          dedupeEntityKey: `evidence:${admission.evidence.id}`,
+        }, engine.ids, engine.clock.now());
+        graph = evidenceNodeAdmission.graph;
+        recordSearchEvents(engine, evidenceNodeAdmission.events, spanId);
+        const sourceEvidenceEdge = admitGraphEdge(graph, {
+          fromNodeId: sourceNodeAdmission.value.id,
+          toNodeId: evidenceNodeAdmission.value.id,
+          kind: "grounds",
+          status: evidenceNodeAdmission.value.status,
+          frontierEntryId: entry.id,
+          actionId: action.id,
+          edgeCost: 0.04,
+          pathCost: entry.pathCost + 0.13,
+        }, engine.ids, engine.clock.now());
+        graph = sourceEvidenceEdge.graph;
+        recordSearchEvents(engine, sourceEvidenceEdge.events, spanId);
+        const candidateNode = graph.nodes.find((node) =>
+          node.kind === "candidate" && node.candidateId === admission.evidence?.candidateId);
+        if (candidateNode) {
+          const evidenceCandidateEdge = admitGraphEdge(graph, {
+            fromNodeId: evidenceNodeAdmission.value.id,
+            toNodeId: candidateNode.id,
+            kind: admission.evidence.disposition === "contradicts" ? "conflicts" : "supports",
+            status: evidenceNodeAdmission.value.status,
+            frontierEntryId: entry.id,
+            actionId: action.id,
+            edgeCost: 0.03,
+            pathCost: entry.pathCost + 0.16,
+          }, engine.ids, engine.clock.now());
+          graph = evidenceCandidateEdge.graph;
+          recordSearchEvents(engine, evidenceCandidateEdge.events, spanId);
+        }
+      }
+    }
+    pendingSignalUpdates.push(...(result.candidateSignals ?? []));
+    for (const update of pendingSignalUpdates) {
+      if (action.candidateId && update.candidateId !== action.candidateId) {
+        engine.trace.record("candidate_signal.rejected", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            candidateId: update.candidateId,
+            expectedCandidateId: action.candidateId,
+            reason: "foreign_candidate_id",
+          },
+        });
+        continue;
+      }
+      const evidence = engine.snapshot().evidence;
+      const accepted: IdentitySignal[] = [];
+      for (const signal of update.signals) {
+        const bound = bindToolProposedSignal(signal, update.candidateId, action.id, evidence);
+        if (bound.signal) {
+          accepted.push(bound.signal);
+        } else {
+          engine.trace.record("candidate_signal.rejected", {
+            phase: engine.phase,
+            parentSpanId: spanId,
+            payload: {
+              candidateId: update.candidateId,
+              kind: signal.kind,
+              reason: bound.reason ?? "identity_signal_rejected",
+            },
+          });
+        }
+      }
+      if (accepted.length === 0) continue;
+      try {
+        engine.addCandidateSignals(update.candidateId, accepted);
+        mutations += 1;
+        actionMutations += 1;
       } catch (error) {
         engine.trace.record("candidate_signal.rejected", {
           phase: engine.phase,
@@ -728,22 +1347,60 @@ async function executeActions(
         });
       }
     }
-    for (const draft of result.evidence ?? []) {
-      const candidateId =
-        draft.candidateId ??
-        (draft.candidateRef ? localCandidateIds.get(draft.candidateRef) : undefined) ??
-        action.candidateId;
-      const admission = engine.admitEvidence({
-        ...draft,
-        ...(candidateId ? { candidateId } : {}),
-        toolCallId: draft.toolCallId ?? action.id,
-      });
-      if (admission.admitted) mutations += 1;
-    }
     for (const finding of result.findings ?? []) {
+      if (action.candidateId && finding.candidateId !== action.candidateId) {
+        engine.trace.record("finding.rejected", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            candidateId: finding.candidateId,
+            expectedCandidateId: action.candidateId,
+            reason: "foreign_candidate_id",
+          },
+        });
+        continue;
+      }
       try {
-        engine.addFinding(finding);
-        mutations += 1;
+        const beforeFindingCount = engine.snapshot().findings.length;
+        const admittedFinding = engine.addFinding(finding);
+        if (engine.snapshot().findings.length > beforeFindingCount) {
+          mutations += 1;
+          actionMutations += 1;
+          const findingNodeAdmission = admitGraphNode(graph, {
+            kind: "finding",
+            label: admittedFinding.title,
+            status: "verified",
+            sourceTier: entry.sourceTier,
+            sourceLaneId: entry.sourceLaneId,
+            frontierEntryId: entry.id,
+            actionId: action.id,
+            candidateId: admittedFinding.candidateId,
+            findingId: admittedFinding.id,
+            data: {
+              category: admittedFinding.category,
+              confidence: admittedFinding.confidence.score,
+            },
+            dedupeEntityKey: `finding:${admittedFinding.id}`,
+          }, engine.ids, engine.clock.now());
+          graph = findingNodeAdmission.graph;
+          recordSearchEvents(engine, findingNodeAdmission.events, spanId);
+          for (const evidenceId of [...admittedFinding.evidenceIds, ...admittedFinding.counterEvidenceIds]) {
+            const evidenceNode = graph.nodes.find((node) => node.evidenceId === evidenceId);
+            if (!evidenceNode) continue;
+            const findingEdge = admitGraphEdge(graph, {
+              fromNodeId: evidenceNode.id,
+              toNodeId: findingNodeAdmission.value.id,
+              kind: "grounds",
+              status: "verified",
+              frontierEntryId: entry.id,
+              actionId: action.id,
+              edgeCost: 0.03,
+              pathCost: entry.pathCost + 0.19,
+            }, engine.ids, engine.clock.now());
+            graph = findingEdge.graph;
+            recordSearchEvents(engine, findingEdge.events, spanId);
+          }
+        }
       } catch (error) {
         engine.trace.record("finding.rejected", {
           phase: engine.phase,
@@ -774,6 +1431,7 @@ async function executeActions(
       status: actionTraceStatus(result.status),
       payload: {
         actionId: action.id,
+        frontierEntryId: action.frontierEntryId,
         resultStatus: result.status,
         incomplete: result.meta?.incomplete ?? false,
         evidenceProposed: result.evidence?.length ?? 0,
@@ -799,8 +1457,65 @@ async function executeActions(
           : undefined,
       },
     });
+    const frontierStatus: Extract<SearchGraphStatus, "verified" | "rejected" | "exhausted"> =
+      actionMutations > 0
+        ? "verified"
+        : result.status === "failed"
+          ? "rejected"
+          : "exhausted";
+    const outcome = recordFrontierOutcome(graph, entry, frontierStatus, engine.clock.now());
+    graph = outcome.graph;
+    // The tool span is closed above after all tool-derived trust mutations are
+    // admitted. Frontier bookkeeping is a scheduler concern, so it must not be
+    // attached to the now-closed span.
+    recordSearchEvents(engine, outcome.events);
+
+    if (actionMutations === 0) {
+      const gapNodeAdmission = admitGraphNode(graph, {
+        kind: "gap",
+        label: result.diagnostics?.[0]?.message ?? `${action.tool} produced no admissible evidence`,
+        status: frontierStatus,
+        sourceTier: entry.sourceTier,
+        sourceLaneId: entry.sourceLaneId,
+        frontierEntryId: entry.id,
+        actionId: action.id,
+        candidateId: action.candidateId ?? null,
+        data: { resultStatus: result.status },
+      }, engine.ids, engine.clock.now());
+      graph = gapNodeAdmission.graph;
+      recordSearchEvents(engine, gapNodeAdmission.events);
+      const gapEdgeAdmission = admitGraphEdge(graph, {
+        fromNodeId: actionNodeId,
+        toNodeId: gapNodeAdmission.value.id,
+        kind: "expands",
+        status: frontierStatus,
+        frontierEntryId: entry.id,
+        actionId: action.id,
+        edgeCost: 0.04,
+        pathCost: entry.pathCost + 0.09,
+      }, engine.ids, engine.clock.now());
+      graph = gapEdgeAdmission.graph;
+      recordSearchEvents(engine, gapEdgeAdmission.events);
+    }
   }
-  return mutations;
+
+  const mutationParent = executedEntries.find((entry) =>
+    entry.mutation === null
+    && frontierEntryById(graph, entry.id)?.status === "verified");
+  if (mutationParent) {
+    const mutation = await proposeBoundedMutation(
+      graph,
+      state.target,
+      mutationParent,
+      engine.ids,
+      engine.clock.now(),
+    );
+    graph = mutation.graph;
+    recordSearchEvents(engine, mutation.events);
+  }
+  assertSearchGraph(graph);
+  engine.replaceSearchGraph(graph);
+  return { mutations, graph, executedEntries };
 }
 
 async function synthesizeFindings(
@@ -887,15 +1602,105 @@ async function synthesizeFindings(
   }
 }
 
-function terminalizeFromStopDecision(
+function terminalGraphStatus(reason: NonNullable<ReturnType<typeof evaluateStop>["reason"]>): SearchGraph["status"] {
+  if (reason === "goal_satisfied") return "completed";
+  if (reason === "unsafe_request") return "blocked";
+  if (reason === "cancelled") return "canceled";
+  if (reason === "fatal_error" || reason === "configuration_error") return "failed";
+  return "exhausted";
+}
+
+function addTerminalReportNode(
   engine: InvestigationEngine,
+  graphValue: SearchGraph,
+  status: SearchGraph["status"],
+): SearchGraph {
+  let graph = cloneJson(graphValue);
+  if (graph.seedNodeId === null) return markSearchGraphTerminal(graph, status, engine.clock.now());
+  const reportNode = admitGraphNode(graph, {
+    kind: "report",
+    label: status === "completed" ? "Completed intelligence report" : "Bounded intelligence report",
+    status: status === "completed" ? "verified" : "exhausted",
+    data: {
+      candidateCount: engine.snapshot().candidates.length,
+      evidenceCount: engine.snapshot().evidence.length,
+      findingCount: engine.snapshot().findings.length,
+    },
+    dedupeEntityKey: `report:${engine.runId}`,
+  }, engine.ids, engine.clock.now());
+  graph = reportNode.graph;
+  recordSearchEvents(engine, reportNode.events);
+  const includedNodes = graph.nodes.filter((node) =>
+    node.id !== reportNode.value.id
+    && (node.kind === "candidate" || node.kind === "finding" || node.kind === "gap"));
+  for (const node of includedNodes) {
+    const edge = admitGraphEdge(graph, {
+      fromNodeId: node.id,
+      toNodeId: reportNode.value.id,
+      kind: "includes",
+      status: node.status,
+      edgeCost: 0.02,
+      pathCost: 0.02 + Math.max(1, node.ordinal) / 1_000_000,
+    }, engine.ids, engine.clock.now());
+    graph = edge.graph;
+    recordSearchEvents(engine, edge.events);
+  }
+  return markSearchGraphTerminal(graph, status, engine.clock.now());
+}
+
+function terminalizeWithGraph(
+  engine: InvestigationEngine,
+  graphValue: SearchGraph,
   decision: ReturnType<typeof evaluateStop>,
   options: StopEvaluationOptions = {},
-): void {
+): SearchGraph {
   if (!decision.allowed || !decision.reason) {
     throw new Error("cannot terminalize from a denied stop decision");
   }
+  const graph = addTerminalReportNode(engine, graphValue, terminalGraphStatus(decision.reason));
+  assertSearchGraph(graph);
+  engine.replaceSearchGraph(graph);
   engine.stopDecision(decision, options);
+  return graph;
+}
+
+function admitMissingFindingNodes(
+  engine: InvestigationEngine,
+  graphValue: SearchGraph,
+): SearchGraph {
+  let graph = cloneJson(graphValue);
+  for (const finding of engine.snapshot().findings) {
+    if (graph.nodes.some((node) => node.findingId === finding.id)) continue;
+    const findingNode = admitGraphNode(graph, {
+      kind: "finding",
+      label: finding.title,
+      status: "verified",
+      candidateId: finding.candidateId,
+      findingId: finding.id,
+      data: {
+        category: finding.category,
+        confidence: finding.confidence.score,
+      },
+      dedupeEntityKey: `finding:${finding.id}`,
+    }, engine.ids, engine.clock.now());
+    graph = findingNode.graph;
+    recordSearchEvents(engine, findingNode.events);
+    for (const evidenceId of [...finding.evidenceIds, ...finding.counterEvidenceIds]) {
+      const evidenceNode = graph.nodes.find((node) => node.evidenceId === evidenceId);
+      if (!evidenceNode) continue;
+      const edge = admitGraphEdge(graph, {
+        fromNodeId: evidenceNode.id,
+        toNodeId: findingNode.value.id,
+        kind: "grounds",
+        status: "verified",
+        edgeCost: 0.03,
+        pathCost: 0.03 + Math.max(1, findingNode.value.ordinal) / 1_000_000,
+      }, engine.ids, engine.clock.now());
+      graph = edge.graph;
+      recordSearchEvents(engine, edge.events);
+    }
+  }
+  return graph;
 }
 
 function pendingUpdates(
@@ -932,6 +1737,11 @@ export async function* runResearch(
     minimumFindings: options.minimumFindings,
     minimumIndependentSourceFamilies: options.minimumIndependentSourceFamilies,
   };
+  let graph = engine.snapshot().searchGraph;
+  let selectedEntries: SearchFrontierEntry[] = [];
+  let plannerDecision: PlannerDecision | null = null;
+  let turnMutations = 0;
+  let turnStarted = false;
   let traceCursor = 0;
 
   const emitPending = (): ResearchUpdate[] => {
@@ -942,170 +1752,320 @@ export async function* runResearch(
 
   for (const update of emitPending()) yield update;
 
-  try {
-    engine.transition("classify");
-    if (engine.snapshot().safety.level === "block") {
-      terminalizeFromStopDecision(engine, evaluateStop(engine.snapshot()));
-    } else {
-      engine.transition("plan");
+  const hasPendingFrontier = (): boolean => graph.frontier.some((entry) =>
+    entry.status === "queued" || entry.status === "mutated");
+
+  const finish = (
+    decision: ReturnType<typeof evaluateStop>,
+    stopOptions: StopEvaluationOptions = {},
+  ): void => {
+    graph = terminalizeWithGraph(engine, graph, decision, stopOptions);
+  };
+
+  const advanceToCalibrate = (): boolean => {
+    while (engine.status === "running" && engine.phase !== "calibrate") {
+      let next: ResearchPhase | undefined;
+      if (engine.phase === "plan") next = "discover";
+      else if (engine.phase === "discover") next = "separate_candidates";
+      else if (engine.phase === "separate_candidates") {
+        next = engine.snapshot().candidates.length > 0 ? "corroborate" : undefined;
+      } else if (engine.phase === "corroborate") next = "calibrate";
+      else return false;
+      if (!next || !canTransitionPhase(engine.phase, next)) return false;
+      engine.transition(next);
     }
-    for (const update of emitPending()) yield update;
+    return engine.phase === "calibrate";
+  };
 
-    while (engine.status === "running") {
-      if (options.signal?.aborted) {
-        terminalizeFromStopDecision(
-          engine,
-          evaluateStop(engine.snapshot(), { canceled: true }),
-          { canceled: true },
-        );
-        break;
-      }
-      if (!engine.canStartTurn()) {
-        const stop = evaluateStop(engine.snapshot());
-        if (stop.allowed) {
-          terminalizeFromStopDecision(engine, stop);
-          break;
+  const completeIfSatisfied = (): boolean => {
+    const decision = evaluateStop(engine.snapshot(), completionStopOptions);
+    if (!decision.allowed || decision.reason !== "goal_satisfied") return false;
+    if (!advanceToCalibrate()) return false;
+    if (engine.phase === "calibrate") engine.transition("report");
+    finish(decision, completionStopOptions);
+    return true;
+  };
+
+  try {
+    const harness = compileFrontierHarness({
+      classify: () => {
+        engine.transition("classify");
+        if (engine.snapshot().safety.level === "block") {
+          finish(evaluateStop(engine.snapshot()));
+          return { route: "terminal" };
         }
-        const next = naturalNextPhase(engine.snapshot());
-        if (next && canTransitionPhase(engine.phase, next)) {
-          engine.trace.record("phase.cap_reached", {
-            phase: engine.phase,
-            payload: { nextPhase: next },
-          });
-          engine.transition(next);
-          for (const update of emitPending()) yield update;
-          continue;
+        engine.transition("plan");
+        return { route: "seed_frontier" };
+      },
+
+      seedFrontier: () => {
+        const seeded = seedFrontier(
+          graph,
+          engine.snapshot().target,
+          availableTools,
+          engine.ids,
+          engine.clock.now(),
+        );
+        graph = seeded.graph;
+        recordSearchEvents(engine, seeded.events);
+        engine.replaceSearchGraph(graph);
+        return { route: "select_frontier" };
+      },
+
+      selectFrontier: () => {
+        if (options.signal?.aborted) {
+          finish(evaluateStop(engine.snapshot(), { canceled: true }), { canceled: true });
+          return { route: "terminal", selectedFrontierEntryIds: [] };
         }
-        terminalizeFromStopDecision(
-          engine,
-          evaluateStop(engine.snapshot(), { noLegalActions: true }),
-          { noLegalActions: true },
+        if (!engine.canStartTurn()) {
+          const stop = evaluateStop(engine.snapshot(), completionStopOptions);
+          if (stop.allowed) {
+            finish(stop, completionStopOptions);
+            return { route: "terminal", selectedFrontierEntryIds: [] };
+          }
+          const next = naturalNextPhase(engine.snapshot());
+          if (next && canTransitionPhase(engine.phase, next)) {
+            engine.trace.record("phase.cap_reached", {
+              phase: engine.phase,
+              payload: { nextPhase: next },
+            });
+            engine.transition(next);
+            if (engine.phase === "calibrate") return { route: "synthesize" };
+          } else {
+            finish(
+              evaluateStop(engine.snapshot(), { noLegalActions: true }),
+              { noLegalActions: true },
+            );
+            return { route: "terminal", selectedFrontierEntryIds: [] };
+          }
+        }
+
+        const state = engine.snapshot();
+        const remainingCalls = Math.max(0, state.budget.limits.maxToolCalls - state.budget.usage.toolCalls);
+        const limit = Math.min(
+          state.budget.limits.maxActionsPerTurn,
+          remainingCalls,
+          MAX_OUTBOUND_CONCURRENCY,
         );
-        break;
-      }
+        const selection = selectFrontierBatch(graph, limit, engine.clock.now());
+        graph = selection.graph;
+        selectedEntries = selection.value;
+        recordSearchEvents(engine, selection.events);
 
-      engine.beginTurn();
-      const before = engine.snapshot();
-      const decision = await invokePlanner(engine, dependencies, availableTools, options.signal);
-      let mutations = 0;
+        if (selectedEntries.length === 0) {
+          const strandedMutations = graph.frontier.filter((entry) =>
+            entry.status === "mutated" || entry.status === "queued");
+          if (strandedMutations.length > 0) {
+            graph = setFrontierStatus(
+              graph,
+              strandedMutations.map((entry) => entry.id),
+              "exhausted",
+              engine.clock.now(),
+            );
+            graph.status = "exhausted";
+            graph.telemetry.exhausted += strandedMutations.length;
+            engine.trace.record("frontier.exhausted", {
+              phase: engine.phase,
+              payload: {
+                reason: "remaining_entries_not_legal_under_budget_or_mutation_cap",
+                entryCount: strandedMutations.length,
+              },
+            });
+          }
+          engine.replaceSearchGraph(graph);
+          if (engine.snapshot().evidence.length > 0 && advanceToCalibrate()) {
+            return { route: "synthesize", selectedFrontierEntryIds: [] };
+          }
+          finish(
+            evaluateStop(engine.snapshot(), { noLegalActions: true }),
+            { noLegalActions: true },
+          );
+          return { route: "terminal", selectedFrontierEntryIds: [] };
+        }
 
-      if (options.signal?.aborted) {
-        engine.endTurn(false);
-        terminalizeFromStopDecision(
+        engine.replaceSearchGraph(graph);
+        engine.beginTurn();
+        turnStarted = true;
+        turnMutations = 0;
+        plannerDecision = null;
+        return {
+          route: "plan_expansion",
+          selectedFrontierEntryIds: selectedEntries.map((entry) => entry.id),
+          decision: null,
+          mutations: 0,
+        };
+      },
+
+      planExpansion: async () => {
+        plannerDecision = await invokePlanner(
           engine,
-          evaluateStop(engine.snapshot(), { canceled: true }),
-          { canceled: true },
+          dependencies,
+          availableTools,
+          selectedEntries,
+          options.signal,
         );
-        break;
-      }
+        if (plannerDecision.kind !== "actions") {
+          graph = requeueFrontier(
+            graph,
+            selectedEntries.map((entry) => entry.id),
+            engine.clock.now(),
+          );
+          engine.replaceSearchGraph(graph);
+        }
+        const route: FrontierHarnessRoute = plannerDecision.kind === "actions"
+          ? "execute_expansion"
+          : "assess";
+        return {
+          route,
+          decision: cloneJson(plannerDecision) as unknown as JsonObject,
+        };
+      },
 
-      if (decision.kind === "stop") {
-        engine.endTurn(false);
-        const stop = evaluateStop(engine.snapshot(), {
-          plannerRequested: true,
-          ...completionStopOptions,
-        });
-        if (stop.allowed) {
-          terminalizeFromStopDecision(engine, stop, {
+      executeExpansion: async () => {
+        if (!plannerDecision || plannerDecision.kind !== "actions") {
+          return { route: "admit_expand", mutations: 0 };
+        }
+        if (engine.phase === "plan") engine.transition("discover");
+        const batch = await executeActions(
+          engine,
+          dependencies,
+          plannerDecision.actions,
+          graph,
+          selectedEntries,
+          availableTools,
+          options.signal,
+        );
+        graph = batch.graph;
+        turnMutations += batch.mutations;
+        return { route: "admit_expand", mutations: turnMutations };
+      },
+
+      admitExpand: () => {
+        // executeActions admits settled results in selected-frontier order.
+        // This explicit node is the orchestration barrier before assessment.
+        assertSearchGraph(graph);
+        return { route: "assess", mutations: turnMutations };
+      },
+
+      assess: () => {
+        if (turnStarted) {
+          engine.endTurn(turnMutations > 0);
+          turnStarted = false;
+        }
+        if (options.signal?.aborted) {
+          finish(evaluateStop(engine.snapshot(), { canceled: true }), { canceled: true });
+          return { route: "terminal" };
+        }
+
+        if (plannerDecision?.kind === "stop") {
+          const stop = evaluateStop(engine.snapshot(), {
             plannerRequested: true,
             ...completionStopOptions,
           });
-        } else {
+          if (stop.allowed) {
+            finish(stop, { plannerRequested: true, ...completionStopOptions });
+            return { route: "terminal" };
+          }
           engine.trace.record("planner.stop_rejected", {
             phase: engine.phase,
             payload: { detail: stop.detail },
           });
-          const next = naturalNextPhase(engine.snapshot());
-          if (next && canTransitionPhase(engine.phase, next)) engine.transition(next);
         }
-      } else {
-        if (decision.kind === "actions") {
-          if (engine.phase === "plan") engine.transition("discover");
-          if (decision.actions.length > 0) {
-            mutations += await executeActions(
-              engine,
-              dependencies,
-              decision.actions,
-              availableTools,
-              options.signal,
-            );
-            if (options.signal?.aborted) {
-              engine.endTurn(mutations > 0);
-              terminalizeFromStopDecision(
-                engine,
-                evaluateStop(engine.snapshot(), { canceled: true }),
-                { canceled: true },
-              );
-              break;
-            }
+
+        const stop = evaluateStop(engine.snapshot(), completionStopOptions);
+        if (stop.allowed && stop.reason !== "goal_satisfied") {
+          finish(stop, completionStopOptions);
+          return { route: "terminal" };
+        }
+        if (stop.allowed && stop.reason === "goal_satisfied" && completeIfSatisfied()) {
+          return { route: "terminal" };
+        }
+        if (engine.phase === "calibrate") return { route: "synthesize" };
+
+        const requestedNext = plannerDecision?.kind === "advance"
+          ? plannerDecision.nextPhase
+          : undefined;
+        const next = requestedNext
+          && requestedNext !== "terminal"
+          && canTransitionPhase(engine.phase, requestedNext)
+          ? requestedNext
+          : naturalNextPhase(engine.snapshot());
+        if (next && canTransitionPhase(engine.phase, next)) {
+          engine.transition(next);
+          return { route: next === "calibrate" ? "synthesize" : "select_frontier" };
+        }
+        if (engine.phase === "report") {
+          finish(
+            evaluateStop(engine.snapshot(), { noLegalActions: true }),
+            { noLegalActions: true },
+          );
+          return { route: "terminal" };
+        }
+        return { route: "select_frontier" };
+      },
+
+      synthesize: async () => {
+        if (!advanceToCalibrate()) {
+          finish(
+            evaluateStop(engine.snapshot(), { noLegalActions: true }),
+            { noLegalActions: true },
+          );
+          return { route: "terminal" };
+        }
+        const synthesized = await synthesizeFindings(engine, dependencies, options.signal);
+        graph = admitMissingFindingNodes(engine, graph);
+        engine.replaceSearchGraph(graph);
+        if (turnStarted) {
+          engine.endTurn(turnMutations + synthesized > 0);
+          turnStarted = false;
+        }
+        if (options.signal?.aborted) {
+          finish(evaluateStop(engine.snapshot(), { canceled: true }), { canceled: true });
+          return { route: "terminal" };
+        }
+        if (completeIfSatisfied()) return { route: "terminal" };
+        const stop = evaluateStop(engine.snapshot(), completionStopOptions);
+        if (stop.allowed && stop.reason !== "goal_satisfied") {
+          finish(stop, completionStopOptions);
+          return { route: "terminal" };
+        }
+        if (hasPendingFrontier()) {
+          if (engine.phase === "calibrate" && canTransitionPhase("calibrate", "corroborate")) {
+            engine.transition("corroborate");
           }
+          return { route: "select_frontier" };
         }
+        finish(
+          evaluateStop(engine.snapshot(), { noLegalActions: true }),
+          { noLegalActions: true },
+        );
+        return { route: "terminal" };
+      },
+    });
 
-        if (engine.phase === "calibrate") {
-          mutations += await synthesizeFindings(engine, dependencies, options.signal);
-          if (options.signal?.aborted) {
-            engine.endTurn(mutations > 0);
-            terminalizeFromStopDecision(
-              engine,
-              evaluateStop(engine.snapshot(), { canceled: true }),
-              { canceled: true },
-            );
-            break;
-          }
-        }
-
-        const madeProgress =
-          mutations > 0 ||
-          engine.snapshot().candidates.length > before.candidates.length ||
-          engine.snapshot().evidence.length > before.evidence.length ||
-          engine.snapshot().findings.length > before.findings.length;
-        engine.endTurn(madeProgress);
-
-        const budgetStop = evaluateStop(engine.snapshot(), completionStopOptions);
-        if (budgetStop.allowed && budgetStop.reason !== "goal_satisfied") {
-          terminalizeFromStopDecision(engine, budgetStop, completionStopOptions);
-        } else {
-          const requestedNext = decision.kind === "advance" ? decision.nextPhase : undefined;
-          const next =
-            requestedNext &&
-            requestedNext !== "terminal" &&
-            canTransitionPhase(engine.phase, requestedNext)
-              ? requestedNext
-              : naturalNextPhase(engine.snapshot());
-
-          if (engine.phase === "report") {
-            terminalizeFromStopDecision(
-              engine,
-              evaluateStop(engine.snapshot(), { noLegalActions: true }),
-              { noLegalActions: true },
-            );
-          } else if (budgetStop.allowed && budgetStop.reason === "goal_satisfied") {
-            if (engine.phase === "calibrate") engine.transition("report");
-            engine.stopDecision(budgetStop, completionStopOptions);
-          } else if (next && canTransitionPhase(engine.phase, next)) {
-            engine.transition(next);
-          } else {
-            terminalizeFromStopDecision(
-              engine,
-              evaluateStop(engine.snapshot(), { noLegalActions: true }),
-              { noLegalActions: true },
-            );
-          }
-        }
-      }
-
+    const stream = await harness.stream(initialFrontierHarnessState(), {
+      streamMode: "updates",
+      recursionLimit: Math.max(80, engine.snapshot().budget.limits.maxTurns * 8 + 24),
+    });
+    for await (const chunk of stream) {
+      void chunk;
       for (const update of emitPending()) yield update;
+    }
+    if (engine.status === "running") {
+      graph = engine.snapshot().searchGraph;
+      graph = addTerminalReportNode(engine, graph, "failed");
+      engine.replaceSearchGraph(graph);
+      engine.stopExternal("fatal_error", "LangGraph ended before Atlas reached a legal terminal state.");
     }
     for (const update of emitPending()) yield update;
   } catch (error) {
     if (engine.status === "running") {
       if (options.signal?.aborted) {
-        terminalizeFromStopDecision(
-          engine,
-          evaluateStop(engine.snapshot(), { canceled: true }),
-          { canceled: true },
-        );
+        finish(evaluateStop(engine.snapshot(), { canceled: true }), { canceled: true });
       } else {
+        graph = engine.snapshot().searchGraph;
+        graph = addTerminalReportNode(engine, graph, "failed");
+        engine.replaceSearchGraph(graph);
         engine.stopExternal(
           "fatal_error",
           `Investigation failed: ${(safeError(error).message as string)}`,

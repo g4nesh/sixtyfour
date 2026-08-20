@@ -18,6 +18,7 @@ const validation = await vite.ssrLoadModule("/lib/domain/validation.ts");
 const traceContract = await vite.ssrLoadModule("/lib/agent/trace.ts");
 const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 const captureContract = await vite.ssrLoadModule("/scripts/capture-contract.ts");
+const search = await vite.ssrLoadModule("/lib/search/index.ts");
 
 const expectedIds = ["chris-anderson-ted", "linus-codegraph", "python-creator"];
 
@@ -39,7 +40,23 @@ function rawReplay(example) {
   });
 }
 
+const INVESTIGATION_TO_GRAPH_STATUS = {
+  running: "active",
+  completed: "completed",
+  blocked: "blocked",
+  canceled: "canceled",
+  failed: "failed",
+  configuration_error: "failed",
+  partial: "exhausted",
+  ambiguous: "exhausted",
+};
+
 function syncTerminalReport(bundle) {
+  // Keep the canonical graph status consistent with the report status so a
+  // status mutation exercises the intended deeper legality check rather than
+  // tripping the schema-level status/graph-status match first.
+  const graphStatus = INVESTIGATION_TO_GRAPH_STATUS[bundle.output.status];
+  if (graphStatus) bundle.output.searchGraph.status = graphStatus;
   const terminal = bundle.trace.at(-1);
   assert.equal(terminal.name, "result.terminal");
   terminal.payload.report = structuredClone(bundle.output);
@@ -86,9 +103,16 @@ test("example evidence uses only root-verified exact excerpts or canonical API p
   for (const id of expectedIds) {
     const example = replay.getReplayExample(id);
     assert.equal(example.manifest.capturedAt, captureContract.VERIFIED_CAPTURED_AT);
-    assert.doesNotThrow(() => captureContract.assertVerifiedEvidenceContract(example.output.evidence));
+    const actionCaptureIds = Object.fromEntries(example.cassette.requests.map((request) =>
+      [request.id, request.captureId]));
+    assert.doesNotThrow(() => captureContract.assertVerifiedEvidenceContract(
+      example.output.evidence,
+      actionCaptureIds,
+    ));
     for (const evidence of example.output.evidence) {
-      const capture = captureContract.VERIFIED_PUBLIC_CAPTURES[evidence.toolCallId];
+      const request = example.cassette.requests.find((item) => item.id === evidence.toolCallId);
+      assert.ok(request, `${id} evidence ${evidence.id} lacks an action-bound cassette request`);
+      const capture = captureContract.VERIFIED_PUBLIC_CAPTURES[request.captureId];
       assert.ok(capture, `${id} evidence ${evidence.id} lacks a verified capture`);
       assert.equal(evidence.contentHash, `sha256:${capture.bodySha256}`);
       if (evidence.verificationMethod === "direct_fetch") {
@@ -102,8 +126,10 @@ test("example evidence uses only root-verified exact excerpts or canonical API p
       }
     }
     for (const request of example.cassette.requests) {
-      const capture = captureContract.VERIFIED_PUBLIC_CAPTURES[request.id];
-      assert.ok(capture, `${id} cassette request ${request.id} lacks a verified capture`);
+      assert.equal(request.id, request.actionId);
+      assert.equal(request.id, request.frontierEntryId);
+      const capture = captureContract.VERIFIED_PUBLIC_CAPTURES[request.captureId];
+      assert.ok(capture, `${id} cassette request ${request.captureId} lacks a verified capture`);
       assert.equal(request.response.bodySha256, capture.bodySha256);
       if (capture.requestFingerprint) {
         assert.equal(request.fingerprint, capture.requestFingerprint);
@@ -113,9 +139,9 @@ test("example evidence uses only root-verified exact excerpts or canonical API p
 
   const codegraph = replay.getReplayExample("linus-codegraph");
   const searchRequest = codegraph.cassette.requests.find((request) =>
-    request.id === "req-github-search");
+    request.captureId === "req-github-search");
   const commitRequest = codegraph.cassette.requests.find((request) =>
-    request.id === "req-github-commit");
+    request.captureId === "req-github-commit");
   const strongestSha = searchRequest.response.canonicalSubset.strongest_sha;
   assert.equal(strongestSha, captureContract.VERIFIED_GITHUB_STRONGEST_SHA);
   assert.equal(commitRequest.response.canonicalSubset.sha, strongestSha);
@@ -151,6 +177,118 @@ test("replays are canonical byte-stable and require no outbound fetch", () => {
   }
 });
 
+test("synchronous replay SHA-256 draws equal independent Web Crypto digests", async () => {
+  for (const seed of [
+    "replay-linus-codegraph-v2|torvalds@linux-foundation.org|action_fixture|0|strategy",
+    "Atlas deterministic mutation draw — UTF-8",
+  ]) {
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(seed),
+    ));
+    const high = (digest[0] * 0x1000000)
+      + (digest[1] << 16)
+      + (digest[2] << 8)
+      + digest[3];
+    const low = ((digest[4] << 16) | (digest[5] << 8) | digest[6]) >>> 0;
+    const expected = (high * 0x200000 + (low & 0x1fffff) + 0.5)
+      / 0x20000000000000;
+    assert.equal(search.deterministicSha256UnitSync(seed), expected);
+  }
+});
+
+test("replays retain the canonical best-first execution graph and source hierarchy", () => {
+  for (const id of expectedIds) {
+    const example = replay.getReplayExample(id);
+    const graph = example.output.searchGraph;
+    assert.equal(example.output.schemaVersion, 2);
+    assert.match(example.output.runId, /-v2$/);
+    assert.equal(graph.schemaVersion, 2);
+    assert.equal(graph.status, "completed");
+    assert.ok(graph.seedNodeId);
+    assert.ok(graph.nodes.some((node) => node.id === graph.seedNodeId && node.kind === "seed"));
+    assert.ok(graph.frontier.some((entry) => entry.status === "verified"));
+    assert.ok(graph.frontier.some((entry) => entry.status === "exhausted"));
+    assert.ok(graph.frontier.some((entry) => entry.status === "queued" || entry.status === "mutated"));
+    assert.ok(graph.frontier.some((entry) => entry.mutation));
+    for (const entry of graph.frontier) {
+      assert.equal(entry.id, entry.frontierEntryId);
+      assert.equal(entry.id, entry.actionId);
+      assert.ok(Number.isFinite(entry.edgeCost) && entry.edgeCost > 0);
+      assert.ok(Number.isFinite(entry.pathCost) && entry.pathCost > 0);
+    }
+    for (const edge of graph.edges) {
+      assert.ok(Number.isFinite(edge.edgeCost) && edge.edgeCost > 0);
+      assert.ok(Number.isFinite(edge.pathCost) && edge.pathCost > 0);
+    }
+    for (const evidence of example.output.evidence) {
+      const action = graph.frontier.find((entry) => entry.id === evidence.toolCallId);
+      assert.ok(action, `${id} evidence ${evidence.id} has no frontier action`);
+      const evidenceNode = graph.nodes.find((node) => node.evidenceId === evidence.id);
+      assert.equal(evidenceNode.actionId, action.id);
+      assert.equal(evidenceNode.frontierEntryId, action.id);
+    }
+    const eventNames = new Set(example.trace.map((event) => event.name));
+    for (const name of [
+      "frontier.seeded",
+      "frontier.enqueued",
+      "frontier.selected",
+      "frontier.expanded",
+      "source.tier_advanced",
+      "mutation.proposed",
+      "graph.node_admitted",
+      "graph.edge_admitted",
+      "graph.completed",
+    ]) {
+      assert.ok(eventNames.has(name), `${id} trace is missing ${name}`);
+    }
+    assert.ok(eventNames.has("mutation.accepted") || eventNames.has("mutation.rejected"));
+  }
+
+  const linus = replay.getReplayExample("linus-codegraph");
+  const captureEntry = (captureId) => {
+    const request = linus.cassette.requests.find((item) => item.captureId === captureId);
+    return linus.output.searchGraph.frontier.find((entry) => entry.id === request.id);
+  };
+  assert.equal(captureEntry("req-github-search").sourceLaneId, "t0.explicit_email_codegraph");
+  assert.equal(captureEntry("req-linux-doc").sourceLaneId, "t2.structured_professional");
+  assert.equal(captureEntry("req-linux-foundation").sourceLaneId, "t1.first_party");
+  assert.equal(captureEntry("req-github-commit").sourceLaneId, "t2.structured_professional");
+  assert.equal(captureEntry("req-keybase").status, "exhausted");
+  assert.equal(linus.output.searchGraph.telemetry.mutationToolCalls, 0);
+  const acceptedMutation = linus.output.searchGraph.frontier.find((entry) => entry.mutation);
+  assert.equal(acceptedMutation.status, "mutated");
+  assert.equal(linus.trace.some((event) =>
+    event.kind === "span_start" && event.payload.actionId === acceptedMutation.id), false);
+  for (const toolSpan of linus.trace.filter((event) =>
+    event.kind === "span_start" && event.name.startsWith("tool."))) {
+    const entry = linus.output.searchGraph.frontier.find((item) =>
+      item.id === toolSpan.payload.actionId);
+    assert.ok(entry.allowedTools.includes(toolSpan.name.slice("tool.".length)));
+  }
+
+  const chris = replay.getReplayExample("chris-anderson-ted");
+  const chrisGraph = chris.output.searchGraph;
+  const candidateNodes = chrisGraph.nodes.filter((node) => node.kind === "candidate");
+  assert.equal(candidateNodes.length, 2);
+  assert.ok(candidateNodes.some((node) => node.status === "rejected"));
+  assert.ok(chrisGraph.edges.some((edge) => edge.kind === "separates" && edge.status === "rejected"));
+  const chrisCaptureLane = (captureId) => {
+    const request = chris.cassette.requests.find((item) => item.captureId === captureId);
+    return chrisGraph.frontier.find((entry) => entry.id === request.id).sourceLaneId;
+  };
+  assert.equal(chrisCaptureLane("req-ted-selected"), "t1.first_party");
+  assert.equal(chrisCaptureLane("req-ted-decoy"), "t3.institutional");
+  assert.equal(chrisCaptureLane("req-wired-decoy"), "t4.reputable_media");
+
+  const python = replay.getReplayExample("python-creator").output;
+  assert.equal(python.target.kind, "role_query");
+  assert.deepEqual(
+    [...new Set(python.searchGraph.frontier.map((entry) => entry.sourceLaneId))].sort(),
+    ["t1.first_party", "t3.institutional", "t6.general_discovery"],
+  );
+});
+
 test("schema guards reject invalid report enums, identity objects, trace phases, and usage", () => {
   const example = replay.getReplayExample("python-creator");
   assert.equal(validation.isInvestigationReport(example.output), true);
@@ -166,6 +304,22 @@ test("schema guards reject invalid report enums, identity objects, trace phases,
   const invalidIdentity = structuredClone(example.output);
   invalidIdentity.identity = {};
   assert.equal(validation.isInvestigationReport(invalidIdentity), false);
+  const malformedGraph = structuredClone(example.output);
+  malformedGraph.searchGraph = {
+    schemaVersion: 2,
+    nodes: [],
+    edges: [],
+    frontier: [],
+    selectedFrontierEntryIds: [],
+    telemetry: {},
+  };
+  assert.equal(validation.isInvestigationReport(malformedGraph), false);
+  const mismatchedGraphRun = structuredClone(example.output);
+  mismatchedGraphRun.searchGraph.runId = "other-run";
+  assert.equal(validation.isInvestigationReport(mismatchedGraphRun), false);
+  const mismatchedGraphStatus = structuredClone(example.output);
+  mismatchedGraphStatus.searchGraph.status = "blocked";
+  assert.equal(validation.isInvestigationReport(mismatchedGraphStatus), false);
 
   const clampedMarginReport = structuredClone(example.output);
   const selected = clampedMarginReport.identity.selectedCandidate;
@@ -249,7 +403,7 @@ test("replay hydration fails closed on report graph, run, sequence, and span cor
   assert.equal(validation.isEvidenceRecord(directFetch), false);
   assert.throws(
     () => replay.validateReplayBundle("python-creator", missingDirectExcerpt),
-    /output\.json does not match InvestigationReport v1/i,
+    /output\.json does not match InvestigationReport schema v2/i,
   );
 
   const graph = rawReplay(example);
@@ -348,6 +502,155 @@ test("replay hydration fails closed on report graph, run, sequence, and span cor
   }
 });
 
+test("replay hydration rejects execution-graph cost, tier, mutation, candidate, and action corruption", () => {
+  const python = replay.getReplayExample("python-creator");
+
+  const dangling = rawReplay(python);
+  dangling.output.searchGraph.edges[0].toNodeId = "missing_graph_node";
+  syncTerminalReport(dangling);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", dangling),
+    /InvestigationReport schema v2|dangling_edge|dangling/i,
+  );
+
+  const forgedCost = rawReplay(python);
+  const leaf = forgedCost.output.searchGraph.frontier.find((entry) =>
+    entry.sourceLaneId === "t6.general_discovery");
+  const expansion = forgedCost.output.searchGraph.edges.find((edge) =>
+    edge.frontierEntryId === leaf.id && edge.toNodeId === leaf.nodeId);
+  leaf.edgeCost += 0.125;
+  leaf.pathCost += 0.125;
+  expansion.edgeCost = leaf.edgeCost;
+  expansion.pathCost = leaf.pathCost;
+  syncTerminalReport(forgedCost);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", forgedCost),
+    /forged edge cost|schema v2/i,
+  );
+
+  const tierSkip = rawReplay(replay.getReplayExample("linus-codegraph"));
+  const firstSelection = tierSkip.trace.find((event) => event.name === "frontier.selected");
+  const skippedTo = tierSkip.output.searchGraph.frontier.find((entry) =>
+    entry.sourceLaneId === "t1.first_party" && entry.parentFrontierEntryId === null);
+  firstSelection.payload.frontierEntryId = skippedTo.id;
+  firstSelection.payload.actionId = skippedTo.id;
+  firstSelection.payload.sourceTier = skippedTo.sourceTier;
+  firstSelection.payload.sourceLaneId = skippedTo.sourceLaneId;
+  firstSelection.payload.edgeCost = skippedTo.edgeCost;
+  firstSelection.payload.pathCost = skippedTo.pathCost;
+  firstSelection.payload.depth = skippedTo.depth;
+  assert.throws(
+    () => replay.validateReplayBundle("linus-codegraph", tierSkip),
+    /selected ahead of a lower-cost legal entry/i,
+  );
+
+  const illegalLaneTier = rawReplay(python);
+  illegalLaneTier.output.searchGraph.frontier[0].sourceTier = 6;
+  syncTerminalReport(illegalLaneTier);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", illegalLaneTier),
+    /InvestigationReport schema v2|forges its source tier|illegal_source_lane/i,
+  );
+
+  const mutationMath = rawReplay(python);
+  const mutation = mutationMath.output.searchGraph.frontier.find((entry) => entry.mutation);
+  mutation.mutation.acceptanceProbability = 0.123456;
+  syncTerminalReport(mutationMath);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", mutationMath),
+    /canonical deterministic proposal|Metropolis-Hastings math|trace calculation/i,
+  );
+
+  const chris = rawReplay(replay.getReplayExample("chris-anderson-ted"));
+  const selectedCandidateId = chris.output.identity.selectedCandidateId;
+  const decoyCandidateId = chris.output.candidates.find((candidate) =>
+    candidate.id !== selectedCandidateId).id;
+  const selectedEvidenceNode = chris.output.searchGraph.nodes.find((node) =>
+    node.kind === "evidence" && node.candidateId === selectedCandidateId);
+  const selectedCandidateNode = chris.output.searchGraph.nodes.find((node) =>
+    node.kind === "candidate" && node.candidateId === selectedCandidateId);
+  const decoyCandidateNode = chris.output.searchGraph.nodes.find((node) =>
+    node.kind === "candidate" && node.candidateId === decoyCandidateId);
+  const crossCandidateEdge = chris.output.searchGraph.edges.find((edge) =>
+    edge.fromNodeId === selectedEvidenceNode.id && edge.toNodeId === selectedCandidateNode.id);
+  crossCandidateEdge.toNodeId = decoyCandidateNode.id;
+  syncTerminalReport(chris);
+  assert.throws(
+    () => replay.validateReplayBundle("chris-anderson-ted", chris),
+    /crosses candidate ledgers|schema v2/i,
+  );
+
+  const actionMismatch = rawReplay(python);
+  const evidenceNode = actionMismatch.output.searchGraph.nodes.find((node) =>
+    node.kind === "evidence");
+  evidenceNode.actionId = actionMismatch.output.searchGraph.frontier.find((entry) =>
+    entry.id !== evidenceNode.actionId).id;
+  syncTerminalReport(actionMismatch);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", actionMismatch),
+    /action_evidence_join_mismatch|broken stable action join|does not match evidence tool call|not a canonical projection|schema v2/i,
+  );
+});
+
+test("replay hydration recomputes mutation draws and transformations instead of trusting mirrored fields", () => {
+  const example = replay.getReplayExample("python-creator");
+
+  const forgedDraw = rawReplay(example);
+  const drawEntry = forgedDraw.output.searchGraph.frontier.find((entry) => entry.mutation);
+  const forgedU = drawEntry.mutation.deterministicU === 0.25 ? 0.5 : 0.25;
+  drawEntry.mutation.deterministicU = forgedU;
+  for (const event of forgedDraw.trace.filter((item) =>
+    ["mutation.proposed", "mutation.accepted", "mutation.rejected"].includes(item.name)
+    && (item.payload.frontierEntryId === drawEntry.id
+      || item.payload.parentFrontierEntryId === drawEntry.mutation.parentFrontierEntryId))) {
+    event.payload.deterministicU = forgedU;
+  }
+  syncTerminalReport(forgedDraw);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", forgedDraw),
+    /canonical deterministic proposal/i,
+  );
+
+  const forgedStrategy = rawReplay(example);
+  const strategyEntry = forgedStrategy.output.searchGraph.frontier.find((entry) => entry.mutation);
+  strategyEntry.mutation.strategy = "random_magic";
+  for (const event of forgedStrategy.trace.filter((item) =>
+    ["mutation.proposed", "mutation.accepted", "mutation.rejected"].includes(item.name))) {
+    event.payload.strategy = "random_magic";
+  }
+  syncTerminalReport(forgedStrategy);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", forgedStrategy),
+    /InvestigationReport schema v2|invalid_mutation_metadata/i,
+  );
+
+  const forgedTransformation = rawReplay(example);
+  const transformedEntry = forgedTransformation.output.searchGraph.frontier.find((entry) => entry.mutation);
+  transformedEntry.queryHint = "unrelated query chosen after seeing the replay";
+  const transformedNode = forgedTransformation.output.searchGraph.nodes.find((node) =>
+    node.id === transformedEntry.nodeId);
+  transformedNode.data.queryHint = transformedEntry.queryHint;
+  syncTerminalReport(forgedTransformation);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", forgedTransformation),
+    /canonical deterministic proposal/i,
+  );
+});
+
+test("replay hydration requires every frontier-linked tool span to be lane-allowed", () => {
+  const forged = rawReplay(replay.getReplayExample("python-creator"));
+  const start = forged.trace.find((event) =>
+    event.kind === "span_start" && event.name.startsWith("tool."));
+  const end = forged.trace.find((event) =>
+    event.kind === "span_end" && event.spanId === start.spanId);
+  start.name = "tool.mutation_frontier_policy";
+  end.name = start.name;
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", forged),
+    /outside frontier .* allowedTools/i,
+  );
+});
+
 test("replay hydration enforces goal legality, empty gaps, and canonical terminal status", () => {
   const example = replay.getReplayExample("python-creator");
 
@@ -399,6 +702,13 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
       .map((id) => illegalAnchor.output.evidence.find((item) => item.id === id));
     finding.confidence = domain.assessConfidence(records);
   }
+  // Once the sole anchor is spoofable the identity no longer resolves; keep the
+  // recomputed identity consistent so the deeper goal-legality (stop-illegal)
+  // check is what rejects the still-"goal_satisfied" stop reason.
+  illegalAnchor.output.identity = domain.resolveIdentity(
+    illegalAnchor.output.candidates,
+    illegalAnchor.output.evidence,
+  );
   syncTerminalReport(illegalAnchor);
   assert.throws(
     () => replay.validateReplayBundle("chris-anderson-ted", illegalAnchor),
@@ -416,7 +726,7 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
   syncTerminalReport(forgedFamily);
   assert.throws(
     () => replay.validateReplayBundle("python-creator", forgedFamily),
-    /source URL or sourceFamily is not canonically derived/i,
+    /source URL or sourceFamily is not canonically derived|not grounded by same-candidate evidence/i,
   );
 
   const forgedConfidence = rawReplay(example);
@@ -434,7 +744,7 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
   syncTerminalReport(missingBodyHash);
   assert.throws(
     () => replay.validateReplayBundle("python-creator", missingBodyHash),
-    /content hash differs from its cassette response/i,
+    /content hash differs from its cassette response|not a canonical projection|schema v2/i,
   );
 
   const forgedQuote = rawReplay(example);
@@ -448,7 +758,7 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
   syncTerminalReport(forgedQuote);
   assert.throws(
     () => replay.validateReplayBundle("python-creator", forgedQuote),
-    /differs from its cassette evidence binding/i,
+    /differs from its cassette evidence binding|not grounded by same-candidate evidence/i,
   );
 });
 
@@ -556,7 +866,7 @@ test("same-name replay quarantines decoy evidence and Git replay preserves spoof
   const bioPhrase = sameName.identity.selectedCandidate.signals.find((signal) =>
     signal.kind === "bio_phrase");
   assert.equal(bioPhrase.value, "became the curator of the TED Conference in 2002");
-  assert.equal(bioPhrase.sourceFamily, undefined);
+  assert.equal(bioPhrase.sourceFamily, "ted.com");
 
   const codegraph = replay.getReplayExample("linus-codegraph").output;
   const git = codegraph.evidence.find((item) => item.sourceType === "code_commit");
@@ -574,7 +884,7 @@ test("health and example APIs expose replay readiness without leaking configurat
   const health = await api.handleApiRequest(new Request("https://atlas.test/api/health"), {});
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: "ok",
     service: "atlas-people-intelligence",
     replayReady: true,
@@ -596,7 +906,7 @@ test("health and example APIs expose replay readiness without leaking configurat
     },
   );
   assert.deepEqual(await enabledHealth.json(), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: "ok",
     service: "atlas-people-intelligence",
     replayReady: true,

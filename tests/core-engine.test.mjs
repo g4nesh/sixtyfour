@@ -198,7 +198,7 @@ test("runResearch enforces the phased graph and emits a replayable terminal repo
   const updates = [];
   for await (const update of agent.runResearch(
     {
-      schemaVersion: 1,
+      schemaVersion: domain.SCHEMA_VERSION,
       query: "Ada Lovelace, Analytical Engine",
       requestedDepth: "standard",
     },
@@ -219,7 +219,26 @@ test("runResearch enforces the phased graph and emits a replayable terminal repo
   assert.ok(completed.report.identity.runnerUpMargin >= 0);
   assert.equal(completed.report.coverage.independentSourceFamilyCount, 3);
   assert.equal(completed.report.telemetry.evidence.admitted, 3);
-  assert.equal(completed.report.usage.llmCalls, 7);
+  // The frontier terminates as soon as the admitted evidence satisfies the
+  // goal, so there is no redundant fourth planner turn before synthesis.
+  const modelSpanEnds = completed.trace.events.filter((event) =>
+    event.kind === "span_end"
+    && (event.name === "planner.decision"
+      || event.name === "synthesis.findings"
+      || event.name.startsWith("tool.")));
+  assert.equal(
+    modelSpanEnds.filter((event) => event.name === "planner.decision").length,
+    3,
+  );
+  assert.equal(
+    modelSpanEnds.filter((event) => event.name === "synthesis.findings").length,
+    1,
+  );
+  assert.equal(completed.report.usage.llmCalls, 6);
+  assert.equal(
+    completed.report.usage.llmCalls,
+    modelSpanEnds.reduce((total, event) => total + (event.usage.llmCalls ?? 0), 0),
+  );
   assert.equal(completed.report.usage.toolCalls, 3);
   assert.equal(completed.report.usage.searchCalls, 1);
   assert.equal(completed.report.usage.evidenceAttempts, 3);
@@ -320,7 +339,7 @@ test("runResearch reports caller cancellation as a distinct terminal status", as
   assert.equal(plannerCalls, 0);
 });
 
-test("runResearch charges the final attempt and returns partial on budget exhaustion", async () => {
+test("runResearch stops safely without planning when no research tools are available", async () => {
   const clock = domain.createSequenceClock();
   const ids = domain.createDeterministicIdFactory("budgeted");
   let plannerCalls = 0;
@@ -334,22 +353,25 @@ test("runResearch charges the final attempt and returns partial on budget exhaus
         plannerCalls += 1;
         return {
           kind: "advance",
-          decisionSummary: "Advance after the only budgeted planner attempt.",
+          decisionSummary: "This planner must remain unreachable without a legal frontier.",
         };
       },
       executeAction: async () => ({ status: "skipped" }),
     },
-    { budget: { maxTurns: 1 } },
+    { budget: { maxTurns: 1 }, availableTools: [] },
   )) {
     updates.push(update);
   }
   const completed = updates.at(-1);
   assert.equal(completed.report.status, "partial");
-  assert.equal(completed.report.stop.reason, "budget_exhausted");
-  assert.ok(completed.report.stop.detail.includes("turns"));
-  assert.equal(completed.report.usage.turns, 1);
-  assert.equal(completed.report.usage.llmCalls, 1);
-  assert.equal(plannerCalls, 1);
+  assert.equal(completed.report.stop.reason, "no_legal_actions");
+  assert.equal(completed.report.usage.turns, 0);
+  assert.equal(completed.report.usage.llmCalls, 0);
+  assert.equal(plannerCalls, 0);
+  assert.equal(
+    completed.trace.events.some((event) => event.name === "planner.decision"),
+    false,
+  );
 });
 
 test("runResearch hard-caps outbound concurrency at four and preserves unknown transport telemetry", async () => {
@@ -359,15 +381,16 @@ test("runResearch hard-caps outbound concurrency at four and preserves unknown t
   let maximumActive = 0;
   const updates = [];
   for await (const update of agent.runResearch(
-    { schemaVersion: 1, query: "Grace Hopper, US Navy", requestedDepth: "deep" },
+    { schemaVersion: domain.SCHEMA_VERSION, query: "Grace Hopper, US Navy", requestedDepth: "deep" },
     {
       clock,
       ids,
-      planner: async () => ({
+      planner: async ({ selectedFrontierEntries }) => ({
         kind: "actions",
         decisionSummary: "Run a bounded parallel discovery batch.",
-        actions: Array.from({ length: 6 }, (_, index) => ({
-          tool: "public_search",
+        actions: selectedFrontierEntries.map((entry, index) => ({
+          frontierEntryId: entry.id,
+          tool: entry.allowedTools[0],
           purpose: `Search lane ${index + 1}.`,
           arguments: { lane: index + 1 },
           budgetClass: "search",
@@ -382,7 +405,14 @@ test("runResearch hard-caps outbound concurrency at four and preserves unknown t
       },
     },
     {
-      availableTools: ["public_search"],
+      availableTools: [
+        "public_search_lane_1",
+        "public_search_lane_2",
+        "public_search_lane_3",
+        "public_search_lane_4",
+        "public_search_lane_5",
+        "public_search_lane_6",
+      ],
       budget: { maxTurns: 1 },
     },
   )) {
@@ -393,7 +423,7 @@ test("runResearch hard-caps outbound concurrency at four and preserves unknown t
   assert.equal(completed.report.usage.toolCalls, 4);
   assert.equal(completed.report.usage.networkRequests, 4);
   const toolEnds = completed.trace.events.filter(
-    (event) => event.kind === "span_end" && event.name === "tool.public_search",
+    (event) => event.kind === "span_end" && event.name.startsWith("tool.public_search_lane_"),
   );
   assert.equal(toolEnds.length, 4);
   assert.ok(toolEnds.every((event) => event.usage.bytesRead === null));
@@ -436,6 +466,7 @@ test("abort during in-flight synthesis closes the model span as canceled", async
     },
     {
       signal: controller.signal,
+      availableTools: ["public_search"],
       budget: { maxConsecutiveNoProgress: 10, maxTurns: 10 },
     },
   )) updates.push(update);

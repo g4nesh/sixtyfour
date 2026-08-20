@@ -15,6 +15,18 @@ import { parseTarget } from "../domain/target";
 import { evaluateStop, terminalStatusForStop } from "../domain/stopping";
 import { SCHEMA_VERSION, type InvestigationInput, type InvestigationReport, type InvestigationState, type JsonValue } from "../domain/types";
 import { isInvestigationInput, isInvestigationReport } from "../domain/validation";
+import {
+  calculateEdgeCost,
+  compareFrontierEntries,
+  deriveMutationProposal,
+  sourceLaneById,
+  validateSearchGraph,
+} from "../search";
+import {
+  VERIFIED_PUBLIC_CAPTURES,
+  assertVerifiedEvidenceContract,
+  type VerifiedRequestId,
+} from "../../scripts/capture-contract";
 
 import linusInput from "../../examples/linus-codegraph/input.json" with { type: "json" };
 import linusOutput from "../../examples/linus-codegraph/output.json" with { type: "json" };
@@ -154,6 +166,9 @@ function isCassetteRequest(value: unknown): boolean {
   if (!isRecord(value) || !isRecord(value.response)) return false;
   return (
     isNonEmptyString(value.id) &&
+    isNonEmptyString(value.captureId) &&
+    value.actionId === value.id &&
+    value.frontierEntryId === value.id &&
     isNonEmptyString(value.fingerprint) &&
     typeof value.response.status === "number" &&
     Number.isInteger(value.response.status) &&
@@ -266,7 +281,7 @@ function validateTrace(id: ReplayId, trace: TraceEvent[], output: InvestigationR
     .map((identifier) => identifier.normalizedValue));
   trace.forEach((event, index) => {
     if (!isTraceEvent(event, { allowedEmails })) {
-      fail(id, `trace[${index}] does not match TraceEvent v1`);
+      fail(id, `trace[${index}] does not match the current TraceEvent schema`);
     }
     if (event.seq !== index + 1) fail(id, `trace sequence is not contiguous at index ${index}`);
     if (event.runId !== output.runId) fail(id, `trace[${index}] has a foreign runId`);
@@ -338,6 +353,453 @@ function validateTrace(id: ReplayId, trace: TraceEvent[], output: InvestigationR
   }
   if (!jsonEqual(terminal.payload.report, output)) {
     fail(id, "terminal trace report does not byte-semantically match output.json");
+  }
+}
+
+const EXECUTION_COST_PRECISION = 1_000_000;
+
+function executionCost(value: number): number {
+  return Math.round(value * EXECUTION_COST_PRECISION) / EXECUTION_COST_PRECISION;
+}
+
+function payloadString(event: TraceEvent, key: string): string | null {
+  const value = event.payload[key];
+  return typeof value === "string" ? value : null;
+}
+
+function validateExecutionGraph(
+  id: ReplayId,
+  output: InvestigationReport,
+  trace: TraceEvent[],
+  cassette: ReplayCassette,
+): void {
+  const graph = output.searchGraph;
+  const sharedIssues = validateSearchGraph(graph);
+  if (sharedIssues.length > 0) {
+    fail(id, `search graph invariant failed: ${sharedIssues[0].code} at ${sharedIssues[0].path}`);
+  }
+  if (graph.runId !== output.runId) fail(id, "search graph has a foreign runId");
+  if (graph.status !== "completed") fail(id, "completed replay must retain a completed search graph");
+  if (graph.selectedFrontierEntryIds.length > 0) {
+    fail(id, "completed search graph retains selected frontier entries");
+  }
+  if (!graph.seedNodeId || !graph.nodes.some((node) => node.id === graph.seedNodeId)) {
+    fail(id, "search graph is missing its seed node");
+  }
+  if (graph.seed !== output.target.normalizedQuery) {
+    fail(id, "search graph seed differs from the parsed target");
+  }
+
+  const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
+  const frontier = new Map(graph.frontier.map((entry) => [entry.id, entry]));
+  const rootEntries = graph.frontier.filter((entry) => entry.parentFrontierEntryId === null);
+  for (const entry of graph.frontier) {
+    const lane = sourceLaneById(entry.sourceLaneId);
+    if (!lane) fail(id, `frontier ${entry.id} uses an unregistered source lane`);
+    if (entry.sourceTier !== lane.tier) {
+      fail(id, `frontier ${entry.id} forges its source tier`);
+    }
+    if (
+      entry.allowedTools.length === 0
+      || entry.allowedTools.some((tool) => !lane.allowedTools.includes(tool))
+    ) {
+      fail(id, `frontier ${entry.id} contains a tool outside its source lane`);
+    }
+    if (lane.requiresCandidate && entry.candidateId === null) {
+      fail(id, `frontier ${entry.id} skipped its candidate binding`);
+    }
+    if (lane.requiresExactCandidateUrl) {
+      try {
+        const url = new URL(entry.queryHint);
+        if (url.protocol !== "https:") throw new TypeError("not https");
+      } catch {
+        fail(id, `frontier ${entry.id} lacks the exact candidate HTTPS URL required by its lane`);
+      }
+    }
+    const expectedEdgeCost = calculateEdgeCost(entry.sourceTier, entry.depth, entry.utility);
+    if (entry.edgeCost !== expectedEdgeCost) {
+      fail(id, `frontier ${entry.id} has a forged edge cost`);
+    }
+    const parent = entry.parentFrontierEntryId
+      ? frontier.get(entry.parentFrontierEntryId)
+      : null;
+    if (entry.parentFrontierEntryId && !parent) {
+      fail(id, `frontier ${entry.id} references an absent parent frontier entry`);
+    }
+    if (entry.parentNodeId !== (parent?.nodeId ?? graph.seedNodeId)) {
+      fail(id, `frontier ${entry.id} parent node does not match its frontier parent`);
+    }
+    if (entry.depth !== (parent?.depth ?? -1) + 1) {
+      fail(id, `frontier ${entry.id} has a forged traversal depth`);
+    }
+    const expectedPathCost = executionCost((parent?.pathCost ?? 0) + entry.edgeCost);
+    if (entry.pathCost !== expectedPathCost) {
+      fail(id, `frontier ${entry.id} has a forged cumulative path cost`);
+    }
+    const node = nodes.get(entry.nodeId);
+    if (
+      !node
+      || node.frontierEntryId !== entry.id
+      || node.actionId !== entry.id
+      || node.sourceLaneId !== entry.sourceLaneId
+      || node.sourceTier !== entry.sourceTier
+      || node.candidateId !== entry.candidateId
+      || node.data.intent !== entry.intent
+      || node.data.queryHint !== entry.queryHint
+    ) {
+      fail(id, `frontier ${entry.id} does not match its graph node`);
+    }
+    const expansion = graph.edges.find((edge) =>
+      edge.fromNodeId === entry.parentNodeId
+      && edge.toNodeId === entry.nodeId
+      && edge.frontierEntryId === entry.id
+      && edge.actionId === entry.id
+      && edge.kind === (entry.mutation ? "mutates" : "expands"));
+    if (
+      !expansion
+      || expansion.edgeCost !== entry.edgeCost
+      || expansion.pathCost !== entry.pathCost
+    ) {
+      fail(id, `frontier ${entry.id} is missing its exact-cost expansion edge`);
+    }
+  }
+  if (rootEntries.some((entry) => entry.depth !== 0)) {
+    fail(id, "root frontier entries must have depth zero");
+  }
+
+  for (const node of graph.nodes) {
+    if (node.frontierEntryId === null && node.actionId === null) continue;
+    if (
+      node.frontierEntryId === null
+      || node.actionId !== node.frontierEntryId
+      || !frontier.has(node.frontierEntryId)
+    ) {
+      fail(id, `graph node ${node.id} has a broken stable action join`);
+    }
+  }
+  for (const edge of graph.edges) {
+    if (edge.frontierEntryId === null && edge.actionId === null) continue;
+    if (
+      edge.frontierEntryId === null
+      || edge.actionId !== edge.frontierEntryId
+      || !frontier.has(edge.frontierEntryId)
+    ) {
+      fail(id, `graph edge ${edge.id} has a broken stable action join`);
+    }
+  }
+
+  const nodePathCost = new Map<string, number>([[graph.seedNodeId, 0]]);
+  for (const entry of graph.frontier) nodePathCost.set(entry.nodeId, entry.pathCost);
+  for (const edge of [...graph.edges].sort((left, right) => left.ordinal - right.ordinal)) {
+    const sourcePath = nodePathCost.get(edge.fromNodeId);
+    if (sourcePath === undefined) {
+      fail(id, `graph edge ${edge.id} has no cost-resolved source node`);
+    }
+    const expectedPathCost = executionCost(sourcePath + edge.edgeCost);
+    if (edge.pathCost !== expectedPathCost) {
+      fail(id, `graph edge ${edge.id} has a forged cumulative path cost`);
+    }
+    if (!nodePathCost.has(edge.toNodeId)) nodePathCost.set(edge.toNodeId, edge.pathCost);
+    const from = nodes.get(edge.fromNodeId);
+    const to = nodes.get(edge.toNodeId);
+    if (!from || !to) fail(id, `graph edge ${edge.id} is dangling`);
+    if (
+      edge.kind !== "separates"
+      && from.candidateId !== null
+      && to.candidateId !== null
+      && from.candidateId !== to.candidateId
+    ) {
+      fail(id, `graph edge ${edge.id} crosses candidate ledgers`);
+    }
+    if (
+      edge.kind === "separates"
+      && (from.candidateId === null || to.candidateId === null || from.candidateId === to.candidateId)
+    ) {
+      fail(id, `graph separation edge ${edge.id} does not separate two candidates`);
+    }
+  }
+
+  const nodeAdmissionEvents = trace.filter((event) => event.name === "graph.node_admitted");
+  const edgeAdmissionEvents = trace.filter((event) => event.name === "graph.edge_admitted");
+  for (const node of graph.nodes) {
+    const events = nodeAdmissionEvents.filter((event) => payloadString(event, "nodeId") === node.id);
+    if (
+      events.length !== 1
+      || payloadString(events[0], "kind") !== node.kind
+      || payloadString(events[0], "frontierEntryId") !== node.frontierEntryId
+      || payloadString(events[0], "actionId") !== node.actionId
+    ) {
+      fail(id, `graph node ${node.id} disagrees with its admission trace`);
+    }
+  }
+  for (const edge of graph.edges) {
+    const events = edgeAdmissionEvents.filter((event) => payloadString(event, "edgeId") === edge.id);
+    if (
+      events.length !== 1
+      || payloadString(events[0], "fromNodeId") !== edge.fromNodeId
+      || payloadString(events[0], "toNodeId") !== edge.toNodeId
+      || payloadString(events[0], "kind") !== edge.kind
+      || events[0].payload.edgeCost !== edge.edgeCost
+      || events[0].payload.pathCost !== edge.pathCost
+    ) {
+      fail(id, `graph edge ${edge.id} disagrees with its admission trace`);
+    }
+  }
+
+  const queued = new Set<string>();
+  let completedTools = 0;
+  let completedMutationTools = 0;
+  let selectedCount = 0;
+  let expandedCount = 0;
+  let exhaustedCount = 0;
+  for (const event of trace) {
+    if (event.name === "frontier.enqueued") {
+      const frontierEntryId = payloadString(event, "frontierEntryId");
+      if (!frontierEntryId || !frontier.has(frontierEntryId)) {
+        fail(id, "frontier enqueue trace references an absent entry");
+      }
+      queued.add(frontierEntryId);
+      continue;
+    }
+    if (event.name === "mutation.rejected") {
+      const frontierEntryId = payloadString(event, "frontierEntryId");
+      if (frontierEntryId) queued.delete(frontierEntryId);
+      continue;
+    }
+    if (event.name === "frontier.selected") {
+      const frontierEntryId = payloadString(event, "frontierEntryId");
+      const selected = frontierEntryId ? frontier.get(frontierEntryId) : undefined;
+      if (!selected || !queued.has(selected.id)) {
+        fail(id, "frontier selection trace references a non-queued entry");
+      }
+      const executable = [...queued]
+        .map((entryId) => frontier.get(entryId))
+        .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+        .filter((entry) => {
+          if (!entry.mutation) return true;
+          return (completedMutationTools + 1) / (completedTools + 1)
+            <= 0.2 + Number.EPSILON;
+        });
+      const minimumTier = executable.length > 0
+        ? Math.min(...executable.map((entry) => entry.sourceTier))
+        : null;
+      const eligible = executable
+        .filter((entry) => entry.sourceTier === minimumTier)
+        .sort(compareFrontierEntries);
+      if (eligible[0]?.id !== selected.id) {
+        fail(id, `frontier ${selected.id} was selected ahead of a lower-cost legal entry`);
+      }
+      queued.delete(selected.id);
+      selectedCount += 1;
+      continue;
+    }
+    if (
+      (event.name === "frontier.expanded" || event.name === "frontier.exhausted")
+      && typeof event.payload.status === "string"
+    ) {
+      const frontierEntryId = payloadString(event, "frontierEntryId");
+      const entry = frontierEntryId ? frontier.get(frontierEntryId) : undefined;
+      if (!entry) fail(id, "frontier outcome trace references an absent entry");
+      completedTools += 1;
+      if (entry.mutation) completedMutationTools += 1;
+      if (event.name === "frontier.expanded") expandedCount += 1;
+      else exhaustedCount += 1;
+    }
+  }
+  if (
+    graph.telemetry.selected !== selectedCount
+    || graph.telemetry.toolCalls !== completedTools
+    || graph.telemetry.mutationToolCalls !== completedMutationTools
+    || graph.telemetry.expanded !== expandedCount
+    || graph.telemetry.exhausted !== exhaustedCount
+  ) {
+    fail(id, "search graph telemetry disagrees with frontier trace events");
+  }
+
+  const mutationEntries = graph.frontier.filter((entry) => entry.mutation !== null);
+  const proposedEvents = trace.filter((event) => event.name === "mutation.proposed");
+  const acceptedEvents = trace.filter((event) => event.name === "mutation.accepted");
+  const rejectedEvents = trace.filter((event) => event.name === "mutation.rejected");
+  const proposalIndexes = mutationEntries
+    .map((entry) => entry.mutation?.proposalIndex)
+    .sort((left, right) => (left ?? -1) - (right ?? -1));
+  if (
+    graph.mutationStep !== mutationEntries.length
+    || proposalIndexes.some((value, index) => value !== index)
+  ) {
+    fail(id, "mutation proposal indexes are not canonical and contiguous");
+  }
+  for (const entry of mutationEntries) {
+    const mutation = entry.mutation;
+    if (!mutation) continue;
+    const parent = frontier.get(mutation.parentFrontierEntryId);
+    if (!parent || entry.parentFrontierEntryId !== parent.id) {
+      fail(id, `mutation ${entry.id} has an invalid parent`);
+    }
+    const expected = deriveMutationProposal(graph, output.target, parent, mutation.proposalIndex);
+    if (
+      !expected
+      || mutation.strategy !== expected.strategy
+      || mutation.temperature !== expected.temperature
+      || mutation.logAcceptanceRatio !== expected.logAcceptanceRatio
+      || mutation.acceptanceProbability !== expected.acceptanceProbability
+      || mutation.deterministicU !== expected.deterministicU
+      || mutation.parentNeighborCount !== expected.parentNeighborCount
+      || mutation.candidateNeighborCount !== expected.candidateNeighborCount
+      || entry.sourceLaneId !== expected.candidateLane.id
+      || entry.sourceTier !== expected.candidateLane.tier
+      || !jsonEqual(entry.allowedTools, [...expected.candidateLane.allowedTools].sort())
+      || entry.candidateId !== parent.candidateId
+      || entry.queryHint !== expected.queryHint
+      || entry.intent !== expected.intent
+      || !jsonEqual(entry.utility, expected.utility)
+      || entry.edgeCost !== expected.candidateCost
+    ) {
+      fail(id, `mutation ${entry.id} differs from its canonical deterministic proposal`);
+    }
+    const accepted = expected.accepted;
+    const proposal = proposedEvents.find((event) =>
+      event.payload.proposalIndex === mutation.proposalIndex
+      && payloadString(event, "parentFrontierEntryId") === parent.id);
+    const result = [...acceptedEvents, ...rejectedEvents].find((event) =>
+      payloadString(event, "frontierEntryId") === entry.id);
+    if (
+      !proposal
+      || proposal.payload.strategy !== expected.strategy
+      || proposal.payload.fromSourceLaneId !== parent.sourceLaneId
+      || proposal.payload.toSourceLaneId !== expected.candidateLane.id
+      || proposal.payload.queryChanged !== (expected.queryHint !== parent.queryHint)
+      || proposal.payload.temperature !== mutation.temperature
+      || proposal.payload.logAcceptanceRatio !== mutation.logAcceptanceRatio
+      || proposal.payload.acceptanceProbability !== mutation.acceptanceProbability
+      || proposal.payload.deterministicU !== mutation.deterministicU
+      || proposal.payload.parentNeighborCount !== mutation.parentNeighborCount
+      || proposal.payload.candidateNeighborCount !== mutation.candidateNeighborCount
+      || !result
+      || result.name !== (accepted ? "mutation.accepted" : "mutation.rejected")
+      || result.payload.strategy !== expected.strategy
+      || result.payload.fromSourceLaneId !== parent.sourceLaneId
+      || result.payload.toSourceLaneId !== expected.candidateLane.id
+      || result.payload.queryChanged !== (expected.queryHint !== parent.queryHint)
+      || result.payload.acceptanceProbability !== expected.acceptanceProbability
+      || result.payload.deterministicU !== expected.deterministicU
+    ) {
+      fail(id, `mutation ${entry.id} disagrees with its trace calculation`);
+    }
+  }
+  if (
+    graph.telemetry.mutationsProposed !== proposedEvents.length
+    || graph.telemetry.mutationsAccepted !== acceptedEvents.length
+    || graph.telemetry.mutationsRejected !== rejectedEvents.length
+    || mutationEntries.length !== acceptedEvents.length + rejectedEvents.length
+  ) {
+    fail(id, "mutation telemetry disagrees with the execution graph");
+  }
+
+  const captureIds = new Set<string>();
+  const actionCaptureIds: Record<string, VerifiedRequestId> = {};
+  for (const request of cassette.requests) {
+    const actionId = request.id as string;
+    const captureId = request.captureId as string;
+    if (captureIds.has(captureId)) fail(id, `cassette captureId ${captureId} is duplicated`);
+    captureIds.add(captureId);
+    if (!(captureId in VERIFIED_PUBLIC_CAPTURES)) {
+      fail(id, `cassette captureId ${captureId} is not root-verified`);
+    }
+    const verifiedCaptureId = captureId as VerifiedRequestId;
+    const verifiedCapture = VERIFIED_PUBLIC_CAPTURES[verifiedCaptureId];
+    actionCaptureIds[actionId] = verifiedCaptureId;
+    const response = request.response as Record<string, unknown>;
+    if (response.bodySha256 !== verifiedCapture.bodySha256) {
+      fail(id, `cassette capture ${captureId} has a forged response hash`);
+    }
+    if (
+      "requestFingerprint" in verifiedCapture
+      && verifiedCapture.requestFingerprint
+      && request.fingerprint !== verifiedCapture.requestFingerprint
+    ) {
+      fail(id, `cassette capture ${captureId} has a forged request fingerprint`);
+    }
+    if (
+      "canonicalSubset" in verifiedCapture
+      && verifiedCapture.canonicalSubset
+      && !jsonEqual(response.canonicalSubset, verifiedCapture.canonicalSubset)
+    ) {
+      fail(id, `cassette capture ${captureId} has a forged canonical API subset`);
+    }
+    const entry = frontier.get(actionId);
+    if (!entry || entry.actionId !== actionId || entry.frontierEntryId !== actionId) {
+      fail(id, `cassette action ${actionId} has no stable frontier join`);
+    }
+    if (!["verified", "exhausted", "rejected"].includes(entry.status)) {
+      fail(id, `cassette action ${actionId} was never completed`);
+    }
+    const starts = trace.filter((event) =>
+      event.kind === "span_start"
+      && event.name.startsWith("tool.")
+      && payloadString(event, "actionId") === actionId
+      && payloadString(event, "captureId") === captureId);
+    const ends = trace.filter((event) =>
+      event.kind === "span_end"
+      && payloadString(event, "actionId") === actionId
+      && payloadString(event, "captureId") === captureId);
+    if (
+      starts.length !== 1
+      || ends.length !== 1
+      || starts[0].spanId !== ends[0].spanId
+      || payloadString(starts[0], "frontierEntryId") !== actionId
+      || payloadString(starts[0], "requestFingerprint") !== request.fingerprint
+    ) {
+      fail(id, `cassette capture ${captureId} disagrees with its tool trace`);
+    }
+  }
+  try {
+    assertVerifiedEvidenceContract(output.evidence, actionCaptureIds);
+  } catch {
+    fail(id, "report evidence differs from its root-verified capture projection");
+  }
+  for (const start of trace.filter((event) => event.kind === "span_start" && event.name.startsWith("tool."))) {
+    const actionId = payloadString(start, "actionId");
+    if (!actionId) fail(id, `tool span ${start.spanId} is missing its frontier action join`);
+    const entry = frontier.get(actionId);
+    if (
+      payloadString(start, "frontierEntryId") !== actionId
+      || !entry
+    ) {
+      fail(id, `tool span ${start.spanId} has a broken frontier action join`);
+    }
+    const toolName = start.name.slice("tool.".length);
+    if (!entry.allowedTools.includes(toolName)) {
+      fail(id, `tool span ${start.spanId} uses ${toolName} outside frontier ${entry.id} allowedTools`);
+    }
+    const captureId = payloadString(start, "captureId");
+    const capturedRequest = captureId
+      ? cassette.requests.find((request) =>
+        request.id === actionId && request.captureId === captureId)
+      : undefined;
+    if (!capturedRequest) {
+      fail(id, `tool span ${start.spanId} is not backed by a verified replay capture`);
+    }
+    const end = trace.find((event) =>
+      event.kind === "span_end" && event.spanId === start.spanId);
+    if (
+      !end
+      || payloadString(end, "actionId") !== actionId
+      || payloadString(end, "frontierEntryId") !== actionId
+      || end.name !== start.name
+    ) {
+      fail(id, `tool span ${start.spanId} does not preserve its frontier action join`);
+    }
+  }
+
+  const completed = trace.filter((event) => event.name === "graph.completed");
+  if (
+    completed.length !== 1
+    || completed[0].payload.status !== graph.status
+    || completed[0].payload.nodeCount !== graph.nodes.length
+    || completed[0].payload.edgeCount !== graph.edges.length
+  ) {
+    fail(id, "graph completion trace disagrees with the report graph");
   }
 }
 
@@ -445,7 +907,7 @@ function validateReportGraph(
   if (output.identity.status === "resolved" && output.identity.selectedCandidate === null) {
     fail(id, "resolved identity is missing a selected candidate");
   }
-  if (!jsonEqual(output.identity, resolveIdentity(output.candidates))) {
+  if (!jsonEqual(output.identity, resolveIdentity(output.candidates, output.evidence))) {
     fail(id, "identity selection or runner-up margin does not match candidate ranking");
   }
 
@@ -584,6 +1046,7 @@ function validateReportGraph(
       candidates: output.candidates,
       evidence: output.evidence,
       findings: output.findings,
+      searchGraph: output.searchGraph,
       openQuestions: [...output.coverage.gaps],
       evidenceTelemetry: output.telemetry.evidence,
       budget: {
@@ -604,8 +1067,8 @@ function validateReportGraph(
 
 /** Fail-closed hydration used by API, CLI, and tests before replay data is exposed. */
 export function validateReplayBundle(id: ReplayId, raw: RawReplay): ReplayExample {
-  if (!isInvestigationInput(raw.input)) fail(id, "input.json does not match InvestigationInput v1");
-  if (!isInvestigationReport(raw.output)) fail(id, "output.json does not match InvestigationReport v1");
+  if (!isInvestigationInput(raw.input)) fail(id, "input.json does not match InvestigationInput schema v2");
+  if (!isInvestigationReport(raw.output)) fail(id, "output.json does not match InvestigationReport schema v2");
   const canonicalTarget = parseTarget(raw.input);
   if (!jsonEqual(raw.output.target, canonicalTarget)) {
     fail(id, "report target does not match deterministic input parsing");
@@ -619,7 +1082,7 @@ export function validateReplayBundle(id: ReplayId, raw: RawReplay): ReplayExampl
     .map((identifier) => identifier.normalizedValue));
   if (!Array.isArray(raw.trace) || !raw.trace.every((event) =>
     isTraceEvent(event, { allowedEmails }))) {
-    fail(id, "trace.json contains an invalid TraceEvent v1");
+    fail(id, "trace.json contains an invalid TraceEvent schema v2 event");
   }
   if (!isReplayCassette(raw.cassette)) fail(id, "cassette.json does not match cassette v2");
   if (!isReplayManifest(raw.manifest, id)) fail(id, "manifest.json does not match its replay id");
@@ -640,6 +1103,7 @@ export function validateReplayBundle(id: ReplayId, raw: RawReplay): ReplayExampl
   }
   validateReportGraph(id, example.output, example.cassette);
   validateTrace(id, example.trace, example.output);
+  validateExecutionGraph(id, example.output, example.trace, example.cassette);
   return cloneJson(example);
 }
 

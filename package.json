@@ -12,14 +12,22 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && npm run test:unit",
     "test:unit": "node --experimental-strip-types --test tests/*.test.mjs",
+    "test:pdf": "ATLAS_PDF_SMOKE=1 node --experimental-strip-types --test tests/report-export.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "examples:generate": "node scripts/run-generator.mjs",
+    "report:example": "node scripts/render-example-report.mjs chris-anderson-ted",
     "verify": "npm run typecheck && npm run lint && npm test",
     "atlas": "node bin/run.mjs"
   },
   "dependencies": {
+    "@langchain/core": "1.2.8",
+    "@langchain/langgraph": "1.4.10",
+    "@react-pdf/renderer": "4.6.1",
+    "@xyflow/react": "12.11.3",
+    "elkjs": "0.12.0",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
@@ -44,6 +52,9 @@
     "vinext": "1.0.0-beta.2",
     "vite": "8.0.13",
     "wrangler": "4.92.0"
+  },
+  "overrides": {
+    "ws": "8.21.3"
   },
   "type": "module"
 }

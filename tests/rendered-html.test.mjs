@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const projectRoot = new URL("../", import.meta.url);
+
+async function listFiles(directory) {
+  const files = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const absolute = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory);
+    if (entry.isDirectory()) files.push(...await listFiles(absolute));
+    else files.push(absolute);
+  }
+  return files;
+}
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -25,22 +35,29 @@ async function render() {
   );
 }
 
-test("server-renders the Atlas investigation workspace", async () => {
+test("server-renders the black graph-first Atlas workspace", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<title>Atlas — People Intelligence<\/title>/i);
-  assert.match(html, /Investigate a person, not just a name\./);
-  assert.match(html, /Auditable public-source research/);
-  assert.match(html, /Email → codegraph/);
-  assert.match(html, /Same-name separation/);
-  assert.match(html, /Role-only resolution/);
-  assert.match(html, /class="view-tabs" role="group"/);
-  assert.match(html, /aria-pressed="true"/);
-  assert.match(html, /Public professional scope only/);
-  assert.match(html, /<main id="main-content"/);
+  assert.match(html, /class="atlas-shell"/);
+  assert.match(html, /Public-professional research input/);
+  assert.match(html, /Name, role, organization, work email, URL, handle, or publication/);
+  assert.match(html, /Replay/);
+  assert.match(html, /Live/);
+  assert.match(html, /Verified captures/);
+  assert.match(html, /Website source search hierarchy/);
+  assert.match(html, /Exact supplied public URL/);
+  assert.match(html, /Structured professional records/);
+  assert.match(html, /General web discovery/);
+  assert.match(html, /Canonical runtime graph/);
+  assert.match(html, /Graph unavailable for this capture/);
+  assert.match(html, /never invents a network from report prose/i);
+  assert.match(html, /Private contact and home-record research is blocked/);
+  assert.match(html, /<main id="graph-workspace"/);
+  assert.doesNotMatch(html, /Investigate a person, not just a name|class="codegraph"|class="dossier-panel"/i);
   assert.doesNotMatch(html, /Henry Wang|Illustrative public-source run|aria-valuenow="72"/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
@@ -74,10 +91,15 @@ test("built Worker image route fails closed when local bindings are absent", asy
   assert.equal(await response.text(), "Image binding unavailable");
 });
 
-test("removes the starter preview and preserves static accessibility foundations", async () => {
-  const [page, workbench, layout, css, packageJson] = await Promise.all([
+test("graph components preserve canonical state, accessible fallbacks, and client-only heavy libraries", async () => {
+  const [page, workbench, graphModel, workspace, canvas, inspector, report, layout, css, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/workbench.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/graph-model.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/graph-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/graph-canvas.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/node-inspector.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/report-sheet.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -88,33 +110,70 @@ test("removes the starter preview and preserves static accessibility foundations
   assert.doesNotMatch(layout, /codex-preview|Starter Project|favicon\.svg/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(page, /AtlasWorkbench/);
-  assert.match(workbench, /<label htmlFor="target">/);
-  assert.match(workbench, /aria-live|role="status"/);
-  assert.match(workbench, /aria-describedby="target-help"/);
-  assert.match(workbench, /className="view-tabs" role="group"/);
-  assert.match(workbench, /aria-pressed=\{activeTab === tab\}/);
-  assert.doesNotMatch(workbench, /role="tab(?:list|panel)?"/);
-  assert.match(workbench, /role="region" aria-labelledby="tab-dossier"/);
-  assert.match(workbench, /ArrowRight/);
-  assert.match(workbench, /Sanitized arguments/);
+  assert.match(workbench, /<label className="sr-only" htmlFor="atlas-query">/);
+  assert.match(workbench, /aria-live="polite"/);
+  assert.match(workbench, /aria-describedby="research-scope-note"/);
   assert.match(workbench, /AbortController/);
   assert.match(workbench, /\/api\/research/);
+  assert.match(workbench, /mergeGraphEvent/);
+  assert.match(workbench, /graphFromReport/);
+  assert.match(workbench, /eventStableId/);
   assert.doesNotMatch(workbench, /Henry Wang|fake live|dangerouslySetInnerHTML/i);
-  assert.match(workbench, /\.filter\(\(item\) => !candidateId \|\| item\.candidateId === candidateId\)/);
-  assert.match(workbench, /onClick=\{focusEvidence\}/);
-  assert.match(workbench, /if \(nextMode === mode\) return/);
-  assert.match(workbench, /Live mode is disabled or missing server configuration/);
-  assert.match(workbench, /server setup/);
-  assert.match(workbench, /"report", "terminal"/);
-  assert.match(workbench, /exact source excerpts or canonical API claims/);
-  assert.match(workbench, /Canonical API claim/);
-  assert.match(workbench, /elapsed since run start/);
-  assert.match(workbench, /`t\+\$\{/);
-  assert.match(css, /:focus-visible/);
-  assert.match(css, /\.canonical-claim/);
-  assert.match(css, /grid-template-columns:\s*repeat\(9, 1fr\)/);
-  assert.match(css, /grid-template-columns:\s*repeat\(3, 1fr\)/);
+  assert.match(workbench, /event\.key\.toLowerCase\(\) === "f"/);
+  assert.match(workbench, /event\.key\.toLowerCase\(\) === "l"/);
+  assert.match(workbench, /event\.key\.toLowerCase\(\) === "t"/);
+  assert.match(workbench, /event\.key\.toLowerCase\(\) === "r"/);
+  assert.doesNotMatch(workbench, /@xyflow\/react|elkjs/);
+
+  assert.match(graphModel, /value\.schemaVersion !== 2/);
+  assert.match(graphModel, /report\.searchGraph/);
+  assert.doesNotMatch(graphModel, /report\.candidates|report\.evidence|report\.findings/);
+  assert.match(workspace, /dynamic\(/);
+  assert.match(workspace, /ssr: false/);
+  assert.match(workspace, /graph\.nodes\.map/);
+  assert.match(workspace, /graph\.edges\.filter/);
+  assert.match(workspace, /rejected same-name candidates remain visible/i);
+  assert.match(canvas, /@xyflow\/react/);
+  assert.match(canvas, /import\("elkjs\/lib\/elk\.bundled\.js"\)/);
+  assert.match(canvas, /deterministicPositions/);
+  assert.match(canvas, /nodesFocusable=\{false\}/);
+  assert.match(inspector, /nodeRelationships/);
+  assert.match(report, /candidates\.map/);
+  assert.doesNotMatch(report, /selectedCandidate.*filter|candidateId.*filter/);
+
+  assert.match(css, /--atlas-bg:\s*#030604/);
+  assert.match(css, /\.atlas-shell/);
+  assert.match(css, /\.graph-list-view/);
+  assert.match(css, /\.status-rejected/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.match(css, /@media \(max-width: (?:680|900)px\)/);
-  assert.match(css, /@media \(max-width: (?:390|410)px\)/);
+  assert.match(css, /prefers-contrast:\s*more/);
+  assert.match(css, /@media \(max-width: 700px\)/);
+  assert.match(css, /@media \(max-width: 400px\)/);
+});
+
+test("browser-only graph and PDF libraries stay out of the Worker module graph", async () => {
+  const serverRoot = new URL("../dist/server/", import.meta.url);
+  const serverFiles = await listFiles(serverRoot);
+  const forbiddenChunk = /^(?:pdf-download\.client|elk\.bundled|graph-canvas)-/;
+  assert.deepEqual(
+    serverFiles.filter((file) => forbiddenChunk.test(file.pathname.split("/").at(-1) ?? "")),
+    [],
+  );
+
+  const serverJavaScript = (
+    await Promise.all(
+      serverFiles
+        .filter((file) => /\.(?:js|mjs)$/.test(file.pathname))
+        .map((file) => readFile(file, "utf8")),
+    )
+  ).join("\n");
+  assert.doesNotMatch(serverJavaScript, /@react-pdf\/renderer|@xyflow\/react/);
+  assert.doesNotMatch(serverJavaScript, /data:application\/octet-stream;base64,AGFzb/);
+
+  const clientManifest = JSON.parse(
+    await readFile(new URL("../dist/client/.vite/manifest.json", import.meta.url), "utf8"),
+  );
+  assert.equal(Boolean(clientManifest["app/report/pdf-download.client.tsx"]), true);
+  assert.equal(Boolean(clientManifest["app/components/graph-canvas.tsx"]), true);
+  assert.equal(Boolean(clientManifest["node_modules/elkjs/lib/elk.bundled.js"]), true);
 });

@@ -3,6 +3,7 @@ import { cloneJson, isJsonValue } from "../domain/runtime";
 import { SCHEMA_VERSION, type JsonObject, type JsonValue, type ResearchPhase } from "../domain/types";
 import {
   containsRestrictedPublicContent,
+  isCompactPhoneNumberValue,
   redactRestrictedPublicContent,
   type ContentPolicyOptions,
   isRestrictedUrlQueryKey,
@@ -317,6 +318,7 @@ function containsForbiddenContentKey(
   if (Array.isArray(value)) {
     return value.some((item) => containsForbiddenContentKey(item, key, options));
   }
+  if (isCompactPhoneNumberValue(value)) return true;
   if (typeof value === "string") {
     const urlRedacted = redactCredentialQueryParams(value);
     if (urlRedacted !== value) return true;
@@ -369,6 +371,9 @@ function sanitizeTraceValueInternal(
 ): JsonValue {
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeTraceValueInternal(item, options, key));
+  }
+  if (isCompactPhoneNumberValue(value)) {
+    return "[redacted: restricted personal content]";
   }
   if (typeof value === "string") {
     const urlRedacted = redactCredentialQueryParams(value);

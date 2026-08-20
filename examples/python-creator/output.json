@@ -1,8 +1,8 @@
 {
-  "schemaVersion": 1,
-  "runId": "replay-python-creator-v1",
+  "schemaVersion": 2,
+  "runId": "replay-python-creator-v2",
   "input": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "query": "the creator of Python",
     "objective": "Resolve a role-only public figure query using independent direct public sources.",
     "requestedDepth": "quick",
@@ -12,7 +12,7 @@
     ]
   },
   "target": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "rawInput": "the creator of Python",
     "normalizedQuery": "the creator of Python",
     "kind": "role_query",
@@ -33,16 +33,16 @@
   "identity": {
     "status": "resolved",
     "selectedCandidate": {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "python_replay_candidate_0001",
       "displayName": "Guido van Rossum",
       "normalizedName": "guido van rossum",
-      "status": "resolved",
+      "status": "plausible",
       "signals": [
         {
           "kind": "cross_profile_link",
-          "value": "Python creator",
-          "normalizedValue": "python creator",
+          "value": "Python's creator",
+          "normalizedValue": "python s creator link",
           "strength": "strong",
           "assurance": "corroborated",
           "sourceEvidenceId": "python_replay_evidence_0001",
@@ -59,11 +59,12 @@
         },
         {
           "kind": "personal_domain",
-          "value": "gvanrossum.github.io",
+          "value": "https://gvanrossum.github.io",
           "normalizedValue": "gvanrossum.github.io",
           "strength": "strong",
           "assurance": "corroborated",
-          "sourceEvidenceId": "python_replay_evidence_0002"
+          "sourceEvidenceId": "python_replay_evidence_0002",
+          "sourceFamily": "github.io"
         },
         {
           "kind": "profile_url",
@@ -76,8 +77,8 @@
         },
         {
           "kind": "role",
-          "value": "Creator of Python",
-          "normalizedValue": "creator of python",
+          "value": "Python's creator",
+          "normalizedValue": "python s creator",
           "strength": "strong",
           "assurance": "corroborated",
           "sourceEvidenceId": "python_replay_evidence_0001",
@@ -89,45 +90,43 @@
         "python_replay_evidence_0002"
       ],
       "score": {
-        "total": 0.84,
-        "positive": 0.84,
+        "total": 0.719,
+        "positive": 0.719,
         "penalty": 0,
         "independentFamilies": [
           "github.io",
-          "personal_domain",
           "python.org"
         ],
         "matchedSignals": [
           "cross_profile_link",
-          "personal_domain",
           "profile_url"
         ],
         "conflictingSignals": [],
         "cappedBecauseSpoofable": false
       },
-      "createdAt": "2026-08-18T22:08:17.077Z",
-      "updatedAt": "2026-08-18T22:08:17.203Z"
+      "createdAt": "2026-08-18T22:08:17.119Z",
+      "updatedAt": "2026-08-18T22:08:17.469Z"
     },
     "runnerUpCandidate": null,
     "selectedCandidateId": "python_replay_candidate_0001",
-    "selectedScore": 0.84,
+    "selectedScore": 0.719,
     "runnerUpScore": 0,
-    "runnerUpMargin": 0.84,
+    "runnerUpMargin": 0.719,
     "resolutionThreshold": 0.78,
     "marginThreshold": 0.15
   },
   "candidates": [
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "python_replay_candidate_0001",
       "displayName": "Guido van Rossum",
       "normalizedName": "guido van rossum",
-      "status": "resolved",
+      "status": "plausible",
       "signals": [
         {
           "kind": "cross_profile_link",
-          "value": "Python creator",
-          "normalizedValue": "python creator",
+          "value": "Python's creator",
+          "normalizedValue": "python s creator link",
           "strength": "strong",
           "assurance": "corroborated",
           "sourceEvidenceId": "python_replay_evidence_0001",
@@ -144,11 +143,12 @@
         },
         {
           "kind": "personal_domain",
-          "value": "gvanrossum.github.io",
+          "value": "https://gvanrossum.github.io",
           "normalizedValue": "gvanrossum.github.io",
           "strength": "strong",
           "assurance": "corroborated",
-          "sourceEvidenceId": "python_replay_evidence_0002"
+          "sourceEvidenceId": "python_replay_evidence_0002",
+          "sourceFamily": "github.io"
         },
         {
           "kind": "profile_url",
@@ -161,8 +161,8 @@
         },
         {
           "kind": "role",
-          "value": "Creator of Python",
-          "normalizedValue": "creator of python",
+          "value": "Python's creator",
+          "normalizedValue": "python s creator",
           "strength": "strong",
           "assurance": "corroborated",
           "sourceEvidenceId": "python_replay_evidence_0001",
@@ -174,29 +174,27 @@
         "python_replay_evidence_0002"
       ],
       "score": {
-        "total": 0.84,
-        "positive": 0.84,
+        "total": 0.719,
+        "positive": 0.719,
         "penalty": 0,
         "independentFamilies": [
           "github.io",
-          "personal_domain",
           "python.org"
         ],
         "matchedSignals": [
           "cross_profile_link",
-          "personal_domain",
           "profile_url"
         ],
         "conflictingSignals": [],
         "cappedBecauseSpoofable": false
       },
-      "createdAt": "2026-08-18T22:08:17.077Z",
-      "updatedAt": "2026-08-18T22:08:17.203Z"
+      "createdAt": "2026-08-18T22:08:17.119Z",
+      "updatedAt": "2026-08-18T22:08:17.469Z"
     }
   ],
   "findings": [
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "python_replay_finding_0001",
       "candidateId": "python_replay_candidate_0001",
       "title": "Identity — Guido van Rossum",
@@ -219,10 +217,10 @@
         "appliedCaps": []
       },
       "caveats": [],
-      "createdAt": "2026-08-18T22:08:17.238Z"
+      "createdAt": "2026-08-18T22:08:17.504Z"
     },
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "python_replay_finding_0002",
       "candidateId": "python_replay_candidate_0001",
       "title": "Project — Guido van Rossum",
@@ -245,12 +243,12 @@
         "appliedCaps": []
       },
       "caveats": [],
-      "createdAt": "2026-08-18T22:08:17.252Z"
+      "createdAt": "2026-08-18T22:08:17.518Z"
     }
   ],
   "evidence": [
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "python_replay_evidence_0001",
       "candidateId": "python_replay_candidate_0001",
       "claim": "As Python's creator, I'd like to say a few words about its origins",
@@ -264,23 +262,23 @@
       "sourceFamily": "python.org",
       "sourceType": "public_document",
       "publishedAt": null,
-      "retrievedAt": "2026-08-18T22:08:17.175Z",
+      "retrievedAt": "2026-08-18T22:08:17.329Z",
       "observedAt": "2026-08-18T22:08:17.000Z",
       "httpStatus": 200,
       "contentHash": "sha256:82f7fb2a0f4c38ba0e957394baa99435c21982fc367663307c0002c0587123c8",
       "excerpt": "As Python's creator, I'd like to say a few words about its origins",
       "canonicalSubset": null,
-      "toolCallId": "req-python-foreword",
+      "toolCallId": "python_replay_action_0002",
       "verificationMethod": "direct_fetch",
       "temporalStatus": "historical",
       "reliability": 1,
       "spoofable": false,
       "attributes": {},
       "fingerprint": "ad0731e7",
-      "createdAt": "2026-08-18T22:08:17.175Z"
+      "createdAt": "2026-08-18T22:08:17.329Z"
     },
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "python_replay_evidence_0002",
       "candidateId": "python_replay_candidate_0001",
       "claim": "Guido van Rossum is the creator of the Python programming language.",
@@ -294,22 +292,771 @@
       "sourceFamily": "github.io",
       "sourceType": "official_profile",
       "publishedAt": null,
-      "retrievedAt": "2026-08-18T22:08:17.189Z",
+      "retrievedAt": "2026-08-18T22:08:17.343Z",
       "observedAt": "2026-08-18T22:08:17.000Z",
       "httpStatus": 200,
       "contentHash": "sha256:0af6e624fcf05dfc7a8a2c6b8437a1b1705289283a9c8e617d6d2577180b938c",
       "excerpt": "Guido van Rossum is the creator of the Python programming language.",
       "canonicalSubset": null,
-      "toolCallId": "req-guido-bio",
+      "toolCallId": "python_replay_action_0001",
       "verificationMethod": "direct_fetch",
       "temporalStatus": "current",
       "reliability": 1,
       "spoofable": false,
       "attributes": {},
       "fingerprint": "cbeffaf3",
-      "createdAt": "2026-08-18T22:08:17.189Z"
+      "createdAt": "2026-08-18T22:08:17.343Z"
     }
   ],
+  "searchGraph": {
+    "schemaVersion": 2,
+    "runId": "replay-python-creator-v2",
+    "status": "completed",
+    "seed": "the creator of Python",
+    "seedNodeId": "python_replay_graph_node_0001",
+    "nodes": [
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0001",
+        "kind": "seed",
+        "label": "the creator of Python",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 1,
+        "data": {
+          "targetKind": "role_query",
+          "entityKey": "seed:replay-python-creator-v2"
+        },
+        "createdAt": "2026-08-18T22:08:17.056Z",
+        "updatedAt": "2026-08-18T22:08:17.056Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0002",
+        "kind": "pivot",
+        "label": "First-party and official pages",
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "python_replay_action_0001",
+        "actionId": "python_replay_action_0001",
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 2,
+        "data": {
+          "intent": "Organization team pages, official biographies, and explicit personal sites.",
+          "queryHint": "the creator of Python",
+          "admission": "admissible_after_fetch"
+        },
+        "createdAt": "2026-08-18T22:08:17.056Z",
+        "updatedAt": "2026-08-18T22:08:17.182Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0003",
+        "kind": "pivot",
+        "label": "Universities, conferences, and publishers: Guido van Rossum",
+        "status": "verified",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "frontierEntryId": "python_replay_action_0002",
+        "actionId": "python_replay_action_0002",
+        "candidateId": "python_replay_candidate_0001",
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 5,
+        "data": {
+          "intent": "Corroborate the personal biography against the official Python foreword essay.",
+          "queryHint": "Guido van Rossum creator Python foreword python.org",
+          "admission": "admissible_after_fetch"
+        },
+        "createdAt": "2026-08-18T22:08:17.196Z",
+        "updatedAt": "2026-08-18T22:08:17.273Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0004",
+        "kind": "source",
+        "label": "Foreword for Programming Python",
+        "status": "verified",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "frontierEntryId": "python_replay_action_0002",
+        "actionId": "python_replay_action_0002",
+        "candidateId": "python_replay_candidate_0001",
+        "evidenceId": "python_replay_evidence_0001",
+        "findingId": null,
+        "ordinal": 8,
+        "data": {
+          "sourceUrl": "https://www.python.org/doc/essays/foreword",
+          "sourceFamily": "python.org",
+          "sourceType": "public_document",
+          "entityKey": "source:python_replay_evidence_0001"
+        },
+        "createdAt": "2026-08-18T22:08:17.357Z",
+        "updatedAt": "2026-08-18T22:08:17.357Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0005",
+        "kind": "evidence",
+        "label": "As Python's creator, I'd like to say a few words about its origins",
+        "status": "verified",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "frontierEntryId": "python_replay_action_0002",
+        "actionId": "python_replay_action_0002",
+        "candidateId": "python_replay_candidate_0001",
+        "evidenceId": "python_replay_evidence_0001",
+        "findingId": null,
+        "ordinal": 10,
+        "data": {
+          "sourceUrl": "https://www.python.org/doc/essays/foreword",
+          "sourceFamily": "python.org",
+          "sourceType": "public_document",
+          "disposition": "supports",
+          "contentHash": "sha256:82f7fb2a0f4c38ba0e957394baa99435c21982fc367663307c0002c0587123c8",
+          "verificationMethod": "direct_fetch",
+          "entityKey": "evidence:python_replay_evidence_0001"
+        },
+        "createdAt": "2026-08-18T22:08:17.371Z",
+        "updatedAt": "2026-08-18T22:08:17.371Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0006",
+        "kind": "source",
+        "label": "Guido van Rossum — brief bio",
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "python_replay_action_0001",
+        "actionId": "python_replay_action_0001",
+        "candidateId": "python_replay_candidate_0001",
+        "evidenceId": "python_replay_evidence_0002",
+        "findingId": null,
+        "ordinal": 12,
+        "data": {
+          "sourceUrl": "https://gvanrossum.github.io/bio",
+          "sourceFamily": "github.io",
+          "sourceType": "official_profile",
+          "entityKey": "source:python_replay_evidence_0002"
+        },
+        "createdAt": "2026-08-18T22:08:17.413Z",
+        "updatedAt": "2026-08-18T22:08:17.413Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0007",
+        "kind": "evidence",
+        "label": "Guido van Rossum is the creator of the Python programming language.",
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "python_replay_action_0001",
+        "actionId": "python_replay_action_0001",
+        "candidateId": "python_replay_candidate_0001",
+        "evidenceId": "python_replay_evidence_0002",
+        "findingId": null,
+        "ordinal": 14,
+        "data": {
+          "sourceUrl": "https://gvanrossum.github.io/bio",
+          "sourceFamily": "github.io",
+          "sourceType": "official_profile",
+          "disposition": "supports",
+          "contentHash": "sha256:0af6e624fcf05dfc7a8a2c6b8437a1b1705289283a9c8e617d6d2577180b938c",
+          "verificationMethod": "direct_fetch",
+          "entityKey": "evidence:python_replay_evidence_0002"
+        },
+        "createdAt": "2026-08-18T22:08:17.427Z",
+        "updatedAt": "2026-08-18T22:08:17.427Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0008",
+        "kind": "pivot",
+        "label": "First-party and official pages",
+        "status": "rejected",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "python_replay_action_0003",
+        "actionId": "python_replay_action_0003",
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 16,
+        "data": {
+          "intent": "Explore the exact supplied public-professional target phrase in t1.first_party.",
+          "queryHint": "\"the creator of Python\"",
+          "admission": "admissible_after_fetch"
+        },
+        "createdAt": "2026-08-18T22:08:17.532Z",
+        "updatedAt": "2026-08-18T22:08:17.532Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0009",
+        "kind": "pivot",
+        "label": "Universities, conferences, and publishers: Guido van Rossum",
+        "status": "exhausted",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "frontierEntryId": "python_replay_action_0004",
+        "actionId": "python_replay_action_0004",
+        "candidateId": "python_replay_candidate_0001",
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 19,
+        "data": {
+          "intent": "Queue institutional conference and publisher corroboration as a bounded next source class.",
+          "queryHint": "Guido van Rossum Python creator conference biography",
+          "admission": "admissible_after_fetch"
+        },
+        "createdAt": "2026-08-18T22:08:17.574Z",
+        "updatedAt": "2026-08-18T22:08:17.742Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0010",
+        "kind": "pivot",
+        "label": "General web discovery",
+        "status": "queued",
+        "sourceTier": 6,
+        "sourceLaneId": "t6.general_discovery",
+        "frontierEntryId": "python_replay_action_0005",
+        "actionId": "python_replay_action_0005",
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 22,
+        "data": {
+          "intent": "Queue broad discovery only after the role and identity are directly resolved.",
+          "queryHint": "the creator of Python",
+          "admission": "discovery_only"
+        },
+        "createdAt": "2026-08-18T22:08:17.602Z",
+        "updatedAt": "2026-08-18T22:08:17.602Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0011",
+        "kind": "candidate",
+        "label": "Guido van Rossum",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": "python_replay_candidate_0001",
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 25,
+        "data": {
+          "entityKey": "candidate:python_replay_candidate_0001"
+        },
+        "createdAt": "2026-08-18T22:08:17.672Z",
+        "updatedAt": "2026-08-18T22:08:17.672Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0012",
+        "kind": "finding",
+        "label": "Identity — Guido van Rossum",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": "python_replay_candidate_0001",
+        "evidenceId": null,
+        "findingId": "python_replay_finding_0001",
+        "ordinal": 28,
+        "data": {
+          "category": "identity",
+          "confidence": 0.64,
+          "entityKey": "finding:python_replay_finding_0001"
+        },
+        "createdAt": "2026-08-18T22:08:17.693Z",
+        "updatedAt": "2026-08-18T22:08:17.693Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0013",
+        "kind": "finding",
+        "label": "Project — Guido van Rossum",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": "python_replay_candidate_0001",
+        "evidenceId": null,
+        "findingId": "python_replay_finding_0002",
+        "ordinal": 30,
+        "data": {
+          "category": "project",
+          "confidence": 0.56,
+          "entityKey": "finding:python_replay_finding_0002"
+        },
+        "createdAt": "2026-08-18T22:08:17.707Z",
+        "updatedAt": "2026-08-18T22:08:17.707Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_node_0014",
+        "kind": "report",
+        "label": "Final intelligence report",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 32,
+        "data": {
+          "findingCount": 2,
+          "entityKey": "report:replay-python-creator-v2"
+        },
+        "createdAt": "2026-08-18T22:08:17.721Z",
+        "updatedAt": "2026-08-18T22:08:17.721Z"
+      }
+    ],
+    "edges": [
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0001",
+        "fromNodeId": "python_replay_graph_node_0001",
+        "toNodeId": "python_replay_graph_node_0002",
+        "kind": "expands",
+        "status": "queued",
+        "frontierEntryId": "python_replay_action_0001",
+        "actionId": "python_replay_action_0001",
+        "edgeCost": 1.1426,
+        "pathCost": 1.1426,
+        "ordinal": 4,
+        "createdAt": "2026-08-18T22:08:17.056Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0002",
+        "fromNodeId": "python_replay_graph_node_0002",
+        "toNodeId": "python_replay_graph_node_0003",
+        "kind": "expands",
+        "status": "queued",
+        "frontierEntryId": "python_replay_action_0002",
+        "actionId": "python_replay_action_0002",
+        "edgeCost": 3.0636,
+        "pathCost": 4.2062,
+        "ordinal": 7,
+        "createdAt": "2026-08-18T22:08:17.196Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0003",
+        "fromNodeId": "python_replay_graph_node_0003",
+        "toNodeId": "python_replay_graph_node_0004",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "python_replay_action_0002",
+        "actionId": "python_replay_action_0002",
+        "edgeCost": 0.04,
+        "pathCost": 4.2462,
+        "ordinal": 9,
+        "createdAt": "2026-08-18T22:08:17.364Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0004",
+        "fromNodeId": "python_replay_graph_node_0004",
+        "toNodeId": "python_replay_graph_node_0005",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "python_replay_action_0002",
+        "actionId": "python_replay_action_0002",
+        "edgeCost": 0.03,
+        "pathCost": 4.2762,
+        "ordinal": 11,
+        "createdAt": "2026-08-18T22:08:17.378Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0005",
+        "fromNodeId": "python_replay_graph_node_0002",
+        "toNodeId": "python_replay_graph_node_0006",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "python_replay_action_0001",
+        "actionId": "python_replay_action_0001",
+        "edgeCost": 0.04,
+        "pathCost": 1.1826,
+        "ordinal": 13,
+        "createdAt": "2026-08-18T22:08:17.420Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0006",
+        "fromNodeId": "python_replay_graph_node_0006",
+        "toNodeId": "python_replay_graph_node_0007",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "python_replay_action_0001",
+        "actionId": "python_replay_action_0001",
+        "edgeCost": 0.03,
+        "pathCost": 1.2126,
+        "ordinal": 15,
+        "createdAt": "2026-08-18T22:08:17.434Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0007",
+        "fromNodeId": "python_replay_graph_node_0002",
+        "toNodeId": "python_replay_graph_node_0008",
+        "kind": "mutates",
+        "status": "rejected",
+        "frontierEntryId": "python_replay_action_0003",
+        "actionId": "python_replay_action_0003",
+        "edgeCost": 1.4846,
+        "pathCost": 2.6272,
+        "ordinal": 18,
+        "createdAt": "2026-08-18T22:08:17.532Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0008",
+        "fromNodeId": "python_replay_graph_node_0002",
+        "toNodeId": "python_replay_graph_node_0009",
+        "kind": "expands",
+        "status": "queued",
+        "frontierEntryId": "python_replay_action_0004",
+        "actionId": "python_replay_action_0004",
+        "edgeCost": 3.0636,
+        "pathCost": 4.2062,
+        "ordinal": 21,
+        "createdAt": "2026-08-18T22:08:17.574Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0009",
+        "fromNodeId": "python_replay_graph_node_0001",
+        "toNodeId": "python_replay_graph_node_0010",
+        "kind": "expands",
+        "status": "queued",
+        "frontierEntryId": "python_replay_action_0005",
+        "actionId": "python_replay_action_0005",
+        "edgeCost": 5.0592,
+        "pathCost": 5.0592,
+        "ordinal": 24,
+        "createdAt": "2026-08-18T22:08:17.602Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0010",
+        "fromNodeId": "python_replay_graph_node_0005",
+        "toNodeId": "python_replay_graph_node_0011",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 4.3262,
+        "ordinal": 26,
+        "createdAt": "2026-08-18T22:08:17.679Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0011",
+        "fromNodeId": "python_replay_graph_node_0007",
+        "toNodeId": "python_replay_graph_node_0011",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 1.2626,
+        "ordinal": 27,
+        "createdAt": "2026-08-18T22:08:17.686Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0012",
+        "fromNodeId": "python_replay_graph_node_0011",
+        "toNodeId": "python_replay_graph_node_0012",
+        "kind": "supports",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 4.3762,
+        "ordinal": 29,
+        "createdAt": "2026-08-18T22:08:17.700Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0013",
+        "fromNodeId": "python_replay_graph_node_0011",
+        "toNodeId": "python_replay_graph_node_0013",
+        "kind": "supports",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 4.3762,
+        "ordinal": 31,
+        "createdAt": "2026-08-18T22:08:17.714Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0014",
+        "fromNodeId": "python_replay_graph_node_0012",
+        "toNodeId": "python_replay_graph_node_0014",
+        "kind": "includes",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.04,
+        "pathCost": 4.4162,
+        "ordinal": 33,
+        "createdAt": "2026-08-18T22:08:17.728Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_graph_edge_0015",
+        "fromNodeId": "python_replay_graph_node_0013",
+        "toNodeId": "python_replay_graph_node_0014",
+        "kind": "includes",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.04,
+        "pathCost": 4.4162,
+        "ordinal": 34,
+        "createdAt": "2026-08-18T22:08:17.735Z"
+      }
+    ],
+    "frontier": [
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_action_0001",
+        "frontierEntryId": "python_replay_action_0001",
+        "actionId": "python_replay_action_0001",
+        "nodeId": "python_replay_graph_node_0002",
+        "parentNodeId": "python_replay_graph_node_0001",
+        "parentFrontierEntryId": null,
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "allowedTools": [
+          "fetch_public_source"
+        ],
+        "intent": "Organization team pages, official biographies, and explicit personal sites.",
+        "queryHint": "the creator of Python",
+        "candidateId": null,
+        "depth": 0,
+        "ordinal": 3,
+        "dedupeKey": "t1.first party unbound the creator of python base",
+        "utility": {
+          "relevance": 0.94,
+          "novelty": 0.88,
+          "informationGain": 0.68,
+          "sourceTrust": 0.92,
+          "executionCost": 0.22,
+          "policyRisk": 0.05,
+          "repetition": 0,
+          "depthPenalty": 0
+        },
+        "edgeCost": 1.1426,
+        "pathCost": 1.1426,
+        "mutation": null,
+        "createdAt": "2026-08-18T22:08:17.056Z",
+        "updatedAt": "2026-08-18T22:08:17.182Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_action_0002",
+        "frontierEntryId": "python_replay_action_0002",
+        "actionId": "python_replay_action_0002",
+        "nodeId": "python_replay_graph_node_0003",
+        "parentNodeId": "python_replay_graph_node_0002",
+        "parentFrontierEntryId": "python_replay_action_0001",
+        "status": "verified",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "allowedTools": [
+          "fetch_public_source",
+          "search_web"
+        ],
+        "intent": "Corroborate the personal biography against the official Python foreword essay.",
+        "queryHint": "Guido van Rossum creator Python foreword python.org",
+        "candidateId": "python_replay_candidate_0001",
+        "depth": 1,
+        "ordinal": 6,
+        "dedupeKey": "t3.institutional python replay candidate 0001 guido van rossum creator python foreword python.org base",
+        "utility": {
+          "relevance": 0.78,
+          "novelty": 0.76,
+          "informationGain": 0.76,
+          "sourceTrust": 0.8,
+          "executionCost": 0.34,
+          "policyRisk": 0.06,
+          "repetition": 0.16,
+          "depthPenalty": 0.14
+        },
+        "edgeCost": 3.0636,
+        "pathCost": 4.2062,
+        "mutation": null,
+        "createdAt": "2026-08-18T22:08:17.196Z",
+        "updatedAt": "2026-08-18T22:08:17.273Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_action_0003",
+        "frontierEntryId": "python_replay_action_0003",
+        "actionId": "python_replay_action_0003",
+        "nodeId": "python_replay_graph_node_0008",
+        "parentNodeId": "python_replay_graph_node_0002",
+        "parentFrontierEntryId": "python_replay_action_0001",
+        "status": "rejected",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "allowedTools": [
+          "fetch_public_source",
+          "search_web"
+        ],
+        "intent": "Explore the exact supplied public-professional target phrase in t1.first_party.",
+        "queryHint": "\"the creator of Python\"",
+        "candidateId": null,
+        "depth": 1,
+        "ordinal": 17,
+        "dedupeKey": "t1.first party unbound the creator of python exact phrase",
+        "utility": {
+          "relevance": 0.94,
+          "novelty": 0.96,
+          "informationGain": 0.68,
+          "sourceTrust": 0.92,
+          "executionCost": 0.22,
+          "policyRisk": 0.05,
+          "repetition": 0.12,
+          "depthPenalty": 0.14
+        },
+        "edgeCost": 1.4846,
+        "pathCost": 2.6272,
+        "mutation": {
+          "strategy": "exact_phrase",
+          "parentFrontierEntryId": "python_replay_action_0001",
+          "proposalIndex": 0,
+          "temperature": 1,
+          "logAcceptanceRatio": -0.629682,
+          "acceptanceProbability": 0.532761,
+          "deterministicU": 0.927857,
+          "parentNeighborCount": 3,
+          "candidateNeighborCount": 4
+        },
+        "createdAt": "2026-08-18T22:08:17.532Z",
+        "updatedAt": "2026-08-18T22:08:17.532Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_action_0004",
+        "frontierEntryId": "python_replay_action_0004",
+        "actionId": "python_replay_action_0004",
+        "nodeId": "python_replay_graph_node_0009",
+        "parentNodeId": "python_replay_graph_node_0002",
+        "parentFrontierEntryId": "python_replay_action_0001",
+        "status": "exhausted",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "allowedTools": [
+          "fetch_public_source",
+          "search_web"
+        ],
+        "intent": "Queue institutional conference and publisher corroboration as a bounded next source class.",
+        "queryHint": "Guido van Rossum Python creator conference biography",
+        "candidateId": "python_replay_candidate_0001",
+        "depth": 1,
+        "ordinal": 20,
+        "dedupeKey": "t3.institutional python replay candidate 0001 guido van rossum python creator conference biography base",
+        "utility": {
+          "relevance": 0.78,
+          "novelty": 0.76,
+          "informationGain": 0.76,
+          "sourceTrust": 0.8,
+          "executionCost": 0.34,
+          "policyRisk": 0.06,
+          "repetition": 0.16,
+          "depthPenalty": 0.14
+        },
+        "edgeCost": 3.0636,
+        "pathCost": 4.2062,
+        "mutation": null,
+        "createdAt": "2026-08-18T22:08:17.574Z",
+        "updatedAt": "2026-08-18T22:08:17.742Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "python_replay_action_0005",
+        "frontierEntryId": "python_replay_action_0005",
+        "actionId": "python_replay_action_0005",
+        "nodeId": "python_replay_graph_node_0010",
+        "parentNodeId": "python_replay_graph_node_0001",
+        "parentFrontierEntryId": null,
+        "status": "queued",
+        "sourceTier": 6,
+        "sourceLaneId": "t6.general_discovery",
+        "allowedTools": [
+          "search_web"
+        ],
+        "intent": "Queue broad discovery only after the role and identity are directly resolved.",
+        "queryHint": "the creator of Python",
+        "candidateId": null,
+        "depth": 0,
+        "ordinal": 23,
+        "dedupeKey": "t6.general discovery unbound the creator of python base",
+        "utility": {
+          "relevance": 0.58,
+          "novelty": 0.88,
+          "informationGain": 0.68,
+          "sourceTrust": 0.18,
+          "executionCost": 0.28,
+          "policyRisk": 0.16,
+          "repetition": 0,
+          "depthPenalty": 0
+        },
+        "edgeCost": 5.0592,
+        "pathCost": 5.0592,
+        "mutation": null,
+        "createdAt": "2026-08-18T22:08:17.602Z",
+        "updatedAt": "2026-08-18T22:08:17.602Z"
+      }
+    ],
+    "selectedFrontierEntryIds": [],
+    "currentSourceTier": 3,
+    "nextOrdinal": 35,
+    "mutationStep": 1,
+    "telemetry": {
+      "seeded": 1,
+      "enqueued": 5,
+      "selected": 3,
+      "pruned": 0,
+      "expanded": 2,
+      "exhausted": 0,
+      "toolCalls": 2,
+      "mutationToolCalls": 0,
+      "mutationsProposed": 1,
+      "mutationsAccepted": 0,
+      "mutationsRejected": 1
+    },
+    "createdAt": "2026-08-18T22:08:17.000Z",
+    "updatedAt": "2026-08-18T22:08:17.742Z"
+  },
   "coverage": {
     "score": 0.917,
     "requestedCategories": [
@@ -356,7 +1103,7 @@
   ],
   "telemetry": {
     "candidateCount": 1,
-    "resolvedCandidateCount": 1,
+    "resolvedCandidateCount": 0,
     "evidence": {
       "admitted": 2,
       "rejected": 0,
@@ -380,7 +1127,7 @@
     "outputTokens": 0,
     "thinkingTokens": 0,
     "costUsd": 0,
-    "elapsedMs": 294,
+    "elapsedMs": 840,
     "consecutiveNoProgress": 0,
     "phaseTurns": {}
   },
@@ -390,7 +1137,7 @@
   "stop": {
     "reason": "goal_satisfied",
     "detail": "Resolved the role-only query with two independent direct source families and no competing candidate above the ambiguity threshold.",
-    "at": "2026-08-18T22:08:17.287Z"
+    "at": "2026-08-18T22:08:17.833Z"
   },
-  "generatedAt": "2026-08-18T22:08:17.301Z"
+  "generatedAt": "2026-08-18T22:08:17.847Z"
 }

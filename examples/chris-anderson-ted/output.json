@@ -1,8 +1,8 @@
 {
-  "schemaVersion": 1,
-  "runId": "replay-chris-anderson-ted-v1",
+  "schemaVersion": 2,
+  "runId": "replay-chris-anderson-ted-v2",
   "input": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "query": "Chris Anderson, TED",
     "objective": "Resolve the intended public professional and quarantine same-name candidates without crossing evidence between them.",
     "requestedDepth": "standard",
@@ -12,7 +12,7 @@
     ]
   },
   "target": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "rawInput": "Chris Anderson, TED",
     "normalizedQuery": "Chris Anderson, TED",
     "kind": "named_person",
@@ -33,11 +33,11 @@
   "identity": {
     "status": "resolved",
     "selectedCandidate": {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_candidate_0001",
       "displayName": "Chris Anderson",
       "normalizedName": "chris anderson",
-      "status": "resolved",
+      "status": "plausible",
       "signals": [
         {
           "kind": "bio_phrase",
@@ -45,15 +45,17 @@
           "normalizedValue": "became the curator of the ted conference in 2002",
           "strength": "weak",
           "assurance": "verified",
-          "sourceEvidenceId": "chris_replay_evidence_0002"
+          "sourceEvidenceId": "chris_replay_evidence_0002",
+          "sourceFamily": "ted.com"
         },
         {
           "kind": "cross_profile_link",
-          "value": "Chris Anderson at TED",
-          "normalizedValue": "chris anderson at ted",
+          "value": "Chris Anderson Chairman, TED",
+          "normalizedValue": "chris anderson chairman ted",
           "strength": "strong",
           "assurance": "corroborated",
-          "sourceEvidenceId": "chris_replay_evidence_0001"
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
         },
         {
           "kind": "name",
@@ -61,7 +63,8 @@
           "normalizedValue": "chris anderson",
           "strength": "strong",
           "assurance": "verified",
-          "sourceEvidenceId": "chris_replay_evidence_0001"
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
         },
         {
           "kind": "organization",
@@ -96,29 +99,25 @@
         "chris_replay_evidence_0002"
       ],
       "score": {
-        "total": 0.788,
-        "positive": 0.788,
+        "total": 0.54,
+        "positive": 0.54,
         "penalty": 0,
         "independentFamilies": [
-          "bio_phrase",
-          "cross_profile_link",
           "name:chris anderson",
           "ted.com"
         ],
         "matchedSignals": [
-          "bio_phrase",
           "cross_profile_link",
-          "name",
-          "profile_url"
+          "name"
         ],
         "conflictingSignals": [],
         "cappedBecauseSpoofable": false
       },
-      "createdAt": "2026-08-18T22:08:17.077Z",
-      "updatedAt": "2026-08-18T22:08:17.266Z"
+      "createdAt": "2026-08-18T22:08:17.119Z",
+      "updatedAt": "2026-08-18T22:08:17.714Z"
     },
     "runnerUpCandidate": {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_candidate_0002",
       "displayName": "Chris Anderson",
       "normalizedName": "chris anderson",
@@ -126,8 +125,8 @@
       "signals": [
         {
           "kind": "conflict",
-          "value": "TED profile explicitly says this is not the conference curator",
-          "normalizedValue": "not ted curator",
+          "value": "confused with the curator of TED",
+          "normalizedValue": "confused with the curator of ted",
           "strength": "strong",
           "assurance": "verified",
           "sourceEvidenceId": "chris_replay_evidence_0003",
@@ -139,26 +138,17 @@
           "normalizedValue": "chris anderson",
           "strength": "strong",
           "assurance": "verified",
-          "sourceEvidenceId": "chris_replay_evidence_0003",
-          "sourceFamily": "ted.com"
-        },
-        {
-          "kind": "organization",
-          "value": "3D Robotics",
-          "normalizedValue": "3d robotics",
-          "strength": "strong",
-          "assurance": "corroborated",
           "sourceEvidenceId": "chris_replay_evidence_0004",
           "sourceFamily": "wired.com"
         },
         {
-          "kind": "profile_url",
-          "value": "https://www.ted.com/speakers/chris_anderson_wired",
-          "normalizedValue": "https www.ted.com speakers chris anderson wired",
+          "kind": "organization",
+          "value": "WIRED",
+          "normalizedValue": "wired",
           "strength": "strong",
-          "assurance": "verified",
-          "sourceEvidenceId": "chris_replay_evidence_0003",
-          "sourceFamily": "ted.com"
+          "assurance": "corroborated",
+          "sourceEvidenceId": "chris_replay_evidence_0004",
+          "sourceFamily": "wired.com"
         }
       ],
       "evidenceIds": [
@@ -166,40 +156,39 @@
         "chris_replay_evidence_0004"
       ],
       "score": {
-        "total": 0.211,
-        "positive": 0.511,
+        "total": 0,
+        "positive": 0.279,
         "penalty": 0.3,
         "independentFamilies": [
           "name:chris anderson",
-          "ted.com"
+          "wired.com"
         ],
         "matchedSignals": [
-          "name",
-          "profile_url"
+          "name"
         ],
         "conflictingSignals": [
           "conflict"
         ],
         "cappedBecauseSpoofable": false
       },
-      "createdAt": "2026-08-18T22:08:17.091Z",
-      "updatedAt": "2026-08-18T22:08:17.280Z"
+      "createdAt": "2026-08-18T22:08:17.133Z",
+      "updatedAt": "2026-08-18T22:08:17.728Z"
     },
     "selectedCandidateId": "chris_replay_candidate_0001",
     "runnerUpCandidateId": "chris_replay_candidate_0002",
-    "selectedScore": 0.788,
-    "runnerUpScore": 0.211,
-    "runnerUpMargin": 0.577,
+    "selectedScore": 0.54,
+    "runnerUpScore": 0,
+    "runnerUpMargin": 0.54,
     "resolutionThreshold": 0.78,
     "marginThreshold": 0.15
   },
   "candidates": [
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_candidate_0001",
       "displayName": "Chris Anderson",
       "normalizedName": "chris anderson",
-      "status": "resolved",
+      "status": "plausible",
       "signals": [
         {
           "kind": "bio_phrase",
@@ -207,15 +196,17 @@
           "normalizedValue": "became the curator of the ted conference in 2002",
           "strength": "weak",
           "assurance": "verified",
-          "sourceEvidenceId": "chris_replay_evidence_0002"
+          "sourceEvidenceId": "chris_replay_evidence_0002",
+          "sourceFamily": "ted.com"
         },
         {
           "kind": "cross_profile_link",
-          "value": "Chris Anderson at TED",
-          "normalizedValue": "chris anderson at ted",
+          "value": "Chris Anderson Chairman, TED",
+          "normalizedValue": "chris anderson chairman ted",
           "strength": "strong",
           "assurance": "corroborated",
-          "sourceEvidenceId": "chris_replay_evidence_0001"
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
         },
         {
           "kind": "name",
@@ -223,7 +214,8 @@
           "normalizedValue": "chris anderson",
           "strength": "strong",
           "assurance": "verified",
-          "sourceEvidenceId": "chris_replay_evidence_0001"
+          "sourceEvidenceId": "chris_replay_evidence_0001",
+          "sourceFamily": "ted.com"
         },
         {
           "kind": "organization",
@@ -258,29 +250,25 @@
         "chris_replay_evidence_0002"
       ],
       "score": {
-        "total": 0.788,
-        "positive": 0.788,
+        "total": 0.54,
+        "positive": 0.54,
         "penalty": 0,
         "independentFamilies": [
-          "bio_phrase",
-          "cross_profile_link",
           "name:chris anderson",
           "ted.com"
         ],
         "matchedSignals": [
-          "bio_phrase",
           "cross_profile_link",
-          "name",
-          "profile_url"
+          "name"
         ],
         "conflictingSignals": [],
         "cappedBecauseSpoofable": false
       },
-      "createdAt": "2026-08-18T22:08:17.077Z",
-      "updatedAt": "2026-08-18T22:08:17.266Z"
+      "createdAt": "2026-08-18T22:08:17.119Z",
+      "updatedAt": "2026-08-18T22:08:17.714Z"
     },
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_candidate_0002",
       "displayName": "Chris Anderson",
       "normalizedName": "chris anderson",
@@ -288,8 +276,8 @@
       "signals": [
         {
           "kind": "conflict",
-          "value": "TED profile explicitly says this is not the conference curator",
-          "normalizedValue": "not ted curator",
+          "value": "confused with the curator of TED",
+          "normalizedValue": "confused with the curator of ted",
           "strength": "strong",
           "assurance": "verified",
           "sourceEvidenceId": "chris_replay_evidence_0003",
@@ -301,26 +289,17 @@
           "normalizedValue": "chris anderson",
           "strength": "strong",
           "assurance": "verified",
-          "sourceEvidenceId": "chris_replay_evidence_0003",
-          "sourceFamily": "ted.com"
-        },
-        {
-          "kind": "organization",
-          "value": "3D Robotics",
-          "normalizedValue": "3d robotics",
-          "strength": "strong",
-          "assurance": "corroborated",
           "sourceEvidenceId": "chris_replay_evidence_0004",
           "sourceFamily": "wired.com"
         },
         {
-          "kind": "profile_url",
-          "value": "https://www.ted.com/speakers/chris_anderson_wired",
-          "normalizedValue": "https www.ted.com speakers chris anderson wired",
+          "kind": "organization",
+          "value": "WIRED",
+          "normalizedValue": "wired",
           "strength": "strong",
-          "assurance": "verified",
-          "sourceEvidenceId": "chris_replay_evidence_0003",
-          "sourceFamily": "ted.com"
+          "assurance": "corroborated",
+          "sourceEvidenceId": "chris_replay_evidence_0004",
+          "sourceFamily": "wired.com"
         }
       ],
       "evidenceIds": [
@@ -328,29 +307,28 @@
         "chris_replay_evidence_0004"
       ],
       "score": {
-        "total": 0.211,
-        "positive": 0.511,
+        "total": 0,
+        "positive": 0.279,
         "penalty": 0.3,
         "independentFamilies": [
           "name:chris anderson",
-          "ted.com"
+          "wired.com"
         ],
         "matchedSignals": [
-          "name",
-          "profile_url"
+          "name"
         ],
         "conflictingSignals": [
           "conflict"
         ],
         "cappedBecauseSpoofable": false
       },
-      "createdAt": "2026-08-18T22:08:17.091Z",
-      "updatedAt": "2026-08-18T22:08:17.280Z"
+      "createdAt": "2026-08-18T22:08:17.133Z",
+      "updatedAt": "2026-08-18T22:08:17.728Z"
     }
   ],
   "findings": [
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_finding_0001",
       "candidateId": "chris_replay_candidate_0001",
       "title": "Identity — Chris Anderson",
@@ -373,10 +351,10 @@
         "appliedCaps": []
       },
       "caveats": [],
-      "createdAt": "2026-08-18T22:08:17.315Z"
+      "createdAt": "2026-08-18T22:08:17.763Z"
     },
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_finding_0002",
       "candidateId": "chris_replay_candidate_0001",
       "title": "Employment — Chris Anderson",
@@ -399,12 +377,12 @@
         "appliedCaps": []
       },
       "caveats": [],
-      "createdAt": "2026-08-18T22:08:17.329Z"
+      "createdAt": "2026-08-18T22:08:17.777Z"
     }
   ],
   "evidence": [
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_evidence_0001",
       "candidateId": "chris_replay_candidate_0001",
       "claim": "Chris Anderson Chairman, TED",
@@ -418,13 +396,13 @@
       "sourceFamily": "ted.com",
       "sourceType": "official_profile",
       "publishedAt": null,
-      "retrievedAt": "2026-08-18T22:08:17.210Z",
+      "retrievedAt": "2026-08-18T22:08:17.434Z",
       "observedAt": "2026-08-18T22:08:17.000Z",
       "httpStatus": 200,
       "contentHash": "sha256:7649b3991c54edd2cae6a9f073d5fd6e25112b9100d9612de1ede665d0df124b",
       "excerpt": "Chris Anderson Chairman, TED",
       "canonicalSubset": null,
-      "toolCallId": "req-ted-selected",
+      "toolCallId": "chris_replay_action_0001",
       "verificationMethod": "direct_fetch",
       "temporalStatus": "current",
       "reliability": 1,
@@ -434,10 +412,10 @@
         "role": "Chairman, TED"
       },
       "fingerprint": "5f434689",
-      "createdAt": "2026-08-18T22:08:17.210Z"
+      "createdAt": "2026-08-18T22:08:17.434Z"
     },
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_evidence_0002",
       "candidateId": "chris_replay_candidate_0001",
       "claim": "Chris Anderson became the curator of the TED Conference in 2002",
@@ -451,53 +429,53 @@
       "sourceFamily": "ted.com",
       "sourceType": "official_profile",
       "publishedAt": null,
-      "retrievedAt": "2026-08-18T22:08:17.224Z",
+      "retrievedAt": "2026-08-18T22:08:17.448Z",
       "observedAt": "2026-08-18T22:08:17.000Z",
       "httpStatus": 200,
       "contentHash": "sha256:7649b3991c54edd2cae6a9f073d5fd6e25112b9100d9612de1ede665d0df124b",
       "excerpt": "Chris Anderson became the curator of the TED Conference in 2002",
       "canonicalSubset": null,
-      "toolCallId": "req-ted-selected",
+      "toolCallId": "chris_replay_action_0001",
       "verificationMethod": "direct_fetch",
       "temporalStatus": "current",
       "reliability": 1,
       "spoofable": false,
       "attributes": {},
       "fingerprint": "3ae5c7fb",
-      "createdAt": "2026-08-18T22:08:17.224Z"
+      "createdAt": "2026-08-18T22:08:17.448Z"
     },
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_evidence_0003",
       "candidateId": "chris_replay_candidate_0002",
       "claim": "(He is not, however, to be confused with the curator of TED, who has the same name.)",
       "normalizedClaim": "he is not however to be confused with the curator of ted who has the same name.",
-      "disposition": "supports",
+      "disposition": "contradicts",
       "sourceUrl": "https://www.ted.com/speakers/chris_anderson_wired",
       "canonicalUrl": "https://www.ted.com/speakers/chris_anderson_wired",
       "queryUrl": null,
       "title": "Chris Anderson — separate TED speaker profile",
       "publisher": "TED",
       "sourceFamily": "ted.com",
-      "sourceType": "official_profile",
+      "sourceType": "public_document",
       "publishedAt": null,
-      "retrievedAt": "2026-08-18T22:08:17.238Z",
+      "retrievedAt": "2026-08-18T22:08:17.462Z",
       "observedAt": "2026-08-18T22:08:17.000Z",
       "httpStatus": 200,
       "contentHash": "sha256:75ee0b44d5acb892a647f0093d5d8ba7605f6b139cb4bf3b0d78868dd30668a1",
       "excerpt": "(He is not, however, to be confused with the curator of TED, who has the same name.)",
       "canonicalSubset": null,
-      "toolCallId": "req-ted-decoy",
+      "toolCallId": "chris_replay_action_0002",
       "verificationMethod": "direct_fetch",
       "temporalStatus": "current",
       "reliability": 1,
       "spoofable": false,
       "attributes": {},
-      "fingerprint": "2129632d",
-      "createdAt": "2026-08-18T22:08:17.238Z"
+      "fingerprint": "66fc4289",
+      "createdAt": "2026-08-18T22:08:17.462Z"
     },
     {
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "id": "chris_replay_evidence_0004",
       "candidateId": "chris_replay_candidate_0002",
       "claim": "Chris Anderson, CEO of the world's third-largest producer of drones (and a former editor-in-chief of WIRED US)",
@@ -511,22 +489,1059 @@
       "sourceFamily": "wired.com",
       "sourceType": "news",
       "publishedAt": null,
-      "retrievedAt": "2026-08-18T22:08:17.252Z",
+      "retrievedAt": "2026-08-18T22:08:17.476Z",
       "observedAt": "2026-08-18T22:08:17.000Z",
       "httpStatus": 200,
       "contentHash": "sha256:bfae98bbe1b74d6963875a80ed9f394d12a5a8506f8ccfadf4c3235dd503c063",
       "excerpt": "Chris Anderson, CEO of the world's third-largest producer of drones (and a former editor-in-chief of WIRED US)",
       "canonicalSubset": null,
-      "toolCallId": "req-wired-decoy",
+      "toolCallId": "chris_replay_action_0003",
       "verificationMethod": "direct_fetch",
       "temporalStatus": "historical",
       "reliability": 0.9,
       "spoofable": false,
       "attributes": {},
       "fingerprint": "cee422a6",
-      "createdAt": "2026-08-18T22:08:17.252Z"
+      "createdAt": "2026-08-18T22:08:17.476Z"
     }
   ],
+  "searchGraph": {
+    "schemaVersion": 2,
+    "runId": "replay-chris-anderson-ted-v2",
+    "status": "completed",
+    "seed": "Chris Anderson, TED",
+    "seedNodeId": "chris_replay_graph_node_0001",
+    "nodes": [
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0001",
+        "kind": "seed",
+        "label": "Chris Anderson, TED",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 1,
+        "data": {
+          "targetKind": "named_person",
+          "entityKey": "seed:replay-chris-anderson-ted-v2"
+        },
+        "createdAt": "2026-08-18T22:08:17.056Z",
+        "updatedAt": "2026-08-18T22:08:17.056Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0002",
+        "kind": "pivot",
+        "label": "First-party and official pages",
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 2,
+        "data": {
+          "intent": "Organization team pages, official biographies, and explicit personal sites.",
+          "queryHint": "Chris Anderson, TED",
+          "admission": "admissible_after_fetch"
+        },
+        "createdAt": "2026-08-18T22:08:17.056Z",
+        "updatedAt": "2026-08-18T22:08:17.196Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0003",
+        "kind": "pivot",
+        "label": "Universities, conferences, and publishers: Chris Anderson",
+        "status": "verified",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "frontierEntryId": "chris_replay_action_0002",
+        "actionId": "chris_replay_action_0002",
+        "candidateId": "chris_replay_candidate_0002",
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 5,
+        "data": {
+          "intent": "Inspect the separate TED profile that explicitly disambiguates the same-name speaker.",
+          "queryHint": "site:ted.com Chris Anderson WIRED same name",
+          "admission": "admissible_after_fetch"
+        },
+        "createdAt": "2026-08-18T22:08:17.210Z",
+        "updatedAt": "2026-08-18T22:08:17.315Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0004",
+        "kind": "pivot",
+        "label": "Reputable media and interviews: Chris Anderson",
+        "status": "verified",
+        "sourceTier": 4,
+        "sourceLaneId": "t4.reputable_media",
+        "frontierEntryId": "chris_replay_action_0003",
+        "actionId": "chris_replay_action_0003",
+        "candidateId": "chris_replay_candidate_0002",
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 8,
+        "data": {
+          "intent": "Corroborate the former WIRED editor and 3DR executive as a separate professional.",
+          "queryHint": "WIRED Chris Anderson 3D Robotics Airware",
+          "admission": "admissible_after_fetch"
+        },
+        "createdAt": "2026-08-18T22:08:17.238Z",
+        "updatedAt": "2026-08-18T22:08:17.378Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0005",
+        "kind": "source",
+        "label": "Chris Anderson — TED speaker profile",
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "candidateId": "chris_replay_candidate_0001",
+        "evidenceId": "chris_replay_evidence_0001",
+        "findingId": null,
+        "ordinal": 11,
+        "data": {
+          "sourceUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+          "sourceFamily": "ted.com",
+          "sourceType": "official_profile",
+          "entityKey": "source:chris_replay_evidence_0001"
+        },
+        "createdAt": "2026-08-18T22:08:17.490Z",
+        "updatedAt": "2026-08-18T22:08:17.490Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0006",
+        "kind": "evidence",
+        "label": "Chris Anderson Chairman, TED",
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "candidateId": "chris_replay_candidate_0001",
+        "evidenceId": "chris_replay_evidence_0001",
+        "findingId": null,
+        "ordinal": 13,
+        "data": {
+          "sourceUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+          "sourceFamily": "ted.com",
+          "sourceType": "official_profile",
+          "disposition": "supports",
+          "contentHash": "sha256:7649b3991c54edd2cae6a9f073d5fd6e25112b9100d9612de1ede665d0df124b",
+          "verificationMethod": "direct_fetch",
+          "entityKey": "evidence:chris_replay_evidence_0001"
+        },
+        "createdAt": "2026-08-18T22:08:17.504Z",
+        "updatedAt": "2026-08-18T22:08:17.504Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0007",
+        "kind": "source",
+        "label": "Chris Anderson — TED leadership",
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "candidateId": "chris_replay_candidate_0001",
+        "evidenceId": "chris_replay_evidence_0002",
+        "findingId": null,
+        "ordinal": 15,
+        "data": {
+          "sourceUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+          "sourceFamily": "ted.com",
+          "sourceType": "official_profile",
+          "entityKey": "source:chris_replay_evidence_0002"
+        },
+        "createdAt": "2026-08-18T22:08:17.546Z",
+        "updatedAt": "2026-08-18T22:08:17.546Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0008",
+        "kind": "evidence",
+        "label": "Chris Anderson became the curator of the TED Conference in 2002",
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "candidateId": "chris_replay_candidate_0001",
+        "evidenceId": "chris_replay_evidence_0002",
+        "findingId": null,
+        "ordinal": 17,
+        "data": {
+          "sourceUrl": "https://www.ted.com/speakers/chris_anderson_ted",
+          "sourceFamily": "ted.com",
+          "sourceType": "official_profile",
+          "disposition": "supports",
+          "contentHash": "sha256:7649b3991c54edd2cae6a9f073d5fd6e25112b9100d9612de1ede665d0df124b",
+          "verificationMethod": "direct_fetch",
+          "entityKey": "evidence:chris_replay_evidence_0002"
+        },
+        "createdAt": "2026-08-18T22:08:17.560Z",
+        "updatedAt": "2026-08-18T22:08:17.560Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0009",
+        "kind": "source",
+        "label": "Chris Anderson — separate TED speaker profile",
+        "status": "rejected",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "frontierEntryId": "chris_replay_action_0002",
+        "actionId": "chris_replay_action_0002",
+        "candidateId": "chris_replay_candidate_0002",
+        "evidenceId": "chris_replay_evidence_0003",
+        "findingId": null,
+        "ordinal": 19,
+        "data": {
+          "sourceUrl": "https://www.ted.com/speakers/chris_anderson_wired",
+          "sourceFamily": "ted.com",
+          "sourceType": "public_document",
+          "entityKey": "source:chris_replay_evidence_0003"
+        },
+        "createdAt": "2026-08-18T22:08:17.602Z",
+        "updatedAt": "2026-08-18T22:08:17.602Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0010",
+        "kind": "evidence",
+        "label": "(He is not, however, to be confused with the curator of TED, who has the same name.)",
+        "status": "rejected",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "frontierEntryId": "chris_replay_action_0002",
+        "actionId": "chris_replay_action_0002",
+        "candidateId": "chris_replay_candidate_0002",
+        "evidenceId": "chris_replay_evidence_0003",
+        "findingId": null,
+        "ordinal": 21,
+        "data": {
+          "sourceUrl": "https://www.ted.com/speakers/chris_anderson_wired",
+          "sourceFamily": "ted.com",
+          "sourceType": "public_document",
+          "disposition": "contradicts",
+          "contentHash": "sha256:75ee0b44d5acb892a647f0093d5d8ba7605f6b139cb4bf3b0d78868dd30668a1",
+          "verificationMethod": "direct_fetch",
+          "entityKey": "evidence:chris_replay_evidence_0003"
+        },
+        "createdAt": "2026-08-18T22:08:17.616Z",
+        "updatedAt": "2026-08-18T22:08:17.616Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0011",
+        "kind": "source",
+        "label": "Airware drones",
+        "status": "verified",
+        "sourceTier": 4,
+        "sourceLaneId": "t4.reputable_media",
+        "frontierEntryId": "chris_replay_action_0003",
+        "actionId": "chris_replay_action_0003",
+        "candidateId": "chris_replay_candidate_0002",
+        "evidenceId": "chris_replay_evidence_0004",
+        "findingId": null,
+        "ordinal": 23,
+        "data": {
+          "sourceUrl": "https://www.wired.com/story/airware-drones",
+          "sourceFamily": "wired.com",
+          "sourceType": "news",
+          "entityKey": "source:chris_replay_evidence_0004"
+        },
+        "createdAt": "2026-08-18T22:08:17.658Z",
+        "updatedAt": "2026-08-18T22:08:17.658Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0012",
+        "kind": "evidence",
+        "label": "Chris Anderson, CEO of the world's third-largest producer of drones (and a former editor-in-chief of WIRED US)",
+        "status": "verified",
+        "sourceTier": 4,
+        "sourceLaneId": "t4.reputable_media",
+        "frontierEntryId": "chris_replay_action_0003",
+        "actionId": "chris_replay_action_0003",
+        "candidateId": "chris_replay_candidate_0002",
+        "evidenceId": "chris_replay_evidence_0004",
+        "findingId": null,
+        "ordinal": 25,
+        "data": {
+          "sourceUrl": "https://www.wired.com/story/airware-drones",
+          "sourceFamily": "wired.com",
+          "sourceType": "news",
+          "disposition": "supports",
+          "contentHash": "sha256:bfae98bbe1b74d6963875a80ed9f394d12a5a8506f8ccfadf4c3235dd503c063",
+          "verificationMethod": "direct_fetch",
+          "entityKey": "evidence:chris_replay_evidence_0004"
+        },
+        "createdAt": "2026-08-18T22:08:17.672Z",
+        "updatedAt": "2026-08-18T22:08:17.672Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0013",
+        "kind": "pivot",
+        "label": "First-party and official pages",
+        "status": "rejected",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "frontierEntryId": "chris_replay_action_0004",
+        "actionId": "chris_replay_action_0004",
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 27,
+        "data": {
+          "intent": "Corroborate the supplied organization anchor TED in t1.first_party.",
+          "queryHint": "Chris Anderson, TED \"TED\"",
+          "admission": "admissible_after_fetch"
+        },
+        "createdAt": "2026-08-18T22:08:17.791Z",
+        "updatedAt": "2026-08-18T22:08:17.791Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0014",
+        "kind": "pivot",
+        "label": "Candidate-linked Wayback history: Chris Anderson",
+        "status": "exhausted",
+        "sourceTier": 5,
+        "sourceLaneId": "t5.candidate_wayback",
+        "frontierEntryId": "chris_replay_action_0005",
+        "actionId": "chris_replay_action_0005",
+        "candidateId": "chris_replay_candidate_0001",
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 30,
+        "data": {
+          "intent": "Defer candidate-linked archive history because current official sources already satisfy the goal.",
+          "queryHint": "https://www.ted.com/speakers/chris_anderson_ted",
+          "admission": "admissible_after_fetch"
+        },
+        "createdAt": "2026-08-18T22:08:17.833Z",
+        "updatedAt": "2026-08-18T22:08:18.036Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0015",
+        "kind": "pivot",
+        "label": "General web discovery",
+        "status": "queued",
+        "sourceTier": 6,
+        "sourceLaneId": "t6.general_discovery",
+        "frontierEntryId": "chris_replay_action_0006",
+        "actionId": "chris_replay_action_0006",
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 33,
+        "data": {
+          "intent": "Defer broader discovery after the same-name candidates have been separated.",
+          "queryHint": "Chris Anderson TED same-name professional candidates",
+          "admission": "discovery_only"
+        },
+        "createdAt": "2026-08-18T22:08:17.861Z",
+        "updatedAt": "2026-08-18T22:08:17.861Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0016",
+        "kind": "candidate",
+        "label": "Chris Anderson",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": "chris_replay_candidate_0001",
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 36,
+        "data": {
+          "entityKey": "candidate:chris_replay_candidate_0001"
+        },
+        "createdAt": "2026-08-18T22:08:17.938Z",
+        "updatedAt": "2026-08-18T22:08:17.938Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0017",
+        "kind": "candidate",
+        "label": "Chris Anderson",
+        "status": "rejected",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": "chris_replay_candidate_0002",
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 39,
+        "data": {
+          "entityKey": "candidate:chris_replay_candidate_0002"
+        },
+        "createdAt": "2026-08-18T22:08:17.959Z",
+        "updatedAt": "2026-08-18T22:08:17.959Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0018",
+        "kind": "finding",
+        "label": "Identity — Chris Anderson",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": "chris_replay_candidate_0001",
+        "evidenceId": null,
+        "findingId": "chris_replay_finding_0001",
+        "ordinal": 43,
+        "data": {
+          "category": "identity",
+          "confidence": 0.64,
+          "entityKey": "finding:chris_replay_finding_0001"
+        },
+        "createdAt": "2026-08-18T22:08:17.987Z",
+        "updatedAt": "2026-08-18T22:08:17.987Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0019",
+        "kind": "finding",
+        "label": "Employment — Chris Anderson",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": "chris_replay_candidate_0001",
+        "evidenceId": null,
+        "findingId": "chris_replay_finding_0002",
+        "ordinal": 45,
+        "data": {
+          "category": "employment",
+          "confidence": 0.64,
+          "entityKey": "finding:chris_replay_finding_0002"
+        },
+        "createdAt": "2026-08-18T22:08:18.001Z",
+        "updatedAt": "2026-08-18T22:08:18.001Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_node_0020",
+        "kind": "report",
+        "label": "Final intelligence report",
+        "status": "verified",
+        "sourceTier": null,
+        "sourceLaneId": null,
+        "frontierEntryId": null,
+        "actionId": null,
+        "candidateId": null,
+        "evidenceId": null,
+        "findingId": null,
+        "ordinal": 47,
+        "data": {
+          "findingCount": 2,
+          "entityKey": "report:replay-chris-anderson-ted-v2"
+        },
+        "createdAt": "2026-08-18T22:08:18.015Z",
+        "updatedAt": "2026-08-18T22:08:18.015Z"
+      }
+    ],
+    "edges": [
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0001",
+        "fromNodeId": "chris_replay_graph_node_0001",
+        "toNodeId": "chris_replay_graph_node_0002",
+        "kind": "expands",
+        "status": "queued",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "edgeCost": 1.1426,
+        "pathCost": 1.1426,
+        "ordinal": 4,
+        "createdAt": "2026-08-18T22:08:17.056Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0002",
+        "fromNodeId": "chris_replay_graph_node_0002",
+        "toNodeId": "chris_replay_graph_node_0003",
+        "kind": "expands",
+        "status": "queued",
+        "frontierEntryId": "chris_replay_action_0002",
+        "actionId": "chris_replay_action_0002",
+        "edgeCost": 3.0636,
+        "pathCost": 4.2062,
+        "ordinal": 7,
+        "createdAt": "2026-08-18T22:08:17.210Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0003",
+        "fromNodeId": "chris_replay_graph_node_0002",
+        "toNodeId": "chris_replay_graph_node_0004",
+        "kind": "expands",
+        "status": "queued",
+        "frontierEntryId": "chris_replay_action_0003",
+        "actionId": "chris_replay_action_0003",
+        "edgeCost": 3.8872,
+        "pathCost": 5.0298,
+        "ordinal": 10,
+        "createdAt": "2026-08-18T22:08:17.238Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0004",
+        "fromNodeId": "chris_replay_graph_node_0002",
+        "toNodeId": "chris_replay_graph_node_0005",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "edgeCost": 0.04,
+        "pathCost": 1.1826,
+        "ordinal": 12,
+        "createdAt": "2026-08-18T22:08:17.497Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0005",
+        "fromNodeId": "chris_replay_graph_node_0005",
+        "toNodeId": "chris_replay_graph_node_0006",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "edgeCost": 0.03,
+        "pathCost": 1.2126,
+        "ordinal": 14,
+        "createdAt": "2026-08-18T22:08:17.511Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0006",
+        "fromNodeId": "chris_replay_graph_node_0002",
+        "toNodeId": "chris_replay_graph_node_0007",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "edgeCost": 0.04,
+        "pathCost": 1.1826,
+        "ordinal": 16,
+        "createdAt": "2026-08-18T22:08:17.553Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0007",
+        "fromNodeId": "chris_replay_graph_node_0007",
+        "toNodeId": "chris_replay_graph_node_0008",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "edgeCost": 0.03,
+        "pathCost": 1.2126,
+        "ordinal": 18,
+        "createdAt": "2026-08-18T22:08:17.567Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0008",
+        "fromNodeId": "chris_replay_graph_node_0003",
+        "toNodeId": "chris_replay_graph_node_0009",
+        "kind": "grounds",
+        "status": "rejected",
+        "frontierEntryId": "chris_replay_action_0002",
+        "actionId": "chris_replay_action_0002",
+        "edgeCost": 0.04,
+        "pathCost": 4.2462,
+        "ordinal": 20,
+        "createdAt": "2026-08-18T22:08:17.609Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0009",
+        "fromNodeId": "chris_replay_graph_node_0009",
+        "toNodeId": "chris_replay_graph_node_0010",
+        "kind": "grounds",
+        "status": "rejected",
+        "frontierEntryId": "chris_replay_action_0002",
+        "actionId": "chris_replay_action_0002",
+        "edgeCost": 0.03,
+        "pathCost": 4.2762,
+        "ordinal": 22,
+        "createdAt": "2026-08-18T22:08:17.623Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0010",
+        "fromNodeId": "chris_replay_graph_node_0004",
+        "toNodeId": "chris_replay_graph_node_0011",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "chris_replay_action_0003",
+        "actionId": "chris_replay_action_0003",
+        "edgeCost": 0.04,
+        "pathCost": 5.0698,
+        "ordinal": 24,
+        "createdAt": "2026-08-18T22:08:17.665Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0011",
+        "fromNodeId": "chris_replay_graph_node_0011",
+        "toNodeId": "chris_replay_graph_node_0012",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": "chris_replay_action_0003",
+        "actionId": "chris_replay_action_0003",
+        "edgeCost": 0.03,
+        "pathCost": 5.0998,
+        "ordinal": 26,
+        "createdAt": "2026-08-18T22:08:17.679Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0012",
+        "fromNodeId": "chris_replay_graph_node_0002",
+        "toNodeId": "chris_replay_graph_node_0013",
+        "kind": "mutates",
+        "status": "rejected",
+        "frontierEntryId": "chris_replay_action_0004",
+        "actionId": "chris_replay_action_0004",
+        "edgeCost": 1.4846,
+        "pathCost": 2.6272,
+        "ordinal": 29,
+        "createdAt": "2026-08-18T22:08:17.791Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0013",
+        "fromNodeId": "chris_replay_graph_node_0002",
+        "toNodeId": "chris_replay_graph_node_0014",
+        "kind": "expands",
+        "status": "queued",
+        "frontierEntryId": "chris_replay_action_0005",
+        "actionId": "chris_replay_action_0005",
+        "edgeCost": 4.6908,
+        "pathCost": 5.8334,
+        "ordinal": 32,
+        "createdAt": "2026-08-18T22:08:17.833Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0014",
+        "fromNodeId": "chris_replay_graph_node_0001",
+        "toNodeId": "chris_replay_graph_node_0015",
+        "kind": "expands",
+        "status": "queued",
+        "frontierEntryId": "chris_replay_action_0006",
+        "actionId": "chris_replay_action_0006",
+        "edgeCost": 5.0592,
+        "pathCost": 5.0592,
+        "ordinal": 35,
+        "createdAt": "2026-08-18T22:08:17.861Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0015",
+        "fromNodeId": "chris_replay_graph_node_0006",
+        "toNodeId": "chris_replay_graph_node_0016",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 1.2626,
+        "ordinal": 37,
+        "createdAt": "2026-08-18T22:08:17.945Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0016",
+        "fromNodeId": "chris_replay_graph_node_0008",
+        "toNodeId": "chris_replay_graph_node_0016",
+        "kind": "grounds",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 1.2626,
+        "ordinal": 38,
+        "createdAt": "2026-08-18T22:08:17.952Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0017",
+        "fromNodeId": "chris_replay_graph_node_0010",
+        "toNodeId": "chris_replay_graph_node_0017",
+        "kind": "grounds",
+        "status": "rejected",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 4.3262,
+        "ordinal": 40,
+        "createdAt": "2026-08-18T22:08:17.966Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0018",
+        "fromNodeId": "chris_replay_graph_node_0012",
+        "toNodeId": "chris_replay_graph_node_0017",
+        "kind": "grounds",
+        "status": "rejected",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 5.1498,
+        "ordinal": 41,
+        "createdAt": "2026-08-18T22:08:17.973Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0019",
+        "fromNodeId": "chris_replay_graph_node_0016",
+        "toNodeId": "chris_replay_graph_node_0017",
+        "kind": "separates",
+        "status": "rejected",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.11,
+        "pathCost": 1.3726,
+        "ordinal": 42,
+        "createdAt": "2026-08-18T22:08:17.980Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0020",
+        "fromNodeId": "chris_replay_graph_node_0016",
+        "toNodeId": "chris_replay_graph_node_0018",
+        "kind": "supports",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 1.3126,
+        "ordinal": 44,
+        "createdAt": "2026-08-18T22:08:17.994Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0021",
+        "fromNodeId": "chris_replay_graph_node_0016",
+        "toNodeId": "chris_replay_graph_node_0019",
+        "kind": "supports",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.05,
+        "pathCost": 1.3126,
+        "ordinal": 46,
+        "createdAt": "2026-08-18T22:08:18.008Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0022",
+        "fromNodeId": "chris_replay_graph_node_0018",
+        "toNodeId": "chris_replay_graph_node_0020",
+        "kind": "includes",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.04,
+        "pathCost": 1.3526,
+        "ordinal": 48,
+        "createdAt": "2026-08-18T22:08:18.022Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_graph_edge_0023",
+        "fromNodeId": "chris_replay_graph_node_0019",
+        "toNodeId": "chris_replay_graph_node_0020",
+        "kind": "includes",
+        "status": "verified",
+        "frontierEntryId": null,
+        "actionId": null,
+        "edgeCost": 0.04,
+        "pathCost": 1.3526,
+        "ordinal": 49,
+        "createdAt": "2026-08-18T22:08:18.029Z"
+      }
+    ],
+    "frontier": [
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_action_0001",
+        "frontierEntryId": "chris_replay_action_0001",
+        "actionId": "chris_replay_action_0001",
+        "nodeId": "chris_replay_graph_node_0002",
+        "parentNodeId": "chris_replay_graph_node_0001",
+        "parentFrontierEntryId": null,
+        "status": "verified",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "allowedTools": [
+          "fetch_public_source"
+        ],
+        "intent": "Organization team pages, official biographies, and explicit personal sites.",
+        "queryHint": "Chris Anderson, TED",
+        "candidateId": null,
+        "depth": 0,
+        "ordinal": 3,
+        "dedupeKey": "t1.first party unbound chris anderson ted base",
+        "utility": {
+          "relevance": 0.94,
+          "novelty": 0.88,
+          "informationGain": 0.68,
+          "sourceTrust": 0.92,
+          "executionCost": 0.22,
+          "policyRisk": 0.05,
+          "repetition": 0,
+          "depthPenalty": 0
+        },
+        "edgeCost": 1.1426,
+        "pathCost": 1.1426,
+        "mutation": null,
+        "createdAt": "2026-08-18T22:08:17.056Z",
+        "updatedAt": "2026-08-18T22:08:17.196Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_action_0002",
+        "frontierEntryId": "chris_replay_action_0002",
+        "actionId": "chris_replay_action_0002",
+        "nodeId": "chris_replay_graph_node_0003",
+        "parentNodeId": "chris_replay_graph_node_0002",
+        "parentFrontierEntryId": "chris_replay_action_0001",
+        "status": "verified",
+        "sourceTier": 3,
+        "sourceLaneId": "t3.institutional",
+        "allowedTools": [
+          "fetch_public_source",
+          "search_web"
+        ],
+        "intent": "Inspect the separate TED profile that explicitly disambiguates the same-name speaker.",
+        "queryHint": "site:ted.com Chris Anderson WIRED same name",
+        "candidateId": "chris_replay_candidate_0002",
+        "depth": 1,
+        "ordinal": 6,
+        "dedupeKey": "t3.institutional chris replay candidate 0002 site ted.com chris anderson wired same name base",
+        "utility": {
+          "relevance": 0.78,
+          "novelty": 0.76,
+          "informationGain": 0.76,
+          "sourceTrust": 0.8,
+          "executionCost": 0.34,
+          "policyRisk": 0.06,
+          "repetition": 0.16,
+          "depthPenalty": 0.14
+        },
+        "edgeCost": 3.0636,
+        "pathCost": 4.2062,
+        "mutation": null,
+        "createdAt": "2026-08-18T22:08:17.210Z",
+        "updatedAt": "2026-08-18T22:08:17.315Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_action_0003",
+        "frontierEntryId": "chris_replay_action_0003",
+        "actionId": "chris_replay_action_0003",
+        "nodeId": "chris_replay_graph_node_0004",
+        "parentNodeId": "chris_replay_graph_node_0002",
+        "parentFrontierEntryId": "chris_replay_action_0001",
+        "status": "verified",
+        "sourceTier": 4,
+        "sourceLaneId": "t4.reputable_media",
+        "allowedTools": [
+          "fetch_public_source",
+          "search_web"
+        ],
+        "intent": "Corroborate the former WIRED editor and 3DR executive as a separate professional.",
+        "queryHint": "WIRED Chris Anderson 3D Robotics Airware",
+        "candidateId": "chris_replay_candidate_0002",
+        "depth": 1,
+        "ordinal": 9,
+        "dedupeKey": "t4.reputable media chris replay candidate 0002 wired chris anderson 3d robotics airware base",
+        "utility": {
+          "relevance": 0.58,
+          "novelty": 0.76,
+          "informationGain": 0.76,
+          "sourceTrust": 0.7,
+          "executionCost": 0.38,
+          "policyRisk": 0.08,
+          "repetition": 0.16,
+          "depthPenalty": 0.14
+        },
+        "edgeCost": 3.8872,
+        "pathCost": 5.0298,
+        "mutation": null,
+        "createdAt": "2026-08-18T22:08:17.238Z",
+        "updatedAt": "2026-08-18T22:08:17.378Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_action_0004",
+        "frontierEntryId": "chris_replay_action_0004",
+        "actionId": "chris_replay_action_0004",
+        "nodeId": "chris_replay_graph_node_0013",
+        "parentNodeId": "chris_replay_graph_node_0002",
+        "parentFrontierEntryId": "chris_replay_action_0001",
+        "status": "rejected",
+        "sourceTier": 1,
+        "sourceLaneId": "t1.first_party",
+        "allowedTools": [
+          "fetch_public_source",
+          "search_web"
+        ],
+        "intent": "Corroborate the supplied organization anchor TED in t1.first_party.",
+        "queryHint": "Chris Anderson, TED \"TED\"",
+        "candidateId": null,
+        "depth": 1,
+        "ordinal": 28,
+        "dedupeKey": "t1.first party unbound chris anderson ted ted organization anchor",
+        "utility": {
+          "relevance": 0.94,
+          "novelty": 0.96,
+          "informationGain": 0.68,
+          "sourceTrust": 0.92,
+          "executionCost": 0.22,
+          "policyRisk": 0.05,
+          "repetition": 0.12,
+          "depthPenalty": 0.14
+        },
+        "edgeCost": 1.4846,
+        "pathCost": 2.6272,
+        "mutation": {
+          "strategy": "organization_anchor",
+          "parentFrontierEntryId": "chris_replay_action_0001",
+          "proposalIndex": 0,
+          "temperature": 1,
+          "logAcceptanceRatio": -0.747465,
+          "acceptanceProbability": 0.473566,
+          "deterministicU": 0.864711,
+          "parentNeighborCount": 2,
+          "candidateNeighborCount": 3
+        },
+        "createdAt": "2026-08-18T22:08:17.791Z",
+        "updatedAt": "2026-08-18T22:08:17.791Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_action_0005",
+        "frontierEntryId": "chris_replay_action_0005",
+        "actionId": "chris_replay_action_0005",
+        "nodeId": "chris_replay_graph_node_0014",
+        "parentNodeId": "chris_replay_graph_node_0002",
+        "parentFrontierEntryId": "chris_replay_action_0001",
+        "status": "exhausted",
+        "sourceTier": 5,
+        "sourceLaneId": "t5.candidate_wayback",
+        "allowedTools": [
+          "wayback_profile_history"
+        ],
+        "intent": "Defer candidate-linked archive history because current official sources already satisfy the goal.",
+        "queryHint": "https://www.ted.com/speakers/chris_anderson_ted",
+        "candidateId": "chris_replay_candidate_0001",
+        "depth": 1,
+        "ordinal": 31,
+        "dedupeKey": "t5.candidate wayback chris replay candidate 0001 https www.ted.com speakers chris anderson ted base",
+        "utility": {
+          "relevance": 0.58,
+          "novelty": 0.76,
+          "informationGain": 0.76,
+          "sourceTrust": 0.58,
+          "executionCost": 0.52,
+          "policyRisk": 0.12,
+          "repetition": 0.16,
+          "depthPenalty": 0.14
+        },
+        "edgeCost": 4.6908,
+        "pathCost": 5.8334,
+        "mutation": null,
+        "createdAt": "2026-08-18T22:08:17.833Z",
+        "updatedAt": "2026-08-18T22:08:18.036Z"
+      },
+      {
+        "schemaVersion": 2,
+        "id": "chris_replay_action_0006",
+        "frontierEntryId": "chris_replay_action_0006",
+        "actionId": "chris_replay_action_0006",
+        "nodeId": "chris_replay_graph_node_0015",
+        "parentNodeId": "chris_replay_graph_node_0001",
+        "parentFrontierEntryId": null,
+        "status": "queued",
+        "sourceTier": 6,
+        "sourceLaneId": "t6.general_discovery",
+        "allowedTools": [
+          "search_web"
+        ],
+        "intent": "Defer broader discovery after the same-name candidates have been separated.",
+        "queryHint": "Chris Anderson TED same-name professional candidates",
+        "candidateId": null,
+        "depth": 0,
+        "ordinal": 34,
+        "dedupeKey": "t6.general discovery unbound chris anderson ted same-name professional candidates base",
+        "utility": {
+          "relevance": 0.58,
+          "novelty": 0.88,
+          "informationGain": 0.68,
+          "sourceTrust": 0.18,
+          "executionCost": 0.28,
+          "policyRisk": 0.16,
+          "repetition": 0,
+          "depthPenalty": 0
+        },
+        "edgeCost": 5.0592,
+        "pathCost": 5.0592,
+        "mutation": null,
+        "createdAt": "2026-08-18T22:08:17.861Z",
+        "updatedAt": "2026-08-18T22:08:17.861Z"
+      }
+    ],
+    "selectedFrontierEntryIds": [],
+    "currentSourceTier": 5,
+    "nextOrdinal": 50,
+    "mutationStep": 1,
+    "telemetry": {
+      "seeded": 1,
+      "enqueued": 6,
+      "selected": 4,
+      "pruned": 0,
+      "expanded": 3,
+      "exhausted": 0,
+      "toolCalls": 3,
+      "mutationToolCalls": 0,
+      "mutationsProposed": 1,
+      "mutationsAccepted": 0,
+      "mutationsRejected": 1
+    },
+    "createdAt": "2026-08-18T22:08:17.000Z",
+    "updatedAt": "2026-08-18T22:08:18.036Z"
+  },
   "coverage": {
     "score": 0.833,
     "requestedCategories": [
@@ -547,11 +1562,12 @@
     {
       "sourceFamily": "ted.com",
       "sourceTypes": [
-        "official_profile"
+        "official_profile",
+        "public_document"
       ],
       "evidenceCount": 3,
-      "supportingCount": 3,
-      "contradictingCount": 0,
+      "supportingCount": 2,
+      "contradictingCount": 1,
       "discoveryOnlyCount": 0,
       "urls": [
         "https://www.ted.com/speakers/chris_anderson_ted",
@@ -574,14 +1590,14 @@
   ],
   "telemetry": {
     "candidateCount": 2,
-    "resolvedCandidateCount": 1,
+    "resolvedCandidateCount": 0,
     "evidence": {
       "admitted": 4,
       "rejected": 0,
       "duplicate": 0,
       "discoveryOnly": 0,
-      "supporting": 4,
-      "contradicting": 0
+      "supporting": 3,
+      "contradicting": 1
     },
     "findingCount": 2,
     "highConfidenceFindingCount": 0
@@ -598,7 +1614,7 @@
     "outputTokens": 0,
     "thinkingTokens": 0,
     "costUsd": 0,
-    "elapsedMs": 371,
+    "elapsedMs": 1162,
     "consecutiveNoProgress": 0,
     "phaseTurns": {}
   },
@@ -608,7 +1624,7 @@
   "stop": {
     "reason": "goal_satisfied",
     "detail": "Resolved the TED-constrained candidate with a unique official anchor and preserved the same-name decoy as a separate rejected candidate.",
-    "at": "2026-08-18T22:08:17.364Z"
+    "at": "2026-08-18T22:08:18.155Z"
   },
-  "generatedAt": "2026-08-18T22:08:17.378Z"
+  "generatedAt": "2026-08-18T22:08:18.169Z"
 }

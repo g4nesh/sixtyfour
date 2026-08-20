@@ -1,12 +1,12 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "cassetteVersion": 2,
   "capturedAt": "2026-08-18T22:08:17.000Z",
   "networkOnReplay": "forbidden",
   "decisionProvenance": "scripted_local_policy",
   "requests": [
     {
-      "id": "req-python-foreword",
+      "id": "python_replay_action_0002",
       "fingerprint": "GET https://www.python.org/doc/essays/foreword/ accept:text/html",
       "response": {
         "status": 200,
@@ -23,10 +23,13 @@
             "canonicalSubset": null
           }
         ]
-      }
+      },
+      "captureId": "req-python-foreword",
+      "actionId": "python_replay_action_0002",
+      "frontierEntryId": "python_replay_action_0002"
     },
     {
-      "id": "req-guido-bio",
+      "id": "python_replay_action_0001",
       "fingerprint": "GET https://gvanrossum.github.io/bio accept:text/html",
       "response": {
         "status": 200,
@@ -42,7 +45,10 @@
             "canonicalSubset": null
           }
         ]
-      }
+      },
+      "captureId": "req-guido-bio",
+      "actionId": "python_replay_action_0001",
+      "frontierEntryId": "python_replay_action_0001"
     }
   ],
   "scriptedDecisions": [

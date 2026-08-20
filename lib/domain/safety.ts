@@ -19,6 +19,20 @@ interface SafetyRule {
   patterns: RegExp[];
 }
 
+function boundedDecode(value: string): string {
+  let decoded = value;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+  return decoded;
+}
+
 const RULES: SafetyRule[] = [
   {
     code: "credential_or_financial_data",
@@ -69,6 +83,7 @@ const RULES: SafetyRule[] = [
       /\bhow\s+(?:can|do)\s+i\s+(?:call|contact|reach)\b/i,
       /\bhow\s+(?:can|do)\s+i\s+ring\b/i,
       /\b(?:get|find|reveal|lookup)\b.{0,30}\b(?:contact number|direct number)\b/i,
+      /\b(?:property\s+(?:lookup|owner|ownership|records?)|property[- ]tax[- ]assessor|tax[- ]assessor)\b/i,
     ],
   },
   {
@@ -208,7 +223,7 @@ export function classifySafety(
   options: SafetyClassifierOptions = {},
 ): SafetyDecision {
   const input = parseInvestigationInput(inputValue);
-  const text = `${input.query} ${input.objective ?? ""}`;
+  const text = boundedDecode(`${input.query} ${input.objective ?? ""}`);
   const policyText = withoutClearlyProfessionalConceptContext(text);
   const reasons: SafetyReason[] = [];
 

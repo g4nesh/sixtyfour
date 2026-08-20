@@ -1,12 +1,12 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "cassetteVersion": 2,
   "capturedAt": "2026-08-18T22:08:17.000Z",
   "networkOnReplay": "forbidden",
   "decisionProvenance": "scripted_local_policy",
   "requests": [
     {
-      "id": "req-ted-selected",
+      "id": "chris_replay_action_0001",
       "fingerprint": "GET https://www.ted.com/speakers/chris_anderson_ted accept:text/html",
       "response": {
         "status": 200,
@@ -30,10 +30,13 @@
             "canonicalSubset": null
           }
         ]
-      }
+      },
+      "captureId": "req-ted-selected",
+      "actionId": "chris_replay_action_0001",
+      "frontierEntryId": "chris_replay_action_0001"
     },
     {
-      "id": "req-ted-decoy",
+      "id": "chris_replay_action_0002",
       "fingerprint": "GET https://www.ted.com/speakers/chris_anderson_wired accept:text/html",
       "response": {
         "status": 200,
@@ -49,10 +52,13 @@
             "canonicalSubset": null
           }
         ]
-      }
+      },
+      "captureId": "req-ted-decoy",
+      "actionId": "chris_replay_action_0002",
+      "frontierEntryId": "chris_replay_action_0002"
     },
     {
-      "id": "req-wired-decoy",
+      "id": "chris_replay_action_0003",
       "fingerprint": "GET https://www.wired.com/story/airware-drones/ accept:text/html",
       "response": {
         "status": 200,
@@ -68,7 +74,10 @@
             "canonicalSubset": null
           }
         ]
-      }
+      },
+      "captureId": "req-wired-decoy",
+      "actionId": "chris_replay_action_0003",
+      "frontierEntryId": "chris_replay_action_0003"
     }
   ],
   "scriptedDecisions": [

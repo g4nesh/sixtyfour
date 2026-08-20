@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "python-creator",
   "title": "Role-only public figure resolution",
   "description": "A scripted reconstruction from source-verified public captures that resolves a role description to Guido van Rossum using the official Python site and his public biography.",

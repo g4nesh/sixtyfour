@@ -1,12 +1,12 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "cassetteVersion": 2,
   "capturedAt": "2026-08-18T22:08:17.000Z",
   "networkOnReplay": "forbidden",
   "decisionProvenance": "scripted_local_policy",
   "requests": [
     {
-      "id": "req-linux-doc",
+      "id": "linus_replay_action_0006",
       "fingerprint": "GET https://github.com/torvalds/linux/blob/master/Documentation/process/submitting-patches.rst accept:text/html",
       "response": {
         "status": 200,
@@ -22,10 +22,13 @@
             "canonicalSubset": null
           }
         ]
-      }
+      },
+      "captureId": "req-linux-doc",
+      "actionId": "linus_replay_action_0006",
+      "frontierEntryId": "linus_replay_action_0006"
     },
     {
-      "id": "req-linux-foundation",
+      "id": "linus_replay_action_0002",
       "fingerprint": "GET https://www.linuxfoundation.org/about/leadership accept:text/html",
       "response": {
         "status": 200,
@@ -41,10 +44,13 @@
             "canonicalSubset": null
           }
         ]
-      }
+      },
+      "captureId": "req-linux-foundation",
+      "actionId": "linus_replay_action_0002",
+      "frontierEntryId": "linus_replay_action_0002"
     },
     {
-      "id": "req-github-search",
+      "id": "linus_replay_action_0001",
       "fingerprint": "GET https://api.github.com/search/commits?q=repo%3Atorvalds%2Flinux+author-email%3Atorvalds%40linux-foundation.org+is%3Apublic&sort=committer-date&order=desc&per_page=3 accept:application/vnd.github+json",
       "response": {
         "status": 200,
@@ -58,10 +64,13 @@
           "exact_author_email_match": true
         },
         "evidenceBindings": []
-      }
+      },
+      "captureId": "req-github-search",
+      "actionId": "linus_replay_action_0001",
+      "frontierEntryId": "linus_replay_action_0001"
     },
     {
-      "id": "req-github-commit",
+      "id": "linus_replay_action_0004",
       "fingerprint": "GET https://api.github.com/repos/torvalds/linux/commits/3a0dd7ba4f44cdc116d83712f61e7c1a95be3588 accept:application/vnd.github+json",
       "response": {
         "status": 200,
@@ -94,10 +103,13 @@
             }
           }
         ]
-      }
+      },
+      "captureId": "req-github-commit",
+      "actionId": "linus_replay_action_0004",
+      "frontierEntryId": "linus_replay_action_0004"
     },
     {
-      "id": "req-keybase",
+      "id": "linus_replay_action_0005",
       "fingerprint": "GET https://keybase.io/_/api/1.0/user/lookup.json?github=torvalds&fields=basics%2Cproofs_summary%2Cremote_key_proofs accept:application/json",
       "response": {
         "status": 200,
@@ -108,7 +120,10 @@
           "matching_user": false
         },
         "evidenceBindings": []
-      }
+      },
+      "captureId": "req-keybase",
+      "actionId": "linus_replay_action_0005",
+      "frontierEntryId": "linus_replay_action_0005"
     }
   ],
   "scriptedDecisions": [

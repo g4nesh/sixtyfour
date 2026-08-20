@@ -6,7 +6,7 @@
  * domain boundary.
  */
 
-export const SCHEMA_VERSION = 1 as const;
+export const SCHEMA_VERSION = 2 as const;
 
 export type SchemaVersion = typeof SCHEMA_VERSION;
 
@@ -30,10 +30,28 @@ export interface InvestigationInputV1 {
 
 export type InvestigationInput = InvestigationInputV1;
 
-export type TargetKind = "email" | "named_person" | "role_query" | "unknown";
+export type TargetKind =
+  | "email"
+  | "named_person"
+  | "role_query"
+  | "organization"
+  | "url"
+  | "domain"
+  | "repository"
+  | "publication"
+  | "package"
+  | "platform_handle"
+  | "unknown";
 
 export type IdentifierKind =
   | "email"
+  | "url"
+  | "domain"
+  | "repository"
+  | "doi"
+  | "orcid"
+  | "package"
+  | "platform_handle"
   | "profile_url"
   | "personal_domain"
   | "social_handle"
@@ -407,6 +425,168 @@ export interface InvestigationStop {
   at: string;
 }
 
+/** Canonical execution graph retained from the first pivot through the report. */
+export const SEARCH_GRAPH_SCHEMA_VERSION = 2 as const;
+
+export type SourceTier = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+export type SearchGraphNodeKind =
+  | "seed"
+  | "pivot"
+  | "action"
+  | "source"
+  | "evidence"
+  | "candidate"
+  | "finding"
+  | "gap"
+  | "report";
+
+export type SearchGraphStatus =
+  | "queued"
+  | "selected"
+  | "running"
+  | "verified"
+  | "rejected"
+  | "exhausted"
+  | "mutated";
+
+export type SearchGraphEdgeKind =
+  | "expands"
+  | "mutates"
+  | "supports"
+  | "conflicts"
+  | "separates"
+  | "grounds"
+  | "includes";
+
+export interface SearchUtilityComponents {
+  relevance: number;
+  novelty: number;
+  informationGain: number;
+  sourceTrust: number;
+  executionCost: number;
+  policyRisk: number;
+  repetition: number;
+  depthPenalty: number;
+}
+
+export interface SearchGraphNodeV2 {
+  schemaVersion: typeof SEARCH_GRAPH_SCHEMA_VERSION;
+  id: string;
+  kind: SearchGraphNodeKind;
+  label: string;
+  status: SearchGraphStatus;
+  sourceTier: SourceTier | null;
+  sourceLaneId: string | null;
+  frontierEntryId: string | null;
+  actionId: string | null;
+  candidateId: string | null;
+  evidenceId: string | null;
+  findingId: string | null;
+  ordinal: number;
+  data: JsonObject;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SearchGraphNode = SearchGraphNodeV2;
+
+export interface SearchGraphEdgeV2 {
+  schemaVersion: typeof SEARCH_GRAPH_SCHEMA_VERSION;
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  kind: SearchGraphEdgeKind;
+  status: SearchGraphStatus;
+  frontierEntryId: string | null;
+  actionId: string | null;
+  /** Immutable, finite, and strictly positive. */
+  readonly edgeCost: number;
+  /** Immutable path cost at edge admission. */
+  readonly pathCost: number;
+  ordinal: number;
+  createdAt: string;
+}
+
+export type SearchGraphEdge = SearchGraphEdgeV2;
+
+export interface FrontierMutationMetadata {
+  strategy: "exact_phrase" | "role_anchor" | "organization_anchor" | "source_adjacent";
+  parentFrontierEntryId: string;
+  proposalIndex: number;
+  temperature: number;
+  logAcceptanceRatio: number;
+  acceptanceProbability: number;
+  deterministicU: number;
+  parentNeighborCount: number;
+  candidateNeighborCount: number;
+}
+
+export interface SearchFrontierEntryV2 {
+  schemaVersion: typeof SEARCH_GRAPH_SCHEMA_VERSION;
+  /** `id`, `frontierEntryId`, and `actionId` are one stable end-to-end join. */
+  id: string;
+  frontierEntryId: string;
+  actionId: string;
+  nodeId: string;
+  parentNodeId: string;
+  parentFrontierEntryId: string | null;
+  status: SearchGraphStatus;
+  sourceTier: SourceTier;
+  sourceLaneId: string;
+  allowedTools: string[];
+  intent: string;
+  queryHint: string;
+  candidateId: string | null;
+  depth: number;
+  ordinal: number;
+  dedupeKey: string;
+  utility: SearchUtilityComponents;
+  /** Immutable, finite, and strictly positive. */
+  readonly edgeCost: number;
+  /** Immutable, finite, and strictly positive. */
+  readonly pathCost: number;
+  mutation: FrontierMutationMetadata | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SearchFrontierEntry = SearchFrontierEntryV2;
+
+export interface SearchGraphTelemetry {
+  seeded: number;
+  enqueued: number;
+  selected: number;
+  pruned: number;
+  expanded: number;
+  exhausted: number;
+  toolCalls: number;
+  mutationToolCalls: number;
+  mutationsProposed: number;
+  mutationsAccepted: number;
+  mutationsRejected: number;
+}
+
+export interface SearchGraphV2 {
+  schemaVersion: typeof SEARCH_GRAPH_SCHEMA_VERSION;
+  runId: string;
+  status: "empty" | "active" | "exhausted" | "completed" | "blocked" | "canceled" | "failed";
+  seed: string;
+  seedNodeId: string | null;
+  nodes: SearchGraphNode[];
+  edges: SearchGraphEdge[];
+  frontier: SearchFrontierEntry[];
+  selectedFrontierEntryIds: string[];
+  currentSourceTier: SourceTier | null;
+  nextOrdinal: number;
+  mutationStep: number;
+  telemetry: SearchGraphTelemetry;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SearchGraph = SearchGraphV2;
+
 export interface InvestigationStateV1 {
   schemaVersion: SchemaVersion;
   runId: string;
@@ -419,6 +599,7 @@ export interface InvestigationStateV1 {
   candidates: Candidate[];
   evidence: EvidenceRecord[];
   findings: Finding[];
+  searchGraph: SearchGraph;
   openQuestions: string[];
   evidenceTelemetry: EvidenceTelemetry;
   budget: {
@@ -493,6 +674,7 @@ export interface InvestigationReportV1 {
   candidates: Candidate[];
   findings: Finding[];
   evidence: EvidenceRecord[];
+  searchGraph: SearchGraph;
   coverage: CoverageSummary;
   sources: SourceSummary[];
   telemetry: ReportTelemetry;

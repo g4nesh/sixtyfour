@@ -1,5 +1,10 @@
 import { exhaustedBudgetDimensions } from "./budget";
-import { requestedCategoriesForInput, resolveIdentity, summarizeCoverage } from "./report";
+import {
+  candidateHasUniqueOfficialAnchor,
+  requestedCategoriesForInput,
+  resolveIdentity,
+  summarizeCoverage,
+} from "./report";
 import type {
   Candidate,
   InvestigationState,
@@ -8,33 +13,14 @@ import type {
   TerminalStatus,
 } from "./types";
 
-const UNIQUE_ANCHOR_SOURCE_TYPES = new Set(["official_profile", "company_page"]);
-const UNIQUE_ANCHOR_SIGNAL_KINDS = new Set([
-  "email",
-  "profile_url",
-  "personal_domain",
-  "keybase_proof",
-  "cross_profile_link",
-]);
-
 function hasUniqueOfficialAnchor(
   state: InvestigationState,
   selectedCandidateId: string | undefined,
 ): boolean {
   if (!selectedCandidateId) return false;
   const candidate = state.candidates.find((item) => item.id === selectedCandidateId);
-  if (!candidate || candidate.score.conflictingSignals.length > 0) return false;
-  return state.evidence.some((evidence) =>
-    evidence.candidateId === selectedCandidateId
-    && evidence.disposition === "supports"
-    && UNIQUE_ANCHOR_SOURCE_TYPES.has(evidence.sourceType)
-    && !evidence.spoofable
-    && evidence.reliability >= 0.8
-    && candidate.signals.some((signal) =>
-      signal.sourceEvidenceId === evidence.id
-      && UNIQUE_ANCHOR_SIGNAL_KINDS.has(signal.kind)
-      && signal.strength === "strong"
-      && (signal.assurance === "verified" || signal.assurance === "corroborated")));
+  if (!candidate) return false;
+  return candidateHasUniqueOfficialAnchor(candidate, state.evidence);
 }
 
 export interface StopEvaluationOptions {
@@ -79,7 +65,7 @@ export function evaluateStop(
     };
   }
 
-  const identity = resolveIdentity(state.candidates);
+  const identity = resolveIdentity(state.candidates, state.evidence);
   const coverage = summarizeCoverage(state, requestedCategoriesForInput(state.input));
   const minimumFindings = Math.min(
     options.minimumFindings ?? 2,

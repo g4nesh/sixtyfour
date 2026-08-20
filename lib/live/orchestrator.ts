@@ -130,6 +130,20 @@ function safeHttpsUrl(value: unknown): string | null {
   }
 }
 
+/** Authorizes only a byte-canonical HTTPS URL explicitly present in user input. */
+export function exactUserSuppliedUrl(
+  state: Pick<InvestigationState, "target">,
+  value: unknown,
+): string | null {
+  const normalized = safeHttpsUrl(value);
+  if (!normalized) return null;
+  const exact = state.target.identifiers.some((identifier) =>
+    identifier.kind === "url"
+    && identifier.provenance === "user_input"
+    && safeHttpsUrl(identifier.value) === normalized);
+  return exact ? normalized : null;
+}
+
 function jsonClone(value: unknown): JsonValue {
   const cloned = cloneJson(value);
   if (!isJsonValue(cloned)) throw new TypeError("provider result was not JSON-safe");
@@ -231,7 +245,10 @@ function compactState(state: InvestigationState): JsonObject {
   };
 }
 
-function decisionTool(availableTools: readonly string[]): OpenRouterFunctionTool {
+function decisionTool(
+  availableTools: readonly string[],
+  selectedFrontierEntryIds: readonly string[],
+): OpenRouterFunctionTool {
   return functionTool({
     name: "propose_research_batch",
     description: "Submit one bounded, policy-compliant research decision. Do not include private reasoning.",
@@ -255,8 +272,9 @@ function decisionTool(availableTools: readonly string[]): OpenRouterFunctionTool
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["tool", "purpose", "arguments", "candidateId"],
+            required: ["frontierEntryId", "tool", "purpose", "arguments", "candidateId"],
             properties: {
+              frontierEntryId: { type: "string", enum: [...selectedFrontierEntryIds] },
               tool: { type: "string", enum: [...availableTools] },
               purpose: { type: "string", minLength: 1, maxLength: 220 },
               arguments: { type: "object", additionalProperties: true },
@@ -302,8 +320,14 @@ function parseDecision(value: unknown, context: PlannerContextV1): PlannerDecisi
       if (!isRecord(item)) throw new TypeError("each action must be an object");
       const tool = stringValue(item.tool, 64);
       const purpose = stringValue(item.purpose, 220);
+      const frontierEntryId = stringValue(item.frontierEntryId, 180);
       if (!tool || !purpose || !context.availableTools.includes(tool)) {
         throw new TypeError("action tool is not allowlisted");
+      }
+      const frontierEntry = (context.selectedFrontierEntries ?? []).find((entry) =>
+        entry.id === frontierEntryId);
+      if (!frontierEntry || !frontierEntry.allowedTools.includes(tool)) {
+        throw new TypeError("action is not bound to a selected compatible frontier entry");
       }
       if (!isJsonValue(item.arguments) || !isRecord(item.arguments)) {
         throw new TypeError("action arguments must be a JSON object");
@@ -312,7 +336,16 @@ function parseDecision(value: unknown, context: PlannerContextV1): PlannerDecisi
       if (candidateId && !context.state.candidates.some((candidate) => candidate.id === candidateId)) {
         throw new TypeError("action candidateId is unknown");
       }
-      return { tool, purpose, arguments: cloneJson(item.arguments) as JsonObject, ...(candidateId ? { candidateId } : {}) };
+      if (frontierEntry.candidateId !== null && candidateId !== frontierEntry.candidateId) {
+        throw new TypeError("action candidateId does not match its frontier entry");
+      }
+      return {
+        frontierEntryId: frontierEntry.id,
+        tool,
+        purpose,
+        arguments: cloneJson(item.arguments) as JsonObject,
+        ...(candidateId ? { candidateId } : {}),
+      };
     });
     return { kind, decisionSummary, actions };
   }
@@ -329,8 +362,9 @@ function parseDecision(value: unknown, context: PlannerContextV1): PlannerDecisi
 function plannerSystemPrompt(): string {
   return [
     "You plan bounded public-professional research for an evidence-graph agent.",
+    "Every action must bind to exactly one selected frontierEntryId and use a tool allowed by that entry. Do not invent a new pivot outside the frontier.",
     "Return only the propose_research_batch function call and a short decisionSummary; never expose private reasoning.",
-    "Search annotations are discovery-only. Use fetch_public_source with the candidateId and opaque leadId before asking to make a factual finding; do not rewrite a lead URL.",
+    "Search annotations are discovery-only. Use fetch_public_source with candidateId plus opaque leadId before asking to make a factual finding; do not rewrite a lead URL. The only candidate-free fetch is the exact URL in a selected t0.explicit_url entry.",
     "Keep same-name people separate. Reuse an existing candidateId when fetching a source for that candidate.",
     "github_email_codegraph is legal only for the exact email already present as an explicit user identifier; never infer or enumerate emails.",
     "wayback_profile_history is optional and only for an HTTPS URL already linked to its candidate. It cannot introduce or merge a candidate.",
@@ -998,9 +1032,25 @@ export function createLiveDependencies(
   const plannerMessages: OpenRouterMessage[] = [{ role: "system", content: plannerSystemPrompt() }];
 
   const planner = async (context: PlannerContextV1): Promise<PlannerDecision> => {
+    // Direct planner composition may omit the frontier for an advance/stop
+    // decision. Action decisions still require a selected compatible entry.
+    const selectedFrontierEntries = context.selectedFrontierEntries ?? [];
     plannerMessages.push({
       role: "user",
-      content: `Choose the next legal decision from this JSON state:\n${JSON.stringify(compactState(context.state))}`,
+      content: `Choose the next legal decision from this JSON state and selected frontier:\n${JSON.stringify({
+        state: compactState(context.state),
+        selectedFrontier: selectedFrontierEntries.map((entry) => ({
+          frontierEntryId: entry.id,
+          sourceTier: entry.sourceTier,
+          sourceLaneId: entry.sourceLaneId,
+          allowedTools: entry.allowedTools,
+          intent: entry.intent,
+          queryHint: entry.queryHint,
+          candidateId: entry.candidateId,
+          pathCost: entry.pathCost,
+          mutated: entry.mutation !== null,
+        })),
+      })}`,
     });
     const modelTracker = createLiveModelTracker();
     let repairMessage: string | null = null;
@@ -1008,7 +1058,10 @@ export function createLiveDependencies(
       if (repairMessage) plannerMessages.push({ role: "user", content: repairMessage });
       const completion = await completeModel({
         messages: plannerMessages,
-        tools: [decisionTool(context.availableTools)],
+        tools: [decisionTool(
+          context.availableTools,
+          selectedFrontierEntries.map((entry) => entry.id),
+        )],
         maxCompletionTokens: 1_600,
         temperature: 0,
         parallelToolCalls: false,
@@ -1018,7 +1071,10 @@ export function createLiveDependencies(
       plannerMessages.splice(0, plannerMessages.length, ...appendAssistantTurn(plannerMessages, completion));
       try {
         const extracted = extractFunctionArguments(completion, "propose_research_batch");
-        const decision = parseDecision(extracted.value, context);
+        const decision = parseDecision(extracted.value, {
+          ...context,
+          selectedFrontierEntries,
+        });
         plannerMessages.push(toolResultMessage(extracted.callId, { accepted: true }));
         return { ...decision, modelTelemetry: trackerTelemetry(modelTracker) };
       } catch (error) {
@@ -1211,8 +1267,11 @@ export function createLiveDependencies(
       const establishedUrl = proposedUrl
         ? sourceAllowedForCandidate(context.state, proposedUrl, action.candidateId)
         : null;
+      const exactInputUrl = action.sourceLaneId === "t0.explicit_url" && proposedUrl
+        ? exactUserSuppliedUrl(context.state, proposedUrl)
+        : null;
       const url = leadUrl ?? proposedUrl;
-      const allowedUrl = leadUrl ?? establishedUrl;
+      const allowedUrl = leadUrl ?? establishedUrl ?? exactInputUrl;
       if (!url || !allowedUrl) return { status: "skipped", diagnostics: [{ code: "source_url_not_linked", severity: "warning", message: "The URL was not returned by search or already linked to the candidate.", retryable: false }], meta: { requests: 0, llmCalls: 0 } };
       const fetched = await fetchPublicSource({ url, allowedUrl }, sharedContext);
       if (!fetched.data) return { status: fetched.status, diagnostics: diagnostics(fetched), meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: fetched.meta.incomplete, llmCalls: 0 } };

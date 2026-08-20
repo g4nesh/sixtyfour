@@ -71,7 +71,7 @@ function accounting() {
 
 function actionContext(engine) {
   return {
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     state: engine.snapshot(),
     modelAccounting: accounting(),
   };
@@ -79,7 +79,7 @@ function actionContext(engine) {
 
 test("role-only search bootstraps only an attested quarantined candidate, then direct fetch binds it", async () => {
   const input = {
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     query: "do deep research on the CTO of Ariglad",
     requestedDepth: "standard",
   };
@@ -153,7 +153,7 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
   });
 
   const search = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-role-search",
     tool: "search_web",
     purpose: "Find the current CTO from provider-attested public results.",
@@ -190,7 +190,7 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
   }).admitted, true);
 
   const direct = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-role-fetch",
     tool: "fetch_public_source",
     purpose: "Bind the attested candidate to the exact fetched source.",
@@ -223,7 +223,7 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
 test("a plain-name first page is quarantined with its quote and can be corroborated without contaminating the name candidate", async () => {
   const sourceUrl = "https://first.example/chris-anderson";
   const input = {
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     query: "Chris Anderson public professional background",
     requestedDepth: "standard",
   };
@@ -280,7 +280,7 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
   });
 
   const search = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-plain-search",
     tool: "search_web",
     purpose: "Find direct public professional sources for the named subject.",
@@ -295,7 +295,7 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
   assert.equal(engine.admitEvidence({ ...lead, candidateId: primary.id }).admitted, true);
 
   const direct = await dependencies.executeAction({
-    schemaVersion: 1,
+    schemaVersion: domain.SCHEMA_VERSION,
     id: "action-plain-fetch",
     tool: "fetch_public_source",
     purpose: "Inspect the exact provider-attested lead without assuming identity.",

@@ -1,6 +1,6 @@
 # Atlas — People Intelligence
 
-Atlas is an auditable public-source research agent for resolving professional identities. It separates same-name candidates, attaches every finding to direct evidence, exposes the full execution trace, and stops honestly when identity or coverage is insufficient.
+Atlas is an auditable public-source research agent for resolving professional identities. Its live scheduler performs a visible best-first search over a canonical execution graph: it expands the lowest-cost legal source frontier first, keeps rejected and ambiguous branches, and reserves a small deterministic Metropolis-Hastings mutation lane for useful adjacent exploration. It separates same-name candidates, attaches every finding to direct evidence, exposes the full execution trace, and stops honestly when identity or coverage is insufficient.
 
 The default experience is a deterministic, zero-network replay. Live research is an explicit server-side mode backed by OpenRouter; no provider key is required to evaluate the three included runs.
 
@@ -15,7 +15,7 @@ npm ci --ignore-scripts
 npm run dev
 ```
 
-Open `http://localhost:3000`, select any example chip, and inspect the dossier, evidence, and trace views. The replay path performs no outbound requests.
+Open `http://localhost:3000`, select a verified capture, and run it. The black graph workspace shows every queued, selected, verified, exhausted, mutated, and rejected path; the source ladder groups retained frontier state and admitted evidence by website tier while execution telemetry reports actual tool calls; the trace remains append-only; and the final report can be downloaded as deterministic Markdown or a polished client-rendered PDF. The replay path performs no outbound requests.
 
 The same artifacts are available from the CLI:
 
@@ -45,9 +45,9 @@ The example evidence projections and raw-response SHA-256 hashes were manually c
 
 | Example | Input shape | What it demonstrates |
 | --- | --- | --- |
-| `linus-codegraph` | Exact user-supplied public email | Linux documentation, bounded GitHub public-commit codegraph, immutable commit/account edges, signature inspection, optional Keybase lookup, and an explicit spoofable-Git confidence cap |
-| `chris-anderson-ted` | Name + organization | Selection of the TED leader while a same-name former WIRED editor/3DR executive remains a quarantined candidate with separate evidence |
-| `python-creator` | Role only | Resolution of Guido van Rossum using direct official/public professional sources |
+| `linus-codegraph` | Exact user-supplied public email | Lowest-cost exact-identifier and first-party paths, a bounded GitHub public-commit codegraph, immutable commit/account edges, signature inspection, an explicit spoofable-Git cap, and one accepted mutation retained as a deferred, unexecuted branch |
+| `chris-anderson-ted` | Name + organization | Selection of the TED leader while a same-name former WIRED editor/3DR executive and a rejected organization-anchor mutation remain visible and isolated |
+| `python-creator` | Role only | Resolution of Guido van Rossum from first-party and structured professional sources, with the unused accepted mutation branch retained rather than erased |
 
 Each directory in `examples/` contains `input.json`, `output.json`, `trace.json`, `cassette.json`, and `manifest.json`. Direct-fetch evidence is an exact captured source excerpt; structured API evidence has no quote and is rendered as a labeled canonical API claim. Repeated replays are canonical byte-stable and fail tests if they attempt a network request.
 
@@ -80,18 +80,43 @@ The included Sites configuration is replay-only: it contains no provider key and
 
 Provider `reasoning_details`, when present, are retained only as opaque continuation data required by the provider. They are never logged or streamed. Atlas exposes only normalized usage and a provider-reported reasoning-token count; unavailable values remain `null` with a reason. Missing configuration returns a `configuration_error`, never fabricated live research.
 
+The orchestration and presentation layers intentionally reuse mature open-source components: LangGraph.js for conditional agent control, React Flow for the graph canvas, ELK.js for optional client layout, and React-PDF for client-side report rendering. Exact pinned versions and licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## Agent architecture
 
-Atlas uses a phased evidence graph rather than an unbounded ReAct loop:
+Atlas uses `@langchain/langgraph` as the Worker-safe control harness, but not as a trust boundary. The compiled live graph is explicit:
 
 ```text
-intake → classify → plan → discover → separate_candidates
-       → corroborate → calibrate → report → terminal
+START → classify → seed_frontier → select_frontier → plan_expansion
+      → execute_expansion → admit_expand → assess
+      ↘ synthesize ↔ select_frontier → END
 ```
 
-The model may propose a bounded action batch and a short decision summary. A pure-TypeScript kernel owns legal tools, request safety, candidate separation, extractive evidence and finding admission, source-family derivation/deduplication, confidence caps, category coverage, budgets, retries, stopping, and terminal legality. At most four approved outbound actions run concurrently. When two independently fetched pages quote the same full name and organization, ordered kernel admission derives the cross-source signal after the batch; the model cannot forge it.
+LangGraph owns conditional control and resumable node boundaries. It does not own tools, evidence, confidence, or stopping. The model may propose a bounded action batch and a short decision summary; Atlas accepts an action only when it binds to a kernel-selected frontier entry with the matching tool, source tier, candidate scope, and stable action ID. A pure-TypeScript kernel owns request safety, candidate separation, extractive evidence and finding admission, source-family derivation/deduplication, confidence caps, category coverage, budgets, retries, stopping, and terminal legality. At most four approved same-tier outbound actions run concurrently. Their results are admitted in stable frontier order, so transport completion order cannot change the graph. When two independently fetched pages quote the same full name and organization, ordered admission derives the cross-source signal after the batch; the model cannot forge it.
 
-The report schema includes the run/query/status, every identity candidate, the selected candidate and runner-up margin, candidate-scoped findings, applicable coverage, sources/evidence, limitations, telemetry, usage, and stop reason. Every finding names its `candidateId`, supporting `evidenceIds`, and `counterEvidenceIds`; evidence cannot cross candidates.
+### Search frontier
+
+Each frontier edge has a strictly positive immutable cost. The path cost is the parent path cost plus that edge cost; selection sorts by path cost, source tier, depth, insertion ordinal, then ID. Dominated duplicate pivots are pruned, and a higher website tier cannot execute while a legal lower-tier entry remains. Search utility combines relevance, novelty, expected information gain, source prior, transport cost, policy risk, repetition, and depth penalty. These values choose what to investigate next; they never increase evidence or finding confidence.
+
+One seeded proposal slot per batch may use a finite neighboring policy. The acceptance decision is a deterministic SHA-256 draw under a cooled Metropolis-Hastings ratio with forward/reverse neighbor correction. Accepted mutations must still pass every source, safety, candidate, budget, and evidence gate, and executed mutation actions may not exceed 20% of completed tool actions. Rejected, unselected, and exhausted mutation nodes stay in the report graph.
+
+### Website source hierarchy
+
+The kernel searches the strongest legal public-professional tier before broader discovery:
+
+| Tier | Source class | Admission rule |
+| --- | --- | --- |
+| T0 | Exact user-supplied HTTPS URL, domain/repository/DOI/ORCID/package/handle, or exact email codegraph | Exact-input only; direct content still passes hardened evidence admission |
+| T1 | First-party organization pages, official biographies, explicit personal sites | Direct fetch required for evidence |
+| T2 | Code/publication indexes, patents, official organization filings, public proof systems | Candidate-bound where required; structured claims remain labeled |
+| T3 | Universities, conferences, and primary publishers | Direct source required |
+| T4 | Reputable reporting and named interviews | Corroboration and timeline context |
+| T5 | Candidate-linked Wayback history | Exact already-bound HTTPS URL only |
+| T6 | General web discovery | Discovery leads only; snippets have zero finding weight |
+
+People-search sites, reverse-phone services, data brokers, residential/property/tax-assessor surfaces, family mapping, credentials, and private contact enrichment are denied before frontier creation. Official organization filings are allowed only for public-professional organization context.
+
+The schema-v2 report includes the entire canonical `searchGraph` alongside the run/query/status, every identity candidate, selected candidate and runner-up margin, candidate-scoped findings, applicable coverage, sources/evidence, limitations, telemetry, usage, and stop reason. Graph nodes and edges use stable frontier/action IDs that also appear in tool spans and evidence. Every finding names its `candidateId`, supporting `evidenceIds`, and `counterEvidenceIds`; evidence cannot cross candidates. The UI consumes this graph directly and deliberately shows an empty state instead of inventing a network from dossier prose.
 
 See [docs/architecture.md](docs/architecture.md) for the trust boundary and scaling design, [docs/safety.md](docs/safety.md) for the threat model, and [docs/evaluation.md](docs/evaluation.md) for replay provenance and the test matrix.
 
@@ -109,9 +134,9 @@ Raw Git author metadata is labeled spoofable. A verified signature helps only wh
 
 ## Trace semantics
 
-The API, UI, CLI, and examples share one append-only trace schema. Events carry a monotonic `seq`, stable run/event/span and parent IDs, phase, timestamp and cumulative elapsed time, attempt, status, sanitized payload, and normalized usage. The stream covers phase transitions, LLM and tool spans, retries, decisions, candidate gates/scoring, evidence admission, budgets, and the terminal result.
+The API, UI, CLI, and examples share one append-only trace schema. Events carry a monotonic `seq`, stable run/event/span and parent IDs, phase, timestamp and cumulative elapsed time, attempt, status, sanitized payload, and normalized usage. The stream covers LangGraph node transitions, frontier seeding/selection/pruning/outcomes, source-tier advances, mutation proposals and decisions, LLM and tool spans, retries, candidate gates/scoring, evidence admission, budgets, and the terminal result.
 
-Every started span has exactly one terminal span. Payload sanitation removes secrets, unnecessary contact information, fetched full bodies, and thought/reasoning prose. Provider attempts are reserved before dispatch and charged separately from tool transport; returned prompt, completion, reasoning, and cached-input token counts are normalized, while unavailable fields remain `null` with a reason. The UI can download the structured report as JSON and the exact trace as NDJSON.
+Every started span has exactly one terminal span. Payload sanitation removes secrets, unnecessary contact information, fetched full bodies, and thought/reasoning prose. Provider attempts are reserved before dispatch and charged separately from tool transport; returned prompt, completion, reasoning, and cached-input token counts are normalized, while unavailable fields remain `null` with a reason. The UI can download the deterministic Markdown report, a browser-rendered PDF, the structured report JSON, and the exact trace NDJSON. Markdown and PDF are produced from the same JSON-safe report view model, with stable `E01…` evidence references and explicit labels for exact excerpts versus canonical structured API claims.
 
 ## Safety boundary
 
@@ -128,9 +153,11 @@ npm run typecheck
 npm run lint
 npm test          # production build, then all Node tests
 npm run verify    # typecheck + lint + production build + all tests
+npm run test:pdf  # opt-in React-PDF byte smoke
+npm run report:example  # write matching PDF and Markdown reports under output/
 ```
 
-The test suite covers all three target shapes, deterministic safety classes, target parsing, same-name isolation, no cross-candidate evidence, spoofable-confidence caps, source-family deduplication, graph/trace integrity, snippet exclusion, CoT-field exclusion, budgets/cancellation, NDJSON ordering and terminal closure, replay zero-network stability, and rendered accessibility foundations. Tool fixtures cover SSRF/redirect/size/timeout controls, `429`/`Retry-After`, malformed responses, GitHub incomplete results, `author: null`, multiple accounts, signature mismatch, stale Keybase proofs, and unavailable Wayback.
+The test suite covers all three target shapes, deterministic safety classes, general identifier parsing, same-name isolation, no cross-candidate evidence, spoofable-confidence caps, source-family deduplication, immutable cumulative costs, tier ordering, dominance pruning, deterministic MH math and mutation-share caps, graph/trace/action integrity, LangGraph control flow, snippet exclusion, CoT-field exclusion, budgets/cancellation, NDJSON ordering and terminal closure, replay zero-network stability, Markdown determinism, PDF smoke, and rendered accessibility foundations. Tool fixtures cover SSRF/redirect/size/timeout controls, `429`/`Retry-After`, malformed responses, GitHub incomplete results, `author: null`, multiple accounts, signature mismatch, stale Keybase proofs, and unavailable Wayback.
 
 Container verification uses Node 22:
 
@@ -145,4 +172,4 @@ The app remains Cloudflare Sites/Vinext compatible. `worker/index.ts` handles th
 
 Public indexes are incomplete and change over time. Source ownership, self-authored profiles, archives, commit metadata, and cryptographic proofs can be stale, spoofed, or revoked. Exact excerpts prevent model-authored claims from becoming durable facts, but a quoted source can itself be wrong or misleading; independent corroboration and visible limitations remain necessary. A bounded run can therefore end `ambiguous`, `partial`, rate-limited, budget-exhausted, or canceled rather than forcing an identity.
 
-The current Worker owns one bounded run and keeps no durable user dossier. For higher volume, phase state and trace cursors can move to Cloudflare Workflows, idempotent tool actions to Queues, and encrypted report artifacts to R2 or D1. The centralized evidence-admission and terminal-legality kernel should remain the trust boundary even when provider and tool execution becomes distributed.
+The current Worker owns one bounded run, compiles LangGraph without a checkpointer, and keeps no durable user dossier. For higher volume, canonical graph state and trace cursors can move to a custom Durable Object or Cloudflare Workflow checkpoint boundary, stable-ID tool actions to Queues, and encrypted report artifacts to R2 or D1. The centralized evidence-admission and terminal-legality kernel should remain the trust boundary even when provider and tool execution becomes distributed; a Node-oriented or in-memory LangGraph checkpointer is not a drop-in persistence strategy for a Worker lifecycle.
