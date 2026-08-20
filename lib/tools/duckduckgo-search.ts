@@ -11,6 +11,7 @@ import {
   type ToolStatus,
 } from "./contracts";
 import { asHardenedFetchError, createHardenedFetch, isBlockedIpAddress } from "./hardened-fetch";
+import { decodeHtmlTextForPolicy } from "./inert-html";
 
 const DUCKDUCKGO_HTML_HOST = "html.duckduckgo.com";
 const DUCKDUCKGO_REDIRECT_HOSTS = new Set(["duckduckgo.com", "www.duckduckgo.com"]);
@@ -49,40 +50,20 @@ function finish(
   };
 }
 
-function decodeHtmlEntities(value: string): string {
-  const named: Readonly<Record<string, string>> = {
-    amp: "&",
-    apos: "'",
-    gt: ">",
-    lt: "<",
-    nbsp: " ",
-    quot: "\"",
-  };
-  return value.replace(/&(#\d+|#x[\da-f]+|[a-z]+);/gi, (match, entity: string) => {
-    if (entity.toLowerCase().startsWith("#x")) {
-      const code = Number.parseInt(entity.slice(2), 16);
-      return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : match;
-    }
-    if (entity.startsWith("#")) {
-      const code = Number.parseInt(entity.slice(1), 10);
-      return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : match;
-    }
-    return named[entity.toLowerCase()] ?? match;
-  });
-}
-
 function htmlAttribute(attributes: string, name: string): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = attributes.match(new RegExp(
     `(?:^|\\s)${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>]+))`,
     "i",
   ));
-  return match ? decodeHtmlEntities(match[1] ?? match[2] ?? match[3] ?? "") : null;
+  return match ? decodeHtmlTextForPolicy(match[1] ?? match[2] ?? match[3] ?? "") : null;
 }
 
 function resultTitle(innerHtml: string): string | null {
-  const title = normalizeWhitespace(decodeHtmlEntities(innerHtml.replace(/<[^>]*>/g, " "))).slice(0, 320);
-  return title && !containsRestrictedPublicContent(title) ? title : null;
+  const decoded = decodeHtmlTextForPolicy(innerHtml.replace(/<[^>]*>/g, " "));
+  if (decoded === null) return null;
+  const title = normalizeWhitespace(decoded.normalize("NFKC"));
+  return title && !containsRestrictedPublicContent(title) ? title.slice(0, 320) : null;
 }
 
 function isDuckDuckGoHostname(hostname: string): boolean {
@@ -106,7 +87,9 @@ function isUnsafeTargetHostname(hostname: string): boolean {
  * target survives, and no DuckDuckGo-internal URL can become a research lead.
  */
 export function unwrapDuckDuckGoResultUrl(value: string): string | null {
-  const href = decodeHtmlEntities(value).trim();
+  const decoded = decodeHtmlTextForPolicy(value);
+  if (decoded === null) return null;
+  const href = decoded.trim();
   if (!href || href.length > 8_192) return null;
 
   let observed: URL;

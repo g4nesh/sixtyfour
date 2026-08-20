@@ -81,6 +81,37 @@ test("DuckDuckGo HTML fallback retains only bounded safe titles and unwrapped HT
   assert.ok(result.diagnostics.some((item) => item.code === "duckduckgo_result_rows_excluded"));
 });
 
+test("DuckDuckGo decodes and validates complete titles before bounding them", async () => {
+  const safeUrl = (id) => `https://profile.example/result-${id}`;
+  const anchors = [
+    `<a class="result__a" href="${safeUrl(0)}">&Eacute;lodie&rsquo;s R&eacute;sum&eacute; &mdash; Research &copy;</a>`,
+    `<a class="result__a" href="${safeUrl(1)}">${"A".repeat(315)} ghp&lowbar;${"B".repeat(36)}</a>`,
+    `<a class="result__a" href="${safeUrl(2)}">ghp&#x5f${"G".repeat(36)}</a>`,
+    `<a class="result__a" href="${safeUrl(3)}">ghp&amp;#x5f;${"H".repeat(36)}</a>`,
+    `<a class="result__a" href="${safeUrl(4)}">private&commat;example.com</a>`,
+    `<a class="result__a" href="${safeUrl(5)}">ghp_\u200b${"I".repeat(36)}</a>`,
+    `<a class="result__a" href="${safeUrl(6)}">Unresolved &madeup; title</a>`,
+  ];
+  const result = await searchDuckDuckGoHtml("public professional profile", {
+    resolveHostname: async () => ["52.149.246.39"],
+    fetch: async () => new Response(anchors.join("\n"), {
+      headers: { "content-type": "text/html; charset=utf-8" },
+    }),
+  });
+
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.data.results, [{
+    title: "Élodie’s Résumé — Research ©",
+    url: safeUrl(0),
+  }]);
+  assert.equal(result.data.observedResultAnchors, 7);
+  assert.equal(result.data.excludedResultAnchors, 6);
+  const serialized = JSON.stringify(result.data);
+  assert.equal(serialized.includes("ghp_"), false);
+  assert.equal(serialized.includes("private@example.com"), false);
+  assert.equal(serialized.includes("madeup"), false);
+});
+
 test("DuckDuckGo HTML fallback fails closed without DNS validation and rejects unsafe queries", async () => {
   let fetchCalls = 0;
   const noDns = await searchDuckDuckGoHtml("public project repository", {
@@ -400,7 +431,11 @@ test("Wayback runs only for candidate-linked URLs and globally collapses digests
       const url = new URL(String(input));
       if (url.pathname === "/cdx/search/cdx") {
         assert.equal(url.searchParams.get("collapse"), "digest");
-        assert.deepEqual(url.searchParams.getAll("filter"), ["statuscode:200", "mimetype:text/html"]);
+        assert.deepEqual(url.searchParams.getAll("filter"), [
+          "statuscode:200",
+          "mimetype:text/html",
+          "original:^https://person\\.example/about$",
+        ]);
         return jsonResponse([
           ["timestamp", "original", "mimetype", "statuscode", "digest", "length"],
           ["20200101000000", "https://person.example/about", "text/html", "200", "DIGEST-A", "100"],

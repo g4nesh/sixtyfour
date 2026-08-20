@@ -32,13 +32,15 @@ The source policy is monotone from exact input to broad discovery:
 
 1. T0 exact user-supplied HTTPS URL or public identifier, including exact-email GitHub codegraph.
 2. T1 first-party organization pages, official biographies, and explicit personal sites.
-3. T2 host-classified professional profiles and structured records: repositories, publication indexes, patents, official organization filings, and public proof systems.
+3. T2 host-classified professional profiles and structured records: repositories, publication indexes, patents, official organization filings, public proof systems, and official App Store listing metadata.
 4. T3 universities, conferences, and primary publishers.
 5. T4 reputable reporting and named interviews.
-6. T5 bounded candidate-linked Wayback history.
+6. T5 bounded temporal provenance diff for one exact candidate-linked URL.
 7. T6 general web discovery plus candidate-bound hardened fetches for leads that do not deterministically qualify for a stronger lane; annotations remain discovery-only and fetched pages still pass candidate separation.
 
-A higher tier stays queued until lower-tier legal work is exhausted. The hierarchy never turns a source prior into claim confidence. People-search, phonebook, data-broker, residential/property/tax-assessor, family, credential, and private-contact surfaces are denied before graph admission.
+A higher breadth tier stays queued until lower-tier legal work is exhausted. A newly opened exact-URL temporal dependency may run after the breadth cursor advances without regressing that cursor. The hierarchy never turns a source prior into claim confidence. People-search, phonebook, data-broker, residential/property/tax-assessor, family, credential, private-contact, cloud/account enumeration, invasive iOS binary/TestFlight, and traffic-interception surfaces are denied before graph admission.
+
+`lib/search/osint-query-compiler.ts` compiles a finite public-professional query program. The neutral quoted baseline is always first; negative noise exclusions exist only on visibly labeled refinements. Source lanes select their canonical query from that program, and `execute_expansion` replaces any model-suggested query with the frontier-owned string before transport. `site:` scopes are closed to GitHub, ORCID, Google Scholar, official App Store listings, and at most two caller-admitted academic domains. Operator results remain transport metadata until direct fetch admission.
 
 ## Trust boundary
 
@@ -87,7 +89,7 @@ Confidence uses transparent bands and a rationale-bearing set of caps. Multiple 
 - `lib/harness`: explicit LangGraph `StateGraph` topology and conditional routing.
 - `lib/agent`: LangGraph-backed run coordinator, deterministic engine, and append-only trace recorder.
 - `lib/providers`: hardened OpenAI, Gemini, and OpenRouter clients with native search-grounding normalization and usage accounting.
-- `lib/tools`: hardened fetch, exact-email GitHub codegraph, optional Keybase proof lookup, and bounded candidate-linked Wayback history.
+- `lib/tools`: hardened fetch, inert public-page footprint projection, exact-email GitHub codegraph, optional Keybase proof lookup, and exact-URL temporal archive comparison.
 - `lib/replay`: immutable example catalog and zero-network replay.
 - `lib/report-export`: pure report-to-view-model transformation and deterministic Markdown serialization.
 - `lib/api`: Worker-neutral API router used before Vinext's application handler.

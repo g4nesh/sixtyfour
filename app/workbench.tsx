@@ -9,7 +9,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import type { FindingCategory, InvestigationReport } from "../lib/domain/types";
+import type { FindingCategory, InvestigationReport, ResearchDepth } from "../lib/domain/types";
 import type { Report, RunStatus, TraceEvent } from "./atlas-types";
 import {
   eventType,
@@ -144,6 +144,7 @@ function compactViewportSnapshot(): boolean {
 
 export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkbenchProps = {}) {
   const [query, setQuery] = useState<string>("");
+  const [researchDepth, setResearchDepth] = useState<ResearchDepth>("deep");
   const [categories, setCategories] = useState<ReadonlySet<FindingCategory>>(() => new Set(DEFAULT_MODALITIES));
   const [report, setReport] = useState<Report | null>(null);
   const [trace, setTrace] = useState<TraceEvent[]>([]);
@@ -240,7 +241,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         body: JSON.stringify({
           query: trimmed,
           mode: "live",
-          requestedDepth: "quick",
+          requestedDepth: researchDepth,
           requestedCategories: [...categories],
         }),
         signal: controller.signal,
@@ -384,6 +385,19 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
           spellCheck="false"
           aria-describedby="research-scope-note"
         />
+        <label className="sr-only" htmlFor="atlas-research-depth">Research depth</label>
+        <select
+          id="atlas-research-depth"
+          className="research-depth-select"
+          value={researchDepth}
+          onChange={(event) => setResearchDepth(event.target.value as ResearchDepth)}
+          disabled={runStatus === "running"}
+          title="Research depth"
+        >
+          <option value="quick">Quick</option>
+          <option value="standard">Standard</option>
+          <option value="deep">Deep</option>
+        </select>
         <kbd>/</kbd>
       </form>
       {runStatus === "running"

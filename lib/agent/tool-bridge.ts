@@ -61,7 +61,9 @@ const SOURCE_MAPPINGS: Record<string, SourceMapping> = {
     sourceType: "web_archive",
     verificationMethod: "archive_snapshot",
     temporalStatus: "historical",
-    spoofable: false,
+    // The archive transport authenticates a capture, not the truth or
+    // ownership of the page-authored content inside that capture.
+    spoofable: true,
   },
 };
 

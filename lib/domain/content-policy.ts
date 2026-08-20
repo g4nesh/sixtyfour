@@ -2,6 +2,24 @@ import type { JsonValue } from "./types";
 
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b/gi;
 
+const CREDENTIAL_LITERAL_PATTERNS = [
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
+  /\bAIza[0-9A-Za-z_-]{35}\b/,
+  /\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{20,255})\b/,
+  /\bsk-(?:ant-|proj-|svcacct-)?[A-Za-z0-9_-]{20,255}\b/,
+  /\b(?:npm_|pypi-|hf_|glpat-|dop_v1_)[A-Za-z0-9_-]{20,255}\b/,
+  /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,255}\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{16,255}\b/,
+  /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/,
+  /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/,
+] as const;
+
+/** Known high-entropy credential formats that must never enter durable OSINT output. */
+export function containsCredentialLiteral(value: string): boolean {
+  const normalized = value.normalize("NFKC");
+  return CREDENTIAL_LITERAL_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 const RESTRICTED_URL_QUERY_KEYS = new Set([
   "accesskey", "accesstoken", "address", "apikey", "auth", "authorization", "bearer",
   "authorizationcode", "authcode", "authtoken", "cell", "children", "clientsecret",
@@ -428,6 +446,7 @@ export function containsRestrictedPublicContent(
     || STREET_ADDRESS_PATTERN.test(normalizedValue)
     || CONTEXTUAL_STREET_ADDRESS_PATTERN.test(normalizedValue)
     || POST_OFFICE_BOX_PATTERN.test(normalizedValue)
+    || containsCredentialLiteral(normalizedValue)
     || phoneLike(normalizedValue)
     || minorAgeLike(policyText, options.currentYear ?? new Date().getUTCFullYear())
     || restrictedConceptLike(normalizedValue)

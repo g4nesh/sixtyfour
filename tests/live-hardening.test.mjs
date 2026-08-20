@@ -123,6 +123,131 @@ test("arbitrary-host public fetches require DNS validation and block private ans
   assert.equal(nonstandard.meta.bytesRead, 0);
 });
 
+test("public fetch text and title ignore nested or unclosed inactive markup", async () => {
+  const input = { url: "https://profile.example/person", allowedUrl: "https://profile.example/person" };
+  const nested = await fetchPublicSource(input, {
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async () => new Response(
+      '<html><head><script><title>Ganesh Talluri</title></script><title>Real Page</title></head><body><p>Visible Other</p><template><template></template><p>Ganesh Talluri</p></template></body></html>',
+      { headers: { "content-type": "text/html" } },
+    ),
+  });
+  assert.equal(nested.status, "succeeded");
+  assert.equal(nested.data.title, "Real Page");
+  assert.equal(nested.data.normalizedText, "Real Page Visible Other");
+  assert.equal(JSON.stringify(nested.data).includes("Ganesh Talluri"), false);
+
+  const unclosed = await fetchPublicSource(input, {
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async () => new Response(
+      '<html><head><title>Real Page</title></head><body><p>Visible Other</p><script><p>Ganesh Talluri</p>',
+      { headers: { "content-type": "text/html" } },
+    ),
+  });
+  assert.equal(unclosed.data.title, "Real Page");
+  assert.equal(unclosed.data.normalizedText, "Real Page Visible Other");
+  assert.equal(JSON.stringify(unclosed.data).includes("Ganesh Talluri"), false);
+
+  const crossType = await fetchPublicSource(input, {
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async () => new Response(
+      '<title>Real Page</title><p>Visible Other</p><template><script>const x="</template>";<p>Ganesh Talluri</p></script></template>',
+      { headers: { "content-type": "text/html" } },
+    ),
+  });
+  assert.equal(crossType.data.title, "Real Page");
+  assert.equal(crossType.data.normalizedText, "Real Page Visible Other");
+
+  const plaintext = await fetchPublicSource(input, {
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async () => new Response(
+      '<title>Real Page</title><p>Visible Other</p><plaintext>hidden</plaintext><p>Ganesh Talluri</p><title>Forged Page</title>',
+      { headers: { "content-type": "text/html" } },
+    ),
+  });
+  assert.equal(plaintext.data.title, "Real Page");
+  assert.equal(plaintext.data.normalizedText, "Real Page Visible Other");
+  assert.equal(JSON.stringify(plaintext.data).includes("Ganesh Talluri"), false);
+
+  const declarations = await fetchPublicSource(input, {
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async () => new Response(
+      '<!DOCTYPE html PUBLIC "<title>Ganesh Talluri</title>"><?xml value="<p>Ganesh Talluri</p>"><![CDATA[<p>Ganesh Talluri</p>]]><title>Real Page</title><p>Visible Other</p>',
+      { headers: { "content-type": "text/html" } },
+    ),
+  });
+  assert.equal(declarations.data.title, "Real Page");
+  assert.equal(declarations.data.normalizedText, "Real Page Visible Other");
+  assert.equal(JSON.stringify(declarations.data).includes("Ganesh Talluri"), false);
+
+  const quotedAttribute = await fetchPublicSource(input, {
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async () => new Response(
+      '<title>Real Page</title><div data-note=">Ganesh Talluri is CEO of Forged Labs">Visible harmless biography.</div>',
+      { headers: { "content-type": "text/html" } },
+    ),
+  });
+  assert.equal(quotedAttribute.data.title, "Real Page");
+  assert.equal(quotedAttribute.data.normalizedText, "Real Page Visible harmless biography.");
+  assert.equal(JSON.stringify(quotedAttribute.data).includes("Forged Labs"), false);
+
+  const titleCredential = await fetchPublicSource(input, {
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async () => new Response(
+      `<title>${"A".repeat(233)} ghp_${"B".repeat(36)}</title><p>Visible Other</p>`,
+      { headers: { "content-type": "text/html" } },
+    ),
+  });
+  assert.equal(titleCredential.data.title, null);
+  assert.equal(titleCredential.data.normalizedText, "Visible Other");
+  assert.equal(JSON.stringify(titleCredential.data).includes("ghp_"), false);
+});
+
+test("public fetch decodes references, strips format controls, and honors strict inactive closes", async () => {
+  const input = { url: "https://profile.example/person", allowedUrl: "https://profile.example/person" };
+  const fetchHtml = (html) => fetchPublicSource(input, {
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async () => new Response(html, { headers: { "content-type": "text/html" } }),
+  });
+
+  const obfuscated = [
+    `ghp&#x5f${"G".repeat(36)}`,
+    `ghp&#95${"H".repeat(36)}`,
+    `ghp&amp;#x5f;${"I".repeat(36)}`,
+    `ghp&lowbar;${"J".repeat(36)}`,
+    "private&commat;example.com",
+    ...["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"]
+      .map((control) => `ghp_${control}${"K".repeat(36)}`),
+  ];
+  for (const value of obfuscated) {
+    const result = await fetchHtml(`<title>Safe Profile</title><p>${value}</p>`);
+    assert.equal(result.data.title, "Safe Profile", value);
+    assert.equal(result.data.normalizedText, "Safe Profile", value);
+    assert.equal(JSON.stringify(result.data).includes("ghp_"), false, value);
+    assert.equal(JSON.stringify(result.data).includes("private@example.com"), false, value);
+  }
+
+  const common = await fetchHtml('<title>&Eacute;lodie&rsquo;s R&eacute;sum&eacute; &mdash; Research &copy;</title><p>&ldquo;Registered&rdquo; &reg; profile.</p>');
+  assert.equal(common.data.title, "Élodie’s Résumé — Research ©");
+  assert.equal(common.data.normalizedText, "Élodie’s Résumé — Research © “Registered” ® profile.");
+
+  const footerContact = await fetchHtml('<title>Safe Profile</title><main><p>Public systems researcher and founder.</p></main><footer>private&commat;example.com</footer>');
+  assert.equal(footerContact.data.normalizedText, "Safe Profile Public systems researcher and founder.");
+  assert.equal(JSON.stringify(footerContact.data).includes("private@example.com"), false);
+
+  const unresolved = await fetchHtml('<title>Unresolved &madeup; title</title><p>Unresolved &madeup; body</p>');
+  assert.equal(unresolved.data.title, null);
+  assert.equal(unresolved.data.normalizedText, "");
+
+  for (const tag of ["script", "textarea", "template"]) {
+    for (const invalidClose of [`</${tag}!>`, `</ ${tag}>`, `</${tag}\u00a0>`]) {
+      const result = await fetchHtml(`<title>Safe Profile</title><p>Visible Before</p><${tag}><p>Hidden Before</p>${invalidClose}<p>Hidden After</p></${tag}><p>Visible After</p>`);
+      assert.equal(result.data.normalizedText, "Safe Profile Visible Before Visible After", `${tag} ${JSON.stringify(invalidClose)}`);
+      assert.equal(JSON.stringify(result.data).includes("Hidden"), false, `${tag} ${JSON.stringify(invalidClose)}`);
+    }
+  }
+});
+
 test("candidate source authorization is exact, candidate-scoped, and rejects secret query keys", () => {
   const state = {
     evidence: [{ candidateId: "candidate-1", sourceUrl: "https://example.com/profile?view=public" }],
@@ -143,6 +268,201 @@ test("candidate source authorization is exact, candidate-scoped, and rejects sec
     sourceAllowedForCandidate(state, "https://profiles.example/person", "candidate-1"),
     "https://profiles.example/person",
   );
+});
+
+test("candidate-linked Wayback action emits exact hashes and a bounded visible temporal diff", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Denise Hilary",
+    requestedDepth: "standard",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T20:20:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("wayback-live-bridge"),
+  });
+  const targetUrl = "https://portfolio.example/denise";
+  const candidate = engine.addCandidate({
+    displayName: "Denise Hilary",
+    signals: [{
+      kind: "profile_url",
+      value: targetUrl,
+      normalizedValue: targetUrl,
+      strength: "weak",
+      assurance: "self_asserted",
+      sourceFamily: "portfolio.example",
+    }],
+  }).candidate;
+  assert.equal(engine.admitEvidence({
+    candidateId: candidate.id,
+    claim: "A hardened public fetch bound this exact portfolio URL to the separated candidate branch.",
+    sourceUrl: targetUrl,
+    sourceType: "other",
+    excerpt: "Denise Hilary maintains this public professional portfolio.",
+    reliability: 0.55,
+    spoofable: true,
+  }).admitted, true);
+  let requests = 0;
+  let cdxRequestUrl = null;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async (hostname) => {
+      assert.equal(hostname, "web.archive.org");
+      return ["207.241.237.3"];
+    },
+    fetch: async (request) => {
+      requests += 1;
+      const url = new URL(String(request));
+      assert.equal(url.hostname, "web.archive.org");
+      if (url.pathname === "/cdx/search/cdx") {
+        cdxRequestUrl = url.href;
+        assert.equal(url.searchParams.get("url"), targetUrl);
+        assert.equal(url.searchParams.get("matchType"), "exact");
+        return jsonResponse([
+          ["timestamp", "original", "mimetype", "statuscode", "digest", "length"],
+          ["20200101000000", targetUrl, "text/html", "200", "DIGEST-A", "100"],
+          ["20240101000000", targetUrl, "text/html", "200", "DIGEST-B", "120"],
+        ]);
+      }
+      if (url.pathname.includes("20200101000000id_")) {
+        return new Response(
+          '<html lang="en"><title>Denise Hilary — Researcher</title><p>Denise Hilary worked on Project One.</p></html>',
+          { headers: { "content-type": "text/html; charset=utf-8" } },
+        );
+      }
+      if (url.pathname.includes("20240101000000id_")) {
+        return new Response(
+          '<html lang="en"><title>Denise Hilary — Founder</title><p>Denise Hilary launched Project Two.</p></html>',
+          { headers: { "content-type": "text/html; charset=utf-8" } },
+        );
+      }
+      throw new Error(`Unexpected Wayback request ${url.href}`);
+    },
+  });
+  const result = await dependencies.executeAction({
+    schemaVersion: domain.SCHEMA_VERSION,
+    id: "action-wayback-diff",
+    frontierEntryId: "action-wayback-diff",
+    tool: "wayback_profile_history",
+    purpose: "Compare exact candidate-linked captures.",
+    arguments: { url: targetUrl },
+    candidateId: candidate.id,
+    budgetClass: "search",
+    sourceTier: 5,
+    sourceLaneId: "t5.candidate_wayback",
+    pathCost: 5,
+    mutated: false,
+  }, {
+    schemaVersion: domain.SCHEMA_VERSION,
+    state: engine.snapshot(),
+    modelAccounting: { reserve: () => true, settle: () => {} },
+  });
+
+  assert.equal(requests, 3);
+  assert.equal(result.meta.requests, 3);
+  assert.ok(cdxRequestUrl);
+  assert.equal(result.data.cdxRequestUrl, cdxRequestUrl);
+  assert.equal(
+    result.evidence.every((item) => item.queryUrl === cdxRequestUrl),
+    true,
+    "orchestrator evidence must retain the adapter's exact dispatched CDX request URL",
+  );
+  const cdxRequest = new URL(cdxRequestUrl);
+  assert.deepEqual(cdxRequest.searchParams.getAll("filter"), [
+    "statuscode:200",
+    "mimetype:text/html",
+    "original:^https://portfolio\\.example/denise$",
+  ]);
+  assert.equal(cdxRequest.searchParams.get("limit"), "-48");
+  const snapshots = result.evidence.filter((item) => item.sourceType === "web_archive"
+    && item.verificationMethod === "archive_snapshot"
+    && item.disposition !== "discovery_only");
+  assert.equal(snapshots.length, 2);
+  const changed = snapshots.find((item) => item.canonicalSubset?.temporalComparison);
+  assert.ok(changed);
+  const admittedSnapshot = engine.admitEvidence(changed);
+  assert.equal(admittedSnapshot.admitted, true);
+  assert.equal(
+    admittedSnapshot.evidence.queryUrl,
+    cdxRequestUrl,
+    "durable evidence must stay byte-bound to the exact dispatched CDX request",
+  );
+  assert.match(changed.contentHash, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(changed.spoofable, true, "archived page content remains page-authored and spoofable");
+  assert.match(changed.claim, /bounded raw captures/i);
+  assert.equal(changed.canonicalSubset.temporalComparison.observedAfter, "2020-01-01T00:00:00.000Z");
+  assert.equal(changed.canonicalSubset.temporalComparison.observedOnOrBefore, "2024-01-01T00:00:00.000Z");
+  assert.deepEqual(changed.canonicalSubset.temporalComparison.addedTextFragments, [
+    "Denise Hilary launched Project Two.",
+  ]);
+  assert.deepEqual(changed.canonicalSubset.temporalComparison.removedTextFragments, [
+    "Denise Hilary worked on Project One.",
+  ]);
+});
+
+test("Wayback retains a hash-bound metadata-only temporal observation without inventing an excerpt", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Denise Hilary",
+    requestedDepth: "standard",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T20:25:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("wayback-metadata-only"),
+  });
+  const targetUrl = "https://portfolio.example/metadata-only";
+  const candidate = engine.addCandidate({ displayName: "Denise Hilary", signals: [] }).candidate;
+  assert.equal(engine.admitEvidence({
+    candidateId: candidate.id,
+    claim: "A hardened public fetch bound this exact portfolio URL to the candidate branch.",
+    sourceUrl: targetUrl,
+    sourceType: "other",
+    excerpt: "Denise Hilary maintains this public professional portfolio.",
+    reliability: 0.55,
+    spoofable: true,
+  }).admitted, true);
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      if (url.pathname === "/cdx/search/cdx") return jsonResponse([
+        ["timestamp", "original", "mimetype", "statuscode", "digest", "length"],
+        ["20200101000000", targetUrl, "text/html", "200", "DIGEST-META-A", "100"],
+        ["20240101000000", targetUrl, "text/html", "200", "DIGEST-META-B", "120"],
+      ]);
+      const description = url.pathname.includes("20200101000000id_") ? "Researcher" : "Founder";
+      return new Response(`<html><head><meta name="description" content="${description}"></head><body></body></html>`, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    },
+  });
+  const result = await dependencies.executeAction({
+    schemaVersion: domain.SCHEMA_VERSION,
+    id: "action-wayback-metadata-only",
+    frontierEntryId: "action-wayback-metadata-only",
+    tool: "wayback_profile_history",
+    purpose: "Compare exact candidate-linked captures.",
+    arguments: { url: targetUrl },
+    candidateId: candidate.id,
+    budgetClass: "search",
+    sourceTier: 5,
+    sourceLaneId: "t5.candidate_wayback",
+    pathCost: 5,
+    mutated: false,
+  }, {
+    schemaVersion: domain.SCHEMA_VERSION,
+    state: engine.snapshot(),
+    modelAccounting: { reserve: () => true, settle: () => {} },
+  });
+
+  const snapshots = result.evidence.filter((item) =>
+    item.verificationMethod === "archive_snapshot" && item.disposition !== "discovery_only");
+  assert.equal(snapshots.length, 1, "only the comparison-bearing metadata-only snapshot is retained");
+  assert.equal(snapshots[0].excerpt, undefined);
+  assert.match(snapshots[0].contentHash, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(snapshots[0].canonicalSubset.temporalComparison.metadataChanged, true);
+  assert.deepEqual(snapshots[0].canonicalSubset.temporalComparison.changedMetadataFields, ["description"]);
 });
 
 test("GitHub codegraph accepts every exact email explicitly present in the request", async () => {
@@ -238,8 +558,8 @@ test("provider quota plus no exact GitHub public-user match returns an honest bo
     purpose: "Find an exact public professional source.",
     arguments: { query: "Ganesh Talluri public professional profile" },
     budgetClass: "search",
-    sourceTier: 6,
-    sourceLaneId: "t6.general_web_discovery",
+    sourceTier: 1,
+    sourceLaneId: "t1.first_party",
     pathCost: 1,
     mutated: false,
   }, {
@@ -389,14 +709,14 @@ test("provider 429 falls back to DuckDuckGo leads and a quarantined exact fetche
   assert.equal(direct.status, "partial", "name-only evidence remains quarantined from the seed candidate");
   assert.equal(pageFetchCalls, 1);
   assert.equal(extractionReservations, 0, "exact fetched-title extraction does not invoke the model");
-  assert.equal(direct.evidence.length, 1);
-  assert.equal(direct.evidence[0].sourceUrl, sourceUrl);
-  assert.equal(direct.evidence[0].claim, "Ganesh Talluri — Portfolio");
-  assert.equal(direct.evidence[0].excerpt, direct.evidence[0].claim);
-  assert.equal(direct.evidence[0].verificationMethod, "direct_fetch");
-  assert.equal(direct.evidence[0].attributes.extractionMethod, "deterministic_duckduckgo_named_person_quote");
-  assert.equal(direct.evidence[0].attributes.extractedOrganization, null);
-  assert.equal(direct.evidence[0].attributes.quarantinedFromCandidateId, candidate.id);
+  const directQuote = direct.evidence.find((item) => item.verificationMethod === "direct_fetch");
+  assert.ok(directQuote);
+  assert.equal(directQuote.sourceUrl, sourceUrl);
+  assert.equal(directQuote.claim, "Ganesh Talluri — Portfolio");
+  assert.equal(directQuote.excerpt, directQuote.claim);
+  assert.equal(directQuote.attributes.extractionMethod, "deterministic_duckduckgo_named_person_quote");
+  assert.equal(directQuote.attributes.extractedOrganization, null);
+  assert.equal(directQuote.attributes.quarantinedFromCandidateId, candidate.id);
   assert.ok(direct.diagnostics.some((item) => item.code === "deterministic_duckduckgo_extraction"));
 });
 
@@ -946,7 +1266,7 @@ test("exact live name streams graph snapshots, classifies fetch lanes, and prese
       pageFetchCalls += 1;
       assert.equal(url.href, githubUrl);
       return new Response(
-        "<html><title>g4nesh (Ganesh Talluri) · GitHub</title><p>Ganesh Talluri builds public machine learning projects at LuxenAI.</p></html>",
+        '<html lang="en"><title>g4nesh (Ganesh Talluri) · GitHub</title><meta name="generator" content="Next.js"><script src="https://cdn.jsdelivr.net/npm/example.js"></script><p>Ganesh Talluri builds public machine learning projects at LuxenAI.</p></html>',
         { headers: { "content-type": "text/html" } },
       );
     }
@@ -1091,6 +1411,11 @@ test("exact live name streams graph snapshots, classifies fetch lanes, and prese
   assert.equal(direct.excerpt, "g4nesh (Ganesh Talluri) · GitHub");
   assert.equal(direct.claim, direct.excerpt);
   assert.equal(direct.attributes.extractionMethod, "deterministic_github_profile_quote");
+  assert.equal(direct.canonicalSubset.pageFootprint.schemaVersion, "public_page_footprint_v1");
+  assert.deepEqual(direct.canonicalSubset.pageFootprint.declaredApplications.generators, ["Next.js"]);
+  assert.deepEqual(direct.canonicalSubset.pageFootprint.observedProviderFamilies, ["jsdelivr"]);
+  assert.equal(direct.canonicalSubset.pageFootprint.spoofable, true);
+  assert.match(direct.canonicalSubset.pageFootprintHash, /^sha256:[a-f0-9]{64}$/);
   assert.equal(direct.attributes.extractedOrganization, null);
   assert.equal(direct.attributes.extractedOrganizationLabel, null);
   assert.equal(direct.attributes.quarantinedFromCandidateId, discovery.candidateId);
@@ -1108,6 +1433,14 @@ test("exact live name streams graph snapshots, classifies fetch lanes, and prese
   assert.ok(terminal.payload.report.searchGraph.nodes
     .filter((node) => node.evidenceId === discovery.id)
     .every((node) => node.status !== "verified"));
+  const metadataObservation = terminal.payload.report.evidence.find((evidence) =>
+    evidence.attributes.metadataObservation === true);
+  assert.ok(metadataObservation,
+    "a candidate-binding quarantine must not discard the independently observed page footprint");
+  assert.equal(metadataObservation.candidateId, discovery.candidateId);
+  assert.equal(metadataObservation.disposition, "discovery_only");
+  assert.equal(metadataObservation.verificationMethod, "unverified");
+  assert.equal(metadataObservation.canonicalSubset.pageFootprint.schemaVersion, "public_page_footprint_v1");
   assert.ok(JSON.stringify(events).includes("candidate_binding_strong_binding_missing"));
 });
 
@@ -1243,4 +1576,57 @@ test("planner quota outage mechanically reaches DuckDuckGo and preserves a harde
     && edge.toNodeId === findingNode.id));
   assert.ok(events.some((event) =>
     event.payload?.diagnostics?.some((item) => item.code === "deterministic_finding_fallback_used")));
+});
+
+test("planner and search outage executes every bounded standard OSINT query exactly once", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Ganesh Talluri, Example Labs, Researcher",
+    requestedDepth: "standard",
+  });
+  const duckDuckGoQueries = [];
+  let githubSearchRequests = 0;
+  const fetch = async (request) => {
+    const url = new URL(String(request));
+    if (url.hostname === "html.duckduckgo.com") {
+      duckDuckGoQueries.push(url.searchParams.get("q"));
+      return new Response("", { headers: { "content-type": "text/html" } });
+    }
+    if (url.hostname === "api.github.com") {
+      githubSearchRequests += 1;
+      return jsonResponse({ total_count: 0, incomplete_results: false, items: [] });
+    }
+    assert.equal(url.hostname, "generativelanguage.googleapis.com");
+    return jsonResponse({ error: { message: "forced provider outage" } }, {
+      status: 429,
+      headers: { "retry-after": "0" },
+    });
+  };
+
+  const events = [];
+  for await (const event of streamLiveResearch(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    provider: "gemini",
+    fetch,
+    resolveHostname: async () => ["93.184.216.34"],
+    clock: domain.createSequenceClock("2026-08-20T22:00:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("planner-search-outage-queries"),
+  })) events.push(event);
+
+  const terminal = events.at(-1);
+  assert.equal(terminal.name, "result.terminal");
+  assert.notEqual(terminal.payload.report.stop.reason, "fatal_error");
+  const compilerEntries = terminal.payload.report.searchGraph.frontier.filter((entry) =>
+    entry.intent.startsWith("OSINT query "));
+  assert.equal(compilerEntries.length, 9);
+  assert.equal(duckDuckGoQueries.length, compilerEntries.length);
+  assert.deepEqual(
+    new Set(duckDuckGoQueries),
+    new Set(compilerEntries.map((entry) => entry.queryHint)),
+    "every advertised query must reach a real search transport before terminal exhaustion",
+  );
+  assert.ok(githubSearchRequests <= 1,
+    "the bounded exact-name GitHub fallback must not repeat for scoped query variants");
+  assert.ok(compilerEntries.every((entry) => entry.status === "exhausted"));
 });

@@ -44,6 +44,8 @@ test("server-renders the black graph-first Atlas workspace", async () => {
   assert.match(html, /<title>Atlas — People Intelligence<\/title>/i);
   assert.match(html, /class="atlas-shell"/);
   assert.match(html, /Public-professional research input/);
+  assert.match(html, /Research depth/);
+  assert.match(html, /<option value="deep" selected="">Deep<\/option>/);
   assert.match(html, /Name, role, organization, work email, URL, handle, or publication/);
   // Live-first workspace: no replay/example mode switch is exposed in the UI.
   assert.doesNotMatch(html, /Replay/);
@@ -115,6 +117,7 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(workbench, /<label className="sr-only" htmlFor="atlas-query">/);
   assert.match(workbench, /aria-live="polite"/);
   assert.match(workbench, /aria-describedby="research-scope-note"/);
+  assert.match(workbench, /useState<ResearchDepth>\("deep"\)/);
   assert.match(workbench, /AbortController/);
   assert.match(workbench, /\/api\/research/);
   assert.match(workbench, /mergeGraphEvent/);

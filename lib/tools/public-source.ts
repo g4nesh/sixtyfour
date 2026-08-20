@@ -7,6 +7,9 @@ import {
   type ToolStatus,
 } from "./contracts";
 import { asHardenedFetchError, createHardenedFetch } from "./hardened-fetch";
+import { extractPublicPageFootprint, type PublicPageFootprint } from "./page-footprint";
+import { decodeHtmlTextForPolicy, projectInertHtml } from "./inert-html";
+import { containsRestrictedPublicContent } from "../domain/content-policy";
 
 export interface FetchPublicSourceInput {
   url: string;
@@ -30,6 +33,10 @@ export interface PublicSourceData {
   contentHash: string;
   /** Bounded normalized text for inert evidence extraction; never put this field in a trace. */
   normalizedText: string;
+  /** Inert declarations observed in the already-fetched HTML; never authorizes another request. */
+  pageFootprint: PublicPageFootprint | null;
+  /** SHA-256 of the deterministic JSON-safe footprint projection, when present. */
+  pageFootprintHash: string | null;
   truncated: boolean;
   observedAt: string;
 }
@@ -72,44 +79,43 @@ function normalizeAllowedUrl(value: string): URL | null {
   }
 }
 
-function decodeEntities(value: string): string {
-  const named: Record<string, string> = {
-    amp: "&",
-    apos: "'",
-    gt: ">",
-    lt: "<",
-    nbsp: " ",
-    quot: '"',
-  };
-  return value.replace(/&(#\d+|#x[\da-f]+|[a-z]+);/gi, (match, entity: string) => {
-    if (entity.startsWith("#x")) {
-      const code = Number.parseInt(entity.slice(2), 16);
-      return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : match;
-    }
-    if (entity.startsWith("#")) {
-      const code = Number.parseInt(entity.slice(1), 10);
-      return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : match;
-    }
-    return named[entity.toLowerCase()] ?? match;
-  });
+function titleFromHtml(value: string): string | null {
+  const match = projectInertHtml(value).titleHtml.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+  if (!match?.[1]) return null;
+  const decoded = decodeHtmlTextForPolicy(match[1].replace(/<[^>]+>/g, " "));
+  if (decoded === null) return null;
+  const title = decoded.normalize("NFKC").replace(/\s+/g, " ").trim();
+  return title && !containsRestrictedPublicContent(title) ? title.slice(0, 240) : null;
 }
 
-function titleFromHtml(value: string): string | null {
-  const match = value.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
-  if (!match?.[1]) return null;
-  const title = decodeEntities(match[1].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
-  return title ? title.slice(0, 240) : null;
+const TEXT_BOUNDARY_TAG = /<\/?(?:address|article|aside|blockquote|br|dd|div|dl|dt|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)\b[^>]*>/gi;
+
+function safePolicySegments(value: string): string {
+  const segmented = value.replace(TEXT_BOUNDARY_TAG, "\n").replace(/<[^>]+>/g, "");
+  const accepted: string[] = [];
+  for (const rawSegment of segmented.split(/\n+/)) {
+    const decoded = decodeHtmlTextForPolicy(rawSegment);
+    if (decoded === null) continue;
+    const segment = decoded.normalize("NFKC").replace(/\s+/g, " ").trim();
+    if (segment && !containsRestrictedPublicContent(segment)) accepted.push(segment);
+  }
+  return accepted.join(" ");
 }
 
 function normalizedText(value: string, mimeType: string): string {
-  const withoutExecutableContent = mimeType === "text/html"
-    ? value
-        .replace(/<(?:script|style|noscript|template|svg|canvas|iframe)\b[^>]*>[\s\S]*?<\/(?:script|style|noscript|template|svg|canvas|iframe)>/gi, " ")
-        .replace(/<!--([\s\S]*?)-->/g, " ")
-        .replace(/<[^>]+>/g, " ")
+  const title = mimeType === "text/html" ? titleFromHtml(value) : null;
+  const rawBody = mimeType === "text/html"
+    ? projectInertHtml(value).passiveHtml
     : value;
-  // eslint-disable-next-line no-control-regex -- fetched text is inert and C0 controls must be removed
-  return decodeEntities(withoutExecutableContent).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  return [title, safePolicySegments(rawBody)].filter(Boolean).join(" ").trim();
+}
+
+function safeTextPrefix(value: string, maximumCharacters: number): string {
+  if (value.length <= maximumCharacters) return value;
+  const prefix = value.slice(0, maximumCharacters);
+  if (/\s$/.test(prefix) || /\s/.test(value[maximumCharacters] ?? "")) return prefix.trimEnd();
+  const boundary = prefix.lastIndexOf(" ");
+  return boundary < 0 ? "" : prefix.slice(0, boundary).trimEnd();
 }
 
 async function sha256(value: string): Promise<string> {
@@ -215,6 +221,9 @@ export async function fetchPublicSource(
   const normalized = normalizedText(body, contentType);
   const truncated = normalized.length > maxCharacters;
   const observedAt = new Date(now()).toISOString();
+  const pageFootprint = contentType === "text/html"
+    ? extractPublicPageFootprint({ html: body, finalUrl: fetched.finalUrl })
+    : null;
   const data: PublicSourceData = {
     sourceUrl: requested.href,
     finalUrl: fetched.finalUrl,
@@ -222,7 +231,9 @@ export async function fetchPublicSource(
     mimeType: contentType,
     httpStatus: fetched.response.status,
     contentHash: await sha256(normalized),
-    normalizedText: normalized.slice(0, maxCharacters),
+    normalizedText: safeTextPrefix(normalized, maxCharacters),
+    pageFootprint,
+    pageFootprintHash: pageFootprint ? await sha256(JSON.stringify(pageFootprint)) : null,
     truncated,
     observedAt,
   };

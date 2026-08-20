@@ -192,6 +192,24 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   evidenceMeta: { fontSize: 7.5, color: colors.muted, lineHeight: 1.45, marginBottom: 4 },
+  evidenceContext: {
+    backgroundColor: colors.faint,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.amber,
+    paddingVertical: 7,
+    paddingHorizontal: 9,
+    marginBottom: 8,
+  },
+  evidenceContextTitle: {
+    color: colors.ink,
+    fontFamily: "Helvetica-Bold",
+    fontSize: 8.2,
+    marginBottom: 4,
+  },
+  evidenceContextLine: { color: colors.ink, fontSize: 7.7, lineHeight: 1.45, marginBottom: 3 },
+  evidenceContextLabel: { fontFamily: "Helvetica-Bold", color: colors.muted },
+  evidenceContextFragment: { color: colors.ink, fontSize: 7.7, lineHeight: 1.45, marginLeft: 7, marginBottom: 2 },
+  evidenceContextCaveat: { color: colors.muted, fontSize: 7.3, lineHeight: 1.4, marginTop: 4 },
   link: { color: colors.blue, fontSize: 7.5, lineHeight: 1.35, textDecoration: "none" },
   tierRow: { display: "flex", flexDirection: "row", marginBottom: 6 },
   tierNumber: { width: 24, color: colors.amber, fontFamily: "Helvetica-Bold", fontSize: 8.5 },
@@ -213,6 +231,10 @@ function human(value: string): string {
 
 function percent(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+}
+
+function contextHuman(value: string): string {
+  return human(value.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("-", " "));
 }
 
 function chunkItems<T>(items: readonly T[], size: number): T[][] {
@@ -326,6 +348,8 @@ function FindingCard({ finding, index }: { finding: ReportFindingView; index: nu
 
 function EvidenceCard({ evidence }: { evidence: ReportEvidenceView }) {
   const title = evidence.title ?? evidence.sourceFamily;
+  const temporal = evidence.temporalComparison;
+  const footprint = evidence.pageFootprint;
   return (
     <View style={styles.evidenceCard}>
       <View style={styles.evidenceTop}>
@@ -335,7 +359,115 @@ function EvidenceCard({ evidence }: { evidence: ReportEvidenceView }) {
       </View>
       <Text style={styles.evidenceLabel}>{evidence.contentLabel.toLocaleUpperCase("en-US")}</Text>
       <Text style={styles.evidenceClaim}>{evidence.claim}</Text>
-      {evidence.exactExcerpt !== null ? <Text style={styles.excerpt}>{`"${evidence.exactExcerpt}"`}</Text> : null}
+      {evidence.exactExcerpt !== null ? (
+        <Text style={styles.excerpt}>
+          {evidence.contentLabel === "Normalized archived text"
+            ? evidence.exactExcerpt
+            : `"${evidence.exactExcerpt}"`}
+        </Text>
+      ) : null}
+      {temporal ? (
+        <View style={styles.evidenceContext}>
+          <Text style={styles.evidenceContextTitle}>Temporal comparison</Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Observation window: </Text>
+            after {temporal.observedAfter}; on or before {temporal.observedOnOrBefore}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Change dimensions: </Text>
+            response body bytes {temporal.bodyChanged ? "changed" : "unchanged"}; normalized static-HTML text {temporal.visibleTextChanged ? "changed" : "unchanged"}; page-declared metadata {temporal.metadataChanged ? "changed" : "unchanged"}; static-HTML structure {temporal.structureChanged ? "changed" : "unchanged"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Static-HTML fragment counts: </Text>
+            {temporal.addedFragmentCount} added; {temporal.removedFragmentCount} removed; {temporal.unchangedFragmentCount} unchanged
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Changed metadata fields: </Text>
+            {temporal.changedMetadataFields.map(contextHuman).join(", ") || "None observed"}
+          </Text>
+          {temporal.addedTextFragments.length > 0 ? (
+            <View>
+              <Text style={styles.evidenceContextLine}><Text style={styles.evidenceContextLabel}>Added in the later capture</Text></Text>
+              {temporal.addedTextFragments.map((fragment, index) => (
+                <Text key={`added-${index}`} style={styles.evidenceContextFragment}>+ {fragment}</Text>
+              ))}
+            </View>
+          ) : null}
+          {temporal.removedTextFragments.length > 0 ? (
+            <View>
+              <Text style={styles.evidenceContextLine}><Text style={styles.evidenceContextLabel}>Removed by the later capture</Text></Text>
+              {temporal.removedTextFragments.map((fragment, index) => (
+                <Text key={`removed-${index}`} style={styles.evidenceContextFragment}>- {fragment}</Text>
+              ))}
+            </View>
+          ) : null}
+          <Text style={styles.evidenceContextCaveat}>
+            {temporal.comparisonBounded ? "Bounded comparison. " : "Observed captures. "}{temporal.caveat}
+          </Text>
+        </View>
+      ) : null}
+      {footprint ? (
+        <View style={styles.evidenceContext}>
+          <Text style={styles.evidenceContextTitle}>Page-declared footprint</Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Footprint projection hash: </Text>
+            {footprint.footprintHash}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Page title: </Text>
+            {footprint.title ?? "Not observed"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Description: </Text>
+            {footprint.description ?? "Not observed"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Canonical status: </Text>
+            {footprint.canonicalStatus ? contextHuman(footprint.canonicalStatus) : "Not retained"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Canonical URL: </Text>
+            {footprint.canonicalUrl
+              ? <Link src={footprint.canonicalUrl} style={styles.citationLink}>{softWrapUrl(footprint.canonicalUrl)}</Link>
+              : "Not retained"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Language: </Text>
+            {footprint.language ?? "Not observed"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Open Graph type: </Text>
+            {footprint.openGraphType ?? "Not observed"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Open Graph site name: </Text>
+            {footprint.openGraphSiteName ?? "Not observed"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Declared generators: </Text>
+            {footprint.generators.join(", ") || "None observed"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Declared applications: </Text>
+            {footprint.applicationNames.join(", ") || "None observed"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Observed provider families: </Text>
+            {footprint.observedProviderFamilies.map(contextHuman).join(", ") || "None observed"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>Referenced resource hosts: </Text>
+            {footprint.observedResourceHosts.join(", ") || "None observed"}
+          </Text>
+          <Text style={styles.evidenceContextLine}>
+            <Text style={styles.evidenceContextLabel}>JSON-LD types: </Text>
+            {footprint.jsonLdTypes.join(", ") || "None observed"}
+          </Text>
+          <Text style={styles.evidenceContextCaveat}>
+            {footprint.bounded ? "Bounded projection. " : "Projection not truncated by configured extraction limits. "}{footprint.caveat}
+          </Text>
+        </View>
+      ) : null}
       <Text style={styles.evidenceMeta}>
         {evidence.sourceFamily} / {human(evidence.sourceType)} / {human(evidence.verificationMethod)} / {human(evidence.temporalStatus)}
       </Text>
@@ -445,7 +577,7 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
             index={pageIndex === 0 ? "04 / SOURCES" : `04 / SOURCES · ${pageIndex + 1}`}
             title={pageIndex === 0 ? "Evidence and source ledger" : "Evidence ledger continued"}
           >
-            {pageIndex === 0 ? <Text style={[styles.paragraph, styles.muted]}>Stable E-references distinguish exact excerpts from structured API claims. Links remain live; raw provider payloads are excluded.</Text> : null}
+            {pageIndex === 0 ? <Text style={[styles.paragraph, styles.muted]}>Stable E-references distinguish exact excerpts, normalized archived text, and structured API claims. Links remain live; raw provider payloads are excluded.</Text> : null}
             {items.length > 0
               ? items.map((evidence) => <EvidenceCard key={evidence.id} evidence={evidence} />)
               : <Text style={styles.paragraph}>No evidence was admitted.</Text>}

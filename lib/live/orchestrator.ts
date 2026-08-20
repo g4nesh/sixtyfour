@@ -35,6 +35,7 @@ import {
   type IdentitySignal,
   type InvestigationInput,
   type InvestigationState,
+  type ParsedTarget,
   type JsonObject,
   type JsonValue,
   type ResearchPhase,
@@ -136,6 +137,24 @@ function stringValue(value: unknown, maximum = 1_000): string | null {
   if (typeof value !== "string") return null;
   const text = value.trim().replace(/\s+/g, " ");
   return text ? text.slice(0, maximum) : null;
+}
+
+function safeProviderText(
+  value: unknown,
+  maximum: number,
+  allowedEmails: ReadonlySet<string>,
+): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.normalize("NFKC").trim().replace(/\s+/gu, " ");
+  // Provider annotations are untrusted metadata. Inspect the complete bounded
+  // field before shortening it so a credential or private value cannot be
+  // split across the display-length boundary and evade the shared policy.
+  if (
+    !text
+    || text.length > 16_000
+    || containsRestrictedPublicContent(text, { allowedEmails })
+  ) return null;
+  return text.slice(0, maximum);
 }
 
 function safeHttpsUrl(value: unknown): string | null {
@@ -526,6 +545,63 @@ function deterministicNamedPersonPageExtraction(
   };
 }
 
+/**
+ * Retain the bounded passive projection of an already-authorized HTML fetch
+ * without granting the page any identity, ownership, or finding authority.
+ *
+ * This record deliberately uses the existing discovery-only evidence path:
+ * it is attached only to an existing candidate scope, cannot authorize a
+ * later fetch, cannot support a finding, and cannot affect candidate scoring.
+ * The full response body and normalized extraction text never enter it.
+ */
+function passivePageMetadataObservation(
+  source: PublicSourceData,
+  binding: { candidateId: string } | { candidateRef: string } | null,
+): EvidenceDraft | null {
+  if (
+    !binding
+    || !source.pageFootprint
+    || !source.pageFootprintHash
+    || !/^sha256:[a-f0-9]{64}$/.test(source.pageFootprintHash)
+  ) return null;
+
+  return {
+    ...binding,
+    claim: `Passive public-page metadata observation ${source.pageFootprintHash}; discovery-only and not evidence of identity or ownership.`,
+    disposition: "discovery_only",
+    sourceUrl: source.finalUrl,
+    queryUrl: null,
+    // A page-declared label such as "official profile" would itself overclaim
+    // authority here. The observation therefore stays in the neutral lane.
+    sourceType: "other",
+    title: source.title && !containsRestrictedPublicContent(source.title)
+      ? source.title
+      : null,
+    publisher: null,
+    observedAt: source.observedAt,
+    httpStatus: source.httpStatus,
+    contentHash: source.contentHash,
+    canonicalSubset: {
+      mimeType: source.mimeType,
+      truncated: source.truncated,
+      pageFootprint: jsonClone(source.pageFootprint),
+      pageFootprintHash: source.pageFootprintHash,
+    },
+    verificationMethod: "unverified",
+    temporalStatus: "unknown",
+    reliability: 0,
+    spoofable: true,
+    attributes: {
+      metadataObservation: true,
+      findingAuthority: false,
+      identityBinding: false,
+      untrustedContent: true,
+      fullBodyRetained: false,
+      ownershipVerified: false,
+    },
+  };
+}
+
 function findingsTool(): OpenRouterFunctionTool {
   return functionTool({
     name: "submit_findings",
@@ -713,19 +789,22 @@ function citationsFromCompletion(
         : record;
     const url = safeHttpsUrl(nested.url ?? nested.uri);
     if (!url) continue;
-    const roleBootstrap = roleBootstrapFromAnnotation(
-      target,
-      url,
-      nested.title ?? nested.name,
-      nested.content ?? nested.snippet ?? nested.text,
-    );
-    const providerTitle = stringValue(nested.title ?? nested.name, 320);
     const allowedEmails = new Set(target.identifiers
       .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
       .map((identifier) => identifier.normalizedValue));
-    const title = providerTitle && !containsRestrictedPublicContent(providerTitle, { allowedEmails })
-      ? providerTitle
-      : `Public source at ${new URL(url).hostname}`;
+    const providerTitle = safeProviderText(nested.title ?? nested.name, 320, allowedEmails);
+    const providerContent = safeProviderText(
+      nested.content ?? nested.snippet ?? nested.text,
+      800,
+      allowedEmails,
+    );
+    const roleBootstrap = roleBootstrapFromAnnotation(
+      target,
+      url,
+      providerTitle,
+      providerContent,
+    );
+    const title = providerTitle ?? `Public source at ${new URL(url).hostname}`;
     citations.push({
       url,
       // Provider titles are useful discovery metadata, but only after the same
@@ -815,6 +894,45 @@ function candidateSignalsFromName(
   }];
 }
 
+function searchSubjectDraft(target: ParsedTarget): CandidateDraft | null {
+  if (target.name) {
+    return { displayName: target.name, signals: candidateSignalsFromName(target.name) };
+  }
+  if (target.kind === "organization" && target.organizationHints[0]) {
+    const organization = target.organizationHints[0];
+    return {
+      displayName: organization.name,
+      signals: [{
+        kind: "organization",
+        value: organization.name,
+        normalizedValue: organization.normalizedName,
+        strength: "weak",
+        assurance: "self_asserted",
+      }],
+    };
+  }
+  if (["role_query", "unknown"].includes(target.kind)) return null;
+  const identifier = target.identifiers.find((item) => item.provenance === "user_input");
+  if (!identifier) return null;
+  const signalKind: IdentitySignal["kind"] = identifier.kind === "domain"
+    ? "personal_domain"
+    : identifier.kind === "platform_handle"
+      ? "social_handle"
+      : identifier.kind === "email"
+        ? "email"
+        : "profile_url";
+  return {
+    displayName: target.rawInput,
+    signals: [{
+      kind: signalKind,
+      value: identifier.value,
+      normalizedValue: identifier.normalizedValue,
+      strength: "weak",
+      assurance: "self_asserted",
+    }],
+  };
+}
+
 function nameMatches(left: string, right: string): boolean {
   const leftTokens = normalizeComparable(left).split(" ").filter(Boolean);
   const rightTokens = normalizeComparable(right).split(" ").filter(Boolean);
@@ -841,6 +959,41 @@ function organizationMatches(left: string, right: string): boolean {
     ? [normalizedLeft, normalizedRight]
     : [normalizedRight, normalizedLeft];
   return shorter.length >= 3 && (longer.startsWith(`${shorter} `) || longer.endsWith(` ${shorter}`));
+}
+
+function exactIdentifierMatchesSource(target: ParsedTarget, sourceUrl: string | null): boolean {
+  const normalizedSource = sourceUrl ? safeHttpsUrl(sourceUrl) : null;
+  if (!normalizedSource) return false;
+  const url = new URL(normalizedSource);
+  const host = url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "");
+  let decodedPath = "";
+  try {
+    decodedPath = decodeURIComponent(url.pathname).replace(/\/+$/, "").toLocaleLowerCase("en-US");
+  } catch {
+    return false;
+  }
+  return target.identifiers.some((identifier) => {
+    if (identifier.provenance !== "user_input") return false;
+    const value = identifier.normalizedValue.toLocaleLowerCase("en-US");
+    if (identifier.kind === "url") return safeHttpsUrl(identifier.value) === normalizedSource;
+    if (identifier.kind === "domain") return host === value || host.endsWith(`.${value}`);
+    if (identifier.kind === "repository") {
+      return ["github.com", "gitlab.com"].includes(host) && decodedPath === `/${value}`;
+    }
+    if (identifier.kind === "doi") return host === "doi.org" && decodedPath === `/${value}`;
+    if (identifier.kind === "orcid") return host === "orcid.org" && decodedPath === `/${value}`;
+    if (identifier.kind === "package") {
+      return (host === "npmjs.com" && decodedPath === `/package/${value}`)
+        || (host === "pypi.org" && decodedPath === `/project/${value}`);
+    }
+    if (identifier.kind === "platform_handle") {
+      const [platform, handle] = value.split(":", 2);
+      if (!platform || !handle) return false;
+      const platformHost = platform === "github" ? "github.com" : `${platform}.com`;
+      return host === platformHost && decodedPath === `/${handle}`;
+    }
+    return false;
+  });
 }
 
 export interface ExtractedCandidateGate {
@@ -870,6 +1023,23 @@ export function gateExtractedCandidate(
   if (!candidateId) return { allowed: false, reason: "candidate_missing" };
   const candidate = state.candidates.find((item) => item.id === candidateId);
   if (!candidate) return { allowed: false, reason: "candidate_missing" };
+  if (state.target.kind === "organization") {
+    if (!organization) return { allowed: false, reason: "organization_missing" };
+    const targetMatches = state.target.organizationHints.some((known) =>
+      organizationMatches(known.name, organization));
+    const candidateOrganizations = [
+      candidate.displayName,
+      ...candidate.signals.filter((signal) => signal.kind === "organization").map((signal) => signal.value),
+    ];
+    return targetMatches && candidateOrganizations.some((known) => organizationMatches(known, organization))
+      ? { allowed: true, reason: "matched" }
+      : { allowed: false, reason: "organization_mismatch" };
+  }
+  if (["url", "domain", "repository", "publication", "package", "platform_handle"].includes(state.target.kind)) {
+    return exactIdentifierMatchesSource(state.target, sourceUrl)
+      ? { allowed: true, reason: "matched" }
+      : { allowed: false, reason: "strong_binding_missing" };
+  }
   if (!subjectName) return { allowed: false, reason: "subject_missing" };
   const knownNames = [
     candidate.displayName,
@@ -929,17 +1099,30 @@ export function sourceAllowedForCandidate(
   url: string,
   candidateId: string | undefined,
 ): string | null {
+  const admitted = admittedSourceForCandidate(state, url, candidateId);
+  if (admitted) return admitted;
   if (!candidateId) return null;
   const normalized = safeHttpsUrl(url);
   if (!normalized) return null;
-  const evidence = state.evidence.find((item) =>
-    item.candidateId === candidateId && evidenceAuthorizationUrl(item) === normalized);
-  if (evidence) return normalized;
   const candidate = state.candidates.find((item) => item.id === candidateId);
   if (candidate?.signals.some((signal) =>
     ["profile_url", "personal_domain"].includes(signal.kind)
     && safeHttpsUrl(signal.value) === normalized)) return normalized;
   return null;
+}
+
+/** Exact candidate-bound URL admitted by non-discovery evidence only. */
+export function admittedSourceForCandidate(
+  state: InvestigationState,
+  url: string,
+  candidateId: string | undefined,
+): string | null {
+  if (!candidateId) return null;
+  const normalized = safeHttpsUrl(url);
+  if (!normalized) return null;
+  const evidence = state.evidence.find((item) =>
+    item.candidateId === candidateId && evidenceAuthorizationUrl(item) === normalized);
+  return evidence ? normalized : null;
 }
 
 export function establishedSourceForCandidate(
@@ -1085,6 +1268,8 @@ export function createLiveDependencies(
   let remainingTransportAttempts = limits.maxNetworkRequests;
   let remainingLlmAttempts = limits.maxLlmCalls;
   let providerAttempts = 0;
+  let searchProviderCircuitOpen = false;
+  let githubPublicUserFallbackAttempted = false;
   const globallyReported = new Map<TokenUsageField, number>();
   // Exact provider-returned URLs stay outside reports/traces. The model sees
   // only an opaque lead ID; policy resolves it back to the exact safe URL.
@@ -1193,6 +1378,25 @@ export function createLiveDependencies(
   };
 
   const mechanicalFetchDecision = (context: PlannerContextV1): PlannerDecision | null => {
+    const archiveActions = (context.selectedFrontierEntries ?? [])
+      .filter((entry) =>
+        entry.candidateId
+        && entry.allowedTools.includes("wayback_profile_history"))
+      .map((entry) => ({
+        frontierEntryId: entry.id,
+        tool: "wayback_profile_history",
+        purpose: "Compare bounded archived captures of this exact candidate-linked public URL.",
+        arguments: { url: entry.queryHint },
+        candidateId: entry.candidateId!,
+      }));
+    if (archiveActions.length > 0) {
+      return {
+        kind: "actions",
+        decisionSummary: "Applied deterministic exact-URL temporal archive routing.",
+        actions: archiveActions,
+        modelTelemetry: mechanicalModelTelemetry(),
+      };
+    }
     // Once a search has yielded opaque candidate-scoped leads, choosing the
     // lead that belongs to a deterministic source lane is policy bookkeeping,
     // not a reasoning task. Avoid another billed provider turn (and a new 429
@@ -1271,18 +1475,26 @@ export function createLiveDependencies(
     error: OpenRouterError,
   ): PlannerDecision | null => {
     const selected = context.selectedFrontierEntries ?? [];
-    const searchEntry = selected.find((entry) => entry.allowedTools.includes("search_web"));
-    if (searchEntry) {
+    const searchEntries = selected.filter((entry) => entry.allowedTools.includes("search_web"));
+    if (searchEntries.length > 0) {
+      const searchScope = searchEntries.length === 1
+        ? `search_web in ${searchEntries[0].sourceLaneId}`
+        : `${searchEntries.length} selected search_web frontiers`;
       return {
         kind: "actions",
-        decisionSummary: degradedDecisionSummary(error, `search_web in ${searchEntry.sourceLaneId}`),
-        actions: [{
+        decisionSummary: degradedDecisionSummary(error, searchScope),
+        // The frontier selector has already bounded this single-tier batch by
+        // the per-turn action and outbound-concurrency limits. Execute every
+        // selected canonical query now: returning only the first entry would
+        // spend one turn while silently requeuing its peers, and could make a
+        // later turn-budget stop misrepresent an unexecuted query as searched.
+        actions: searchEntries.map((searchEntry) => ({
           frontierEntryId: searchEntry.id,
           tool: "search_web",
           purpose: `Execute bounded public discovery in ${searchEntry.sourceLaneId} while the planner provider is unavailable.`,
           arguments: { query: searchEntry.queryHint },
           ...(searchEntry.candidateId ? { candidateId: searchEntry.candidateId } : {}),
-        }],
+        })),
         modelTelemetry: mechanicalModelTelemetry(),
       };
     }
@@ -1494,7 +1706,15 @@ export function createLiveDependencies(
       let fallbackIncomplete = false;
       let publicFallbackReason: "provider_unavailable" | "sources_not_observed" | null = null;
       const searchDiagnostics: NonNullable<ResearchActionResult["diagnostics"]> = [];
-      try {
+      if (searchProviderCircuitOpen) {
+        publicFallbackReason = "provider_unavailable";
+        searchDiagnostics.push({
+          code: "search_provider_circuit_open",
+          severity: "warning",
+          message: "Atlas did not repeat a retry-exhausted provider request and continued with the bounded public-search fallback.",
+          retryable: false,
+        });
+      } else try {
         const completion = await completeModel({
           messages: [
             { role: "system", content: "Use web search to identify direct public professional sources for the research query. Return concise source leads; do not infer private data." },
@@ -1523,6 +1743,7 @@ export function createLiveDependencies(
         }
       } catch (error) {
         if (!isRetryableSearchProviderFailure(error) || !(error instanceof OpenRouterError)) throw error;
+        searchProviderCircuitOpen = true;
         publicFallbackReason = "provider_unavailable";
         searchDiagnostics.push(searchProviderFailureDiagnostic(error));
       }
@@ -1569,12 +1790,13 @@ export function createLiveDependencies(
           const hasCodeProfileLead = citations.some((citation) =>
             deterministicSourceTypeForUrl(citation.url, tierContext) === "code_profile");
           const githubSupplementAllowed = !action.candidateId
+            && action.sourceLaneId === "t1.first_party"
             && context.state.target.kind === "named_person"
             && Boolean(targetName)
             && !hasCodeProfileLead
-            && !context.state.evidence.some((evidence) =>
-              evidence.attributes.provider === "github:public_user_search");
+            && !githubPublicUserFallbackAttempted;
           if (githubSupplementAllowed && targetName) {
+            githubPublicUserFallbackAttempted = true;
             const githubSupplement = await searchGithubPublicUsersByExactName(targetName, sharedContext);
             fallbackRequests += githubSupplement.meta.requests;
             fallbackBytesRead += githubSupplement.meta.bytesRead;
@@ -1605,11 +1827,13 @@ export function createLiveDependencies(
           const unsafeFallbackQuery = publicFallback.diagnostics.some((item) =>
             item.code === "unsafe_public_search_query");
           const githubAllowed = !unsafeFallbackQuery
+            && !action.candidateId
+            && action.sourceLaneId === "t1.first_party"
             && context.state.target.kind === "named_person"
             && Boolean(targetName)
-            && !context.state.evidence.some((evidence) =>
-              evidence.attributes.provider === "github:public_user_search");
+            && !githubPublicUserFallbackAttempted;
           if (githubAllowed && targetName) {
+            githubPublicUserFallbackAttempted = true;
             const githubFallback = await searchGithubPublicUsersByExactName(targetName, sharedContext);
             fallbackRequests += githubFallback.meta.requests;
             fallbackBytesRead += githubFallback.meta.bytesRead;
@@ -1670,18 +1894,24 @@ export function createLiveDependencies(
       }
       const candidates: CandidateDraft[] = [];
       const candidateRefs = new Map<string, string>();
-      const namedCandidateRef = !action.candidateId && context.state.target.name
+      const querySubject = !action.candidateId
+        ? searchSubjectDraft(context.state.target)
+        : null;
+      const existingQuerySubjectId = querySubject
+        ? context.state.candidates.find((candidate) =>
+            candidate.normalizedName === normalizeComparable(querySubject.displayName))?.id
+        : undefined;
+      const querySubjectRef = querySubject && !existingQuerySubjectId
         ? "search-subject"
         : undefined;
-      if (namedCandidateRef && context.state.target.name) {
+      if (querySubjectRef && querySubject) {
         candidates.push({
-          ref: namedCandidateRef,
-          displayName: context.state.target.name,
-          signals: candidateSignalsFromName(context.state.target.name),
+          ...querySubject,
+          ref: querySubjectRef,
         });
       }
       for (const citation of citations) {
-        if (action.candidateId || namedCandidateRef || !citation.roleBootstrap) continue;
+        if (action.candidateId || existingQuerySubjectId || querySubjectRef || !citation.roleBootstrap) continue;
         const key = normalizeComparable(citation.roleBootstrap.displayName);
         if (!key || candidateRefs.has(key)) continue;
         const candidateRef = `search-role-subject:${key}`;
@@ -1702,8 +1932,12 @@ export function createLiveDependencies(
           boundCitations.push({ citation, candidateId: action.candidateId });
           continue;
         }
-        if (namedCandidateRef) {
-          boundCitations.push({ citation, candidateRef: namedCandidateRef });
+        if (existingQuerySubjectId) {
+          boundCitations.push({ citation, candidateId: existingQuerySubjectId });
+          continue;
+        }
+        if (querySubjectRef) {
+          boundCitations.push({ citation, candidateRef: querySubjectRef });
           continue;
         }
         const candidateRef = citation.roleBootstrap
@@ -1796,10 +2030,14 @@ export function createLiveDependencies(
           ...(evidence.length > 0
             ? (unboundRoleCitations > 0 ? [{ code: "role_search_results_unbound", severity: "info" as const, message: "Some search annotations did not structurally attest both the requested role and organization and were not authorized for fetch.", retryable: false }] : [])
             : [{
-                code: citations.length > 0 ? "role_candidate_not_attested" : "search_sources_not_observed",
+                code: citations.length > 0 && context.state.target.kind === "role_query"
+                  ? "role_candidate_not_attested"
+                  : "search_sources_not_observed",
                 severity: "info" as const,
                 message: citations.length > 0
-                  ? "Search annotations were observed, but none structurally attested a role-matched candidate and organization."
+                  ? context.state.target.kind === "role_query"
+                    ? "Search annotations were observed, but none structurally attested a role-matched candidate and organization."
+                    : "Search annotations were observed, but none could be bound to the exact query subject."
                   : "The bounded provider search returned no valid HTTPS source annotations.",
                 retryable: false,
               }]),
@@ -1874,6 +2112,38 @@ export function createLiveDependencies(
       }
       const fetched = await fetchPublicSource({ url, allowedUrl }, sharedContext);
       if (!fetched.data) return { status: fetched.status, diagnostics: diagnostics(fetched), meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: fetched.meta.incomplete, llmCalls: 0 } };
+      const existingExactUrlSubject = !boundCandidateId && exactInputUrl
+        ? context.state.candidates.find((item) => item.signals.some((signal) =>
+            signal.kind === "profile_url"
+            && signal.assurance === "self_asserted"
+            && safeHttpsUrl(signal.value) === exactInputUrl))
+        : undefined;
+      const exactUrlSubjectRef = !boundCandidateId && exactInputUrl && !existingExactUrlSubject
+        ? "exact-url-query-subject"
+        : null;
+      const metadataCandidates: CandidateDraft[] = exactUrlSubjectRef && exactInputUrl
+        ? [{
+            ref: exactUrlSubjectRef,
+            frontierExpansion: "none",
+            displayName: `Exact public URL (${new URL(exactInputUrl).hostname})`,
+            signals: [{
+              kind: "profile_url",
+              value: exactInputUrl,
+              normalizedValue: exactInputUrl,
+              strength: "weak",
+              assurance: "self_asserted",
+            }],
+          }]
+        : [];
+      const metadataBinding = boundCandidateId
+        ? { candidateId: boundCandidateId }
+        : existingExactUrlSubject
+          ? { candidateId: existingExactUrlSubject.id }
+          : exactUrlSubjectRef
+            ? { candidateRef: exactUrlSubjectRef }
+            : null;
+      const metadataObservation = passivePageMetadataObservation(fetched.data, metadataBinding);
+      const metadataEvidence = metadataObservation ? [metadataObservation] : [];
       const focus = stringValue(action.arguments.claimFocus, 500) ?? action.purpose;
       const candidate = context.state.candidates.find((item) => item.id === boundCandidateId);
       const attestedSubjectName = stringValue(leadEvidence?.attributes.attestedSubjectName, 120);
@@ -1918,6 +2188,11 @@ export function createLiveDependencies(
       if (deterministicGithubLead && !extracted) {
         return {
           status: "partial",
+          data: { sourceUrl: fetched.data.finalUrl, contentHash: fetched.data.contentHash, fullBodyRetained: false },
+          ...(metadataEvidence.length > 0 && metadataCandidates.length > 0
+            ? { candidates: metadataCandidates }
+            : {}),
+          evidence: metadataEvidence,
           diagnostics: [...diagnostics(fetched), {
             code: "deterministic_github_excerpt_missing",
             severity: "warning",
@@ -1967,6 +2242,11 @@ export function createLiveDependencies(
           const budget = nestedBudgetError(error);
           return {
             status: "partial",
+            data: { sourceUrl: fetched.data.finalUrl, contentHash: fetched.data.contentHash, fullBodyRetained: false },
+            ...(metadataEvidence.length > 0 && metadataCandidates.length > 0
+              ? { candidates: metadataCandidates }
+              : {}),
+            evidence: metadataEvidence,
             diagnostics: [...diagnostics(fetched), {
               code: budget ? "model_budget_exhausted" : "evidence_extraction_invalid",
               severity: "warning",
@@ -2005,7 +2285,16 @@ export function createLiveDependencies(
         httpStatus: fetched.data.httpStatus,
         contentHash: fetched.data.contentHash,
         excerpt: extracted.excerpt,
-        canonicalSubset: { mimeType: fetched.data.mimeType, truncated: fetched.data.truncated },
+        canonicalSubset: {
+          mimeType: fetched.data.mimeType,
+          truncated: fetched.data.truncated,
+          ...(fetched.data.pageFootprint
+            ? {
+                pageFootprint: jsonClone(fetched.data.pageFootprint),
+                pageFootprintHash: fetched.data.pageFootprintHash,
+              }
+            : {}),
+        },
         verificationMethod: "direct_fetch",
         temporalStatus: extracted.temporalStatus,
         // Arbitrary-host ownership is not verified by a fetch, so this record
@@ -2078,6 +2367,16 @@ export function createLiveDependencies(
             }] : []),
           ],
         }] : [];
+        const quarantinedEvidence: EvidenceDraft[] = candidateRef ? [{
+          ...evidenceBase,
+          candidateRef,
+          attributes: {
+            ...evidenceBase.attributes,
+            ...(action.candidateId
+              ? { quarantinedFromCandidateId: action.candidateId }
+              : {}),
+          },
+        }] : [];
         return {
           status: "partial",
           data: { sourceUrl: fetched.data.finalUrl, contentHash: fetched.data.contentHash, fullBodyRetained: false },
@@ -2089,17 +2388,12 @@ export function createLiveDependencies(
                   candidate,
                 })),
               }
-            : { candidates }),
-          evidence: candidateRef ? [{
-            ...evidenceBase,
-            candidateRef,
-            attributes: {
-              ...evidenceBase.attributes,
-              ...(action.candidateId
-                ? { quarantinedFromCandidateId: action.candidateId }
-                : {}),
-            },
-          }] : [],
+            : { candidates: [...metadataCandidates, ...candidates] }),
+          // Page-authored metadata is independent of whether an extracted
+          // person/organization claim can bind to the requested identity. Keep
+          // the neutral footprint on the original/query-subject branch while
+          // any exact quote remains isolated on the quarantined branch.
+          evidence: [...metadataEvidence, ...quarantinedEvidence],
           diagnostics: [...diagnostics(fetched), ...extractionDiagnostics, {
             code: `candidate_binding_${gate.reason}`,
             severity: "warning",
@@ -2110,14 +2404,23 @@ export function createLiveDependencies(
         };
       }
       const evidence: EvidenceDraft[] = [{ ...evidenceBase, candidateId: boundCandidateId! }];
-      const candidateSignals = [{
+      const targetIsPerson = ["named_person", "role_query", "email"].includes(context.state.target.kind);
+      const admittedSignals: IdentitySignal[] = [
+        ...(targetIsPerson && extracted.subjectName ? [{
+          kind: "name" as const,
+          value: extracted.subjectName,
+          normalizedValue: normalizeComparable(extracted.subjectName),
+          strength: "strong" as const,
+          assurance: "spoofable" as const,
+          sourceFamily: family,
+        }] : []),
+        { kind: "profile_url" as const, value: fetched.data.finalUrl, normalizedValue: fetched.data.finalUrl, strength: "strong" as const, assurance: "spoofable" as const, sourceFamily: family },
+        ...(extracted.organization ? [{ kind: "organization" as const, value: extracted.organization, normalizedValue: normalizeComparable(extracted.organization), strength: "strong" as const, assurance: "spoofable" as const, sourceFamily: family }] : []),
+      ];
+      const candidateSignals = admittedSignals.length > 0 ? [{
         candidateId: boundCandidateId!,
-        signals: [
-          { kind: "name", value: extracted.subjectName!, normalizedValue: normalizeComparable(extracted.subjectName!), strength: "strong", assurance: "spoofable", sourceFamily: family } as IdentitySignal,
-          { kind: "profile_url", value: fetched.data.finalUrl, normalizedValue: fetched.data.finalUrl, strength: "strong", assurance: "spoofable", sourceFamily: family } as IdentitySignal,
-          ...(extracted.organization ? [{ kind: "organization", value: extracted.organization, normalizedValue: normalizeComparable(extracted.organization), strength: "strong", assurance: "spoofable", sourceFamily: family } as IdentitySignal] : []),
-        ],
-      }];
+        signals: admittedSignals,
+      }] : [];
       return {
         status: fetched.status,
         data: { sourceUrl: fetched.data.finalUrl, contentHash: fetched.data.contentHash, fullBodyRetained: false },
@@ -2213,20 +2516,40 @@ export function createLiveDependencies(
 
     if (action.tool === "wayback_profile_history") {
       const url = safeHttpsUrl(action.arguments.url);
-      if (!url || !action.candidateId || !establishedSourceForCandidate(context.state, url, action.candidateId)) return { status: "skipped", diagnostics: [{ code: "established_candidate_link_required", severity: "warning", message: "Wayback history requires an HTTPS URL already bound to this candidate by non-discovery evidence.", retryable: false }], meta: { requests: 0, llmCalls: 0 } };
+      if (!url || !action.candidateId || !admittedSourceForCandidate(context.state, url, action.candidateId)) return { status: "skipped", diagnostics: [{ code: "admitted_candidate_link_required", severity: "warning", message: "Temporal archive comparison requires an exact HTTPS URL already bound to this candidate by admitted non-discovery evidence.", retryable: false }], meta: { requests: 0, llmCalls: 0 } };
       const result = await inspectWaybackHistory({ url, candidate: { candidateId: action.candidateId, basis: "cross_source_url_match" } }, sharedContext, { maxCaptures: 12, maxSnapshots: 2 });
-      const queryUrl = `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(url)}&matchType=exact&output=json&collapse=digest`;
-      const evidence = result.evidence
-        .filter((item) => item.sourceType !== "wayback_snapshot" || Boolean(item.excerpt?.trim()))
-        .map((item) => toolEvidenceToDraft(item, {
-        claim: item.sourceType === "wayback_snapshot"
-          ? `A retrieved archived snapshot preserves candidate-linked public profile text at ${String(item.attributes.timestamp ?? "an observed time")}.`
-          : "The Wayback CDX index contains a bounded archive record for this candidate-linked URL; this is discovery metadata only.",
-        candidateId: action.candidateId,
-        queryUrl,
-        httpStatus: 200,
-        toolCallId: action.id,
-      }));
+      // Evidence must bind to the adapter's exact dispatched CDX request,
+      // including filters, result bounds, and any explicit date window. Never
+      // reconstruct a lookalike provenance URL in the orchestration layer.
+      const cdxRequestUrl = result.data?.cdxRequestUrl ?? null;
+      const evidence = cdxRequestUrl ? result.evidence
+        .filter((item) => item.sourceType !== "wayback_snapshot"
+          || Boolean(item.excerpt?.trim())
+          || (item.attributes.temporalComparison !== null
+            && typeof item.attributes.temporalComparison === "object"
+            && !Array.isArray(item.attributes.temporalComparison)))
+        .map((item) => {
+          const comparison = item.attributes.temporalComparison;
+          const comparisonObserved = comparison !== null
+            && typeof comparison === "object"
+            && !Array.isArray(comparison);
+          const draft = toolEvidenceToDraft(item, {
+            claim: item.sourceType === "wayback_snapshot"
+              ? comparisonObserved
+                ? "Two bounded raw captures of this exact candidate-linked URL differ; Atlas retained exact raw-body hashes, bounded static-HTML change indicators, and an observation window."
+                : `A retrieved archived snapshot preserves candidate-linked public profile text at ${String(item.attributes.timestamp ?? "an observed time")}.`
+              : "The Wayback CDX index contains a bounded archive record for this candidate-linked URL; this is discovery metadata only.",
+            candidateId: action.candidateId,
+            queryUrl: cdxRequestUrl,
+            httpStatus: 200,
+            toolCallId: action.id,
+          });
+          const exactBodyHash = typeof item.attributes.bodyHashSha256 === "string"
+            && /^[a-f0-9]{64}$/.test(item.attributes.bodyHashSha256)
+            ? `sha256:${item.attributes.bodyHashSha256}`
+            : null;
+          return exactBodyHash ? { ...draft, contentHash: exactBodyHash } : draft;
+        }) : [];
       return { status: result.status, data: result.data ? jsonClone(result.data) : null, evidence, diagnostics: diagnostics(result), meta: { requests: result.meta.requests, bytesRead: result.meta.bytesRead, incomplete: result.meta.incomplete, llmCalls: 0 } };
     }
 

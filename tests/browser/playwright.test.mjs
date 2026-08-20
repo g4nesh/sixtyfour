@@ -7,6 +7,7 @@ import {
   denseReplayFixture,
   graphChromeCollisions,
   intersectingRectangles,
+  reportEvidenceContextFixture,
 } from "./fixture.mjs";
 
 const baseUrl = new URL(process.env.ATLAS_BROWSER_E2E_BASE_URL ?? "http://localhost:3000/");
@@ -308,6 +309,8 @@ test("dense intercepted NDJSON has collision-free desktop and mobile graph geome
         await page.evaluate(installStreamedResearchFixture, { events: fixture.events, delayMs: 50 });
         await page.evaluate(startLiveGeometrySampler, chromeSelectors);
         const searchbox = page.getByRole("searchbox", { name: "Public-professional research input" });
+        const depthSelect = page.getByRole("combobox", { name: "Research depth" });
+        assert.equal(await depthSelect.inputValue(), "deep", "full bounded operator breadth is the interactive default");
         await searchbox.fill("Chris Anderson, TED");
         assert.equal(await searchbox.inputValue(), "Chris Anderson, TED");
         await page.getByRole("button", { name: "Research", exact: true }).click();
@@ -328,7 +331,7 @@ test("dense intercepted NDJSON has collision-free desktop and mobile graph geome
         const researchRequest = await page.evaluate(() => window.__atlasFixtureRequest);
         assert.equal(researchRequest?.query, "Chris Anderson, TED");
         assert.equal(researchRequest?.mode, "live");
-        assert.equal(researchRequest?.requestedDepth, "quick", "interactive research must use the bounded quick-depth contract");
+        assert.equal(researchRequest?.requestedDepth, "deep", "interactive research must execute the full bounded operator program");
         if (viewport.name === "mobile") {
           const ladder = page.locator(".source-ladder");
           assert.equal(await ladder.locator(".source-ladder-toggle").getAttribute("aria-expanded"), "false");
@@ -344,6 +347,72 @@ test("dense intercepted NDJSON has collision-free desktop and mobile graph geome
           await page.waitForTimeout(500);
           assertLayout(await renderedLayout(page, fixture.graph), fixture.graph, zoomedViewport);
         }
+        await page.getByRole("button", { name: "Report", exact: true }).click();
+        const reportDialog = page.getByRole("dialog", { name: "Chris Anderson, TED" });
+        await reportDialog.waitFor({ state: "visible" });
+        const temporalCards = reportDialog.locator(".evidence-temporal");
+        assert.equal(await temporalCards.count(), 2, `${viewport.name}: temporal comparisons did not render exactly twice`);
+        const temporalText = await temporalCards.nth(0).innerText();
+        assert.match(temporalText, /Temporal diff\s+bounded comparison/i);
+        assert.match(
+          temporalText,
+          new RegExp(`after ${reportEvidenceContextFixture.temporal.observedAfter}\\s+·\\s+on or before ${reportEvidenceContextFixture.temporal.observedOnOrBefore}`),
+        );
+        assert.match(temporalText, /Archived response body bytes\s+Changed/i);
+        assert.match(temporalText, /Normalized static-HTML text\s+Changed/i);
+        assert.match(temporalText, /Page-declared metadata\s+Changed/i);
+        assert.match(temporalText, /Static-HTML structure\s+Unchanged/i);
+        assert.match(temporalText, /Static-HTML fragment counts\s+1 added\s+·\s+1 removed\s+·\s+3 unchanged/i);
+        assert.match(temporalText, /Changed metadata fields\s+Title, Description/i);
+        assert.ok(temporalText.includes(reportEvidenceContextFixture.temporal.addedTextFragments[0]), `${viewport.name}: normalized added fragment was omitted`);
+        assert.ok(temporalText.includes(reportEvidenceContextFixture.temporal.removedTextFragments[0]), `${viewport.name}: normalized removed fragment was omitted`);
+        assert.match(temporalText, /do not identify the editor or prove archive completeness/i);
+        assert.match(temporalText, /do not describe browser-rendered state/i);
+
+        const bodyOnlyTemporalText = await temporalCards.nth(1).innerText();
+        assert.match(bodyOnlyTemporalText, /Temporal diff\s+observed captures/i);
+        assert.match(bodyOnlyTemporalText, /Archived response body bytes\s+Changed/i);
+        assert.match(bodyOnlyTemporalText, /Normalized static-HTML text\s+Unchanged/i);
+        assert.match(bodyOnlyTemporalText, /Page-declared metadata\s+Unchanged/i);
+        assert.match(bodyOnlyTemporalText, /Static-HTML structure\s+Unchanged/i);
+        assert.match(bodyOnlyTemporalText, /Static-HTML fragment counts\s+0 added\s+·\s+0 removed\s+·\s+1 unchanged/i);
+
+        const footprint = reportDialog.locator(".evidence-footprint");
+        assert.equal(await footprint.count(), 1, `${viewport.name}: page footprint did not render exactly once`);
+        const footprintText = await footprint.innerText();
+        assert.match(footprintText, /Page-declared footprint\s+(?:projection not truncated|bounded projection)/i);
+        assert.ok(footprintText.includes(`sha256:${"d".repeat(64)}`), `${viewport.name}: footprint hash binding was omitted`);
+        assert.ok(footprintText.includes("Chris Anderson - TED speaker profile"), `${viewport.name}: page-authored title was omitted`);
+        assert.ok(footprintText.includes(reportEvidenceContextFixture.footprint.description), `${viewport.name}: page-authored description was omitted`);
+        assert.match(footprintText, /Canonical status\s+Accepted Same Page/i);
+        assert.ok(footprintText.includes(reportEvidenceContextFixture.footprint.canonicalUrl), `${viewport.name}: accepted canonical URL was omitted`);
+        assert.match(footprintText, /Language\s+en/i);
+        assert.match(footprintText, /Open Graph type\s+profile/i);
+        assert.match(footprintText, /Open Graph site\s+TED/i);
+        assert.match(footprintText, /Generators\s+Next\.js/i);
+        assert.match(footprintText, /Applications\s+TED/i);
+        assert.match(footprintText, /Observed providers\s+Jsdelivr, Cloudflare/i);
+        for (const host of reportEvidenceContextFixture.footprint.observedResourceHosts) {
+          assert.ok(footprintText.includes(host), `${viewport.name}: footprint omitted referenced host ${host}`);
+        }
+        for (const type of reportEvidenceContextFixture.footprint.jsonLdTypes) {
+          assert.ok(footprintText.includes(type), `${viewport.name}: footprint omitted JSON-LD type ${type}`);
+        }
+        assert.match(footprintText, /No referenced resource was followed.*no hosting ownership or control is inferred/is);
+        assert.equal((await reportDialog.innerText()).includes("ATLAS_CONTEXT_SENTINEL_SHOULD_NOT_RENDER"), false, `${viewport.name}: hostile or unbound context reached the HTML report`);
+
+        const reportOverflow = await reportDialog.evaluate((dialog) => ({
+          documentWidth: document.documentElement.scrollWidth,
+          bodyWidth: document.body.scrollWidth,
+          viewportWidth: window.innerWidth,
+          overflowing: [dialog, ...dialog.querySelectorAll(".report-sheet-body, .evidence-context")]
+            .filter((element) => element.scrollWidth > element.clientWidth + 1)
+            .map((element) => element.className),
+        }));
+        assert.equal(reportOverflow.documentWidth, reportOverflow.viewportWidth, `${viewport.name}: report opened with document overflow`);
+        assert.equal(reportOverflow.bodyWidth, reportOverflow.viewportWidth, `${viewport.name}: report opened with body overflow`);
+        assert.deepEqual(reportOverflow.overflowing, [], `${viewport.name}: report context cards overflow horizontally`);
+        await page.getByRole("button", { name: "Close report" }).click();
         assert.deepEqual(consoleIssues, [], `${viewport.name}: browser console warnings/errors`);
         assert.deepEqual(pageErrors, [], `${viewport.name}: uncaught page errors`);
       } catch (error) {
@@ -421,6 +490,8 @@ test("credentialed live browser streams genuine public-web discovery, fetched ci
   const diagnostics = diagnosticsFromEvents(events);
   const diagnosticCodes = new Set(diagnostics.map((diagnostic) => diagnostic.code));
   const discoveryEvidence = report.evidence.filter((evidence) => evidence.verificationMethod === "search_discovery");
+  const discoveryOnlyEvidence = report.evidence.filter((evidence) =>
+    evidence.disposition === "discovery_only");
   const publicWebProviders = new Set([
     "gemini:google_search",
     "openai:web_search",
@@ -499,7 +570,11 @@ test("credentialed live browser streams genuine public-web discovery, fetched ci
     .map((id) => evidenceUrl(report.evidence.find((evidence) => evidence.id === id))));
   const findingUrls = new Set(await reportDialog.locator(".source-cite").evaluateAll((anchors) => anchors.map((anchor) => anchor.href)));
   for (const url of citedDirectUrls) assert.ok(findingUrls.has(url), `rendered finding omitted its direct source ${url}`);
-  assert.equal(await reportDialog.locator(".report-evidence-list .is-discovery-lead").count(), discoveryEvidence.length, "discovery-only evidence was not visibly separated");
+  assert.equal(
+    await reportDialog.locator(".report-evidence-list .is-discovery-lead").count(),
+    discoveryOnlyEvidence.length,
+    "discovery-only search leads and passive metadata observations were not visibly separated",
+  );
   assert.equal(await reportDialog.locator(".evidence-source-link").evaluateAll((anchors) => anchors.some((anchor) => /^Public source at /i.test(anchor.textContent ?? ""))), false, "report rendered a placeholder source title");
   await page.getByRole("button", { name: "Close report" }).click();
   if (diagnostics.some((diagnostic) => diagnostic.severity !== "info")) {

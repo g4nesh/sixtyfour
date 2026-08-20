@@ -48,6 +48,51 @@ const DEFAULT_RELIABILITY: Record<EvidenceSourceType, number> = {
   other: 0.45,
 };
 
+const METADATA_OBSERVATION_CANONICAL_KEYS = new Set([
+  "mimeType",
+  "truncated",
+  "pageFootprint",
+  "pageFootprintHash",
+]);
+
+const METADATA_OBSERVATION_ATTRIBUTE_KEYS = new Set([
+  "metadataObservation",
+  "findingAuthority",
+  "identityBinding",
+  "untrustedContent",
+  "fullBodyRetained",
+  "ownershipVerified",
+]);
+
+function isValidPassiveMetadataObservation(draft: EvidenceDraft): boolean {
+  if (draft.attributes?.metadataObservation !== true) return true;
+  const canonical = draft.canonicalSubset;
+  const footprint = canonical?.pageFootprint;
+  const footprintHash = canonical?.pageFootprintHash;
+  return draft.disposition === "discovery_only"
+    && draft.verificationMethod === "unverified"
+    && draft.sourceType === "other"
+    && !normalizeWhitespace(draft.excerpt ?? "")
+    && draft.publisher == null
+    && draft.reliability === 0
+    && draft.spoofable === true
+    && draft.attributes.findingAuthority === false
+    && draft.attributes.identityBinding === false
+    && draft.attributes.untrustedContent === true
+    && draft.attributes.fullBodyRetained === false
+    && draft.attributes.ownershipVerified === false
+    && Object.keys(draft.attributes).every((key) => METADATA_OBSERVATION_ATTRIBUTE_KEYS.has(key))
+    && canonical !== null
+    && canonical !== undefined
+    && Object.keys(canonical).every((key) => METADATA_OBSERVATION_CANONICAL_KEYS.has(key))
+    && typeof footprint === "object"
+    && footprint !== null
+    && !Array.isArray(footprint)
+    && footprint.schemaVersion === "public_page_footprint_v1"
+    && typeof footprintHash === "string"
+    && /^sha256:[a-f0-9]{64}$/.test(footprintHash);
+}
+
 function registrableFamily(hostname: string): string {
   const host = hostname
     .toLocaleLowerCase("en-US")
@@ -171,6 +216,9 @@ export function admitEvidence(
 ): EvidenceAdmission {
   const proposedClaim = normalizeWhitespace(draft.claim);
   if (!proposedClaim) return { admitted: false, reason: "missing_claim" };
+  if (!isValidPassiveMetadataObservation(draft)) {
+    return { admitted: false, reason: "discovery_only_source" };
+  }
   const excerpt = draft.excerpt ? normalizeWhitespace(draft.excerpt) : "";
   if (!excerpt && !draft.canonicalSubset) {
     return { admitted: false, reason: "missing_canonical_content" };

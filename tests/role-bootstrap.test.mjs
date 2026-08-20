@@ -324,16 +324,24 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
   assert.equal(direct.candidateBranches.length, 1);
   assert.equal(direct.candidateBranches[0].parentCandidateId, primary.id);
   assert.equal(direct.candidateBranches[0].reason, "fetched_subject_unverified");
-  assert.equal(direct.evidence.length, 1);
-  assert.equal(direct.evidence[0].candidateId, undefined);
-  assert.equal(typeof direct.evidence[0].candidateRef, "string");
-  assert.equal(direct.evidence[0].attributes.quarantinedFromCandidateId, primary.id);
-  assert.equal(direct.evidence[0].excerpt, "Chris Anderson works at Acme Labs.");
+  assert.equal(direct.evidence.length, 2);
+  const metadataObservation = direct.evidence.find((item) =>
+    item.attributes.metadataObservation === true);
+  assert.ok(metadataObservation);
+  assert.equal(metadataObservation.candidateId, primary.id);
+  assert.equal(metadataObservation.disposition, "discovery_only");
+  assert.equal(metadataObservation.excerpt ?? null, null);
+  const quarantinedDraft = direct.evidence.find((item) =>
+    typeof item.candidateRef === "string");
+  assert.ok(quarantinedDraft);
+  assert.equal(quarantinedDraft.candidateId, undefined);
+  assert.equal(quarantinedDraft.attributes.quarantinedFromCandidateId, primary.id);
+  assert.equal(quarantinedDraft.excerpt, "Chris Anderson works at Acme Labs.");
   assert.equal(engine.snapshot().evidence.every((item) =>
     item.candidateId !== primary.id || item.disposition === "discovery_only"), true);
 
   const quarantined = engine.addCandidate(direct.candidateBranches[0].candidate).candidate;
-  const quoted = { ...direct.evidence[0] };
+  const quoted = { ...quarantinedDraft };
   delete quoted.candidateRef;
   assert.equal(engine.admitEvidence({ ...quoted, candidateId: quarantined.id }).admitted, true);
   assert.notEqual(quarantined.id, primary.id);

@@ -1,4 +1,9 @@
 import { useEffect, useRef } from "react";
+import {
+  isPassivePageMetadataObservation,
+  projectPageFootprint,
+  projectTemporalComparison,
+} from "../../lib/report-export/evidence-context";
 import type { Report, TraceEvent } from "../atlas-types";
 import { candidateName, humanize, limitationText, reportCandidates, reportEvidence, reportQuery, traceDiagnostics } from "../atlas-types";
 import { CloseIcon, DownloadIcon, ExternalIcon } from "./atlas-icons";
@@ -25,6 +30,51 @@ function downloadTrace(filename: string, trace: TraceEvent[]) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function FootprintContext({ footprint }: {
+  footprint: NonNullable<ReturnType<typeof projectPageFootprint>>;
+}) {
+  return <aside className="evidence-context evidence-footprint">
+    <header><b>Page-declared footprint</b><span>{footprint.bounded ? "bounded projection" : "projection not truncated"}</span></header>
+    <p><b>Projection hash</b> <code>{footprint.footprintHash}</code></p>
+    <dl>
+      {footprint.title ? <div><dt>Page title</dt><dd>{footprint.title}</dd></div> : null}
+      {footprint.description ? <div><dt>Description</dt><dd>{footprint.description}</dd></div> : null}
+      {footprint.canonicalStatus ? <div><dt>Canonical status</dt><dd>{humanize(footprint.canonicalStatus)}</dd></div> : null}
+      {footprint.canonicalUrl ? <div><dt>Canonical URL</dt><dd><a href={footprint.canonicalUrl} target="_blank" rel="noreferrer">{footprint.canonicalUrl}</a></dd></div> : null}
+      {footprint.language ? <div><dt>Language</dt><dd>{footprint.language}</dd></div> : null}
+      {footprint.openGraphType ? <div><dt>Open Graph type</dt><dd>{footprint.openGraphType}</dd></div> : null}
+      {footprint.openGraphSiteName ? <div><dt>Open Graph site</dt><dd>{footprint.openGraphSiteName}</dd></div> : null}
+      {footprint.generators.length > 0 ? <div><dt>Generators</dt><dd>{footprint.generators.join(", ")}</dd></div> : null}
+      {footprint.applicationNames.length > 0 ? <div><dt>Applications</dt><dd>{footprint.applicationNames.join(", ")}</dd></div> : null}
+    </dl>
+    {footprint.observedProviderFamilies.length > 0 ? <p><b>Observed providers</b> {footprint.observedProviderFamilies.map(humanize).join(", ")}</p> : null}
+    {footprint.observedResourceHosts.length > 0 ? <p><b>Referenced hosts</b> {footprint.observedResourceHosts.join(", ")}</p> : null}
+    {footprint.jsonLdTypes.length > 0 ? <p><b>JSON-LD types</b> {footprint.jsonLdTypes.join(", ")}</p> : null}
+    <p>{footprint.caveat}</p>
+  </aside>;
+}
+
+function TemporalContext({ temporal }: {
+  temporal: NonNullable<ReturnType<typeof projectTemporalComparison>>;
+}) {
+  const changeState = (changed: boolean) => changed ? "Changed" : "Unchanged";
+  return <aside className="evidence-context evidence-temporal">
+    <header><b>Temporal diff</b><span>{temporal.comparisonBounded ? "bounded comparison" : "observed captures"}</span></header>
+    <dl>
+      <div><dt>Observation window</dt><dd>after {temporal.observedAfter} · on or before {temporal.observedOnOrBefore}</dd></div>
+      <div><dt>Archived response body bytes</dt><dd>{changeState(temporal.bodyChanged)}</dd></div>
+      <div><dt>Normalized static-HTML text</dt><dd>{changeState(temporal.visibleTextChanged)}</dd></div>
+      <div><dt>Page-declared metadata</dt><dd>{changeState(temporal.metadataChanged)}</dd></div>
+      <div><dt>Static-HTML structure</dt><dd>{changeState(temporal.structureChanged)}</dd></div>
+      <div><dt>Static-HTML fragment counts</dt><dd>{temporal.addedFragmentCount} added · {temporal.removedFragmentCount} removed · {temporal.unchangedFragmentCount} unchanged</dd></div>
+      {temporal.changedMetadataFields.length > 0 ? <div><dt>Changed metadata fields</dt><dd>{temporal.changedMetadataFields.map(humanize).join(", ")}</dd></div> : null}
+    </dl>
+    {temporal.addedTextFragments.length > 0 ? <div className="temporal-fragments is-added"><b>Added in later capture</b>{temporal.addedTextFragments.map((fragment, fragmentIndex) => <q key={`added-${fragmentIndex}`}>{fragment}</q>)}</div> : null}
+    {temporal.removedTextFragments.length > 0 ? <div className="temporal-fragments is-removed"><b>Removed by later capture</b>{temporal.removedTextFragments.map((fragment, fragmentIndex) => <q key={`removed-${fragmentIndex}`}>{fragment}</q>)}</div> : null}
+    <p>{temporal.caveat}</p>
+  </aside>;
 }
 
 export function ReportSheet({ report, trace, open, onClose, onDownloadMarkdown, onDownloadPdf }: {
@@ -110,7 +160,18 @@ export function ReportSheet({ report, trace, open, onClose, onDownloadMarkdown, 
           const title = item.title ?? item.source?.title ?? item.claim ?? "Evidence record";
           const discoveryOnly = item.disposition === "discovery_only"
             || item.verificationMethod === "search_discovery";
-          return <li key={item.id ?? item.evidenceId ?? index} className={discoveryOnly ? "is-discovery-lead" : undefined}><span>E{String(index + 1).padStart(2, "0")}</span><div><small>{item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} · {discoveryOnly ? "Unverified discovery lead" : humanize(item.verificationMethod)}</small><strong>{title}</strong><p>{discoveryOnly ? "Provider-attested URL metadata only; this lead does not support a finding until a hardened direct fetch succeeds." : item.excerpt ?? item.minimalExcerpt ?? item.claim}</p>{href ? <a className="evidence-source-link" href={href} target="_blank" rel="noreferrer"><ExternalIcon />{title} — {domainOf(href, "source")}</a> : null}</div></li>;
+          const passiveMetadataObservation = isPassivePageMetadataObservation(item);
+          const footprint = discoveryOnly && !passiveMetadataObservation
+            ? null
+            : projectPageFootprint(item.canonicalSubset);
+          const temporal = discoveryOnly ? null : projectTemporalComparison(item.canonicalSubset);
+          const discoveryLabel = passiveMetadataObservation
+            ? "Passive page metadata observation"
+            : "Unverified discovery lead";
+          const discoverySummary = passiveMetadataObservation
+            ? "Bounded page-declared metadata from an exact authorized fetch; it does not establish identity, ownership, or a finding."
+            : "Provider-attested URL metadata only; this lead does not support a finding until a hardened direct fetch succeeds.";
+          return <li key={item.id ?? item.evidenceId ?? index} className={discoveryOnly ? "is-discovery-lead" : undefined}><span>E{String(index + 1).padStart(2, "0")}</span><div><small>{item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} · {discoveryOnly ? discoveryLabel : humanize(item.verificationMethod)}</small><strong>{title}</strong><p>{discoveryOnly ? discoverySummary : item.excerpt ?? item.minimalExcerpt ?? item.claim}</p>{temporal ? <TemporalContext temporal={temporal} /> : null}{footprint ? <FootprintContext footprint={footprint} /> : null}{href ? <a className="evidence-source-link" href={href} target="_blank" rel="noreferrer"><ExternalIcon />{title} — {domainOf(href, "source")}</a> : null}</div></li>;
         })}</ol> : <p className="report-section-empty">No evidence record was admitted.</p>}</section>
         {(report.limitations?.length ?? 0) > 0 ? <section className="report-section report-limitations" aria-labelledby="report-limitations-heading"><div className="report-section-heading"><h3 id="report-limitations-heading">Limits</h3><span>{report.limitations?.length}</span></div><ul>{report.limitations?.map((limitation, index) => <li key={index}>{limitationText(limitation)}</li>)}</ul></section> : null}
       </div> : <div className="report-empty"><span aria-hidden="true">□</span><h3>No report loaded</h3><p>Run a verified replay or live investigation before exporting.</p></div>}

@@ -3,6 +3,58 @@ import { readFile } from "node:fs/promises";
 const exampleOutputUrl = new URL("../../examples/chris-anderson-ted/output.json", import.meta.url);
 const exampleTraceUrl = new URL("../../examples/chris-anderson-ted/trace.json", import.meta.url);
 
+export const reportEvidenceContextFixture = {
+  footprint: {
+    schemaVersion: "public_page_footprint_v1",
+    title: "Chris Anderson — TED speaker profile",
+    description: "Public page metadata retained from the already-fetched profile.",
+    canonicalUrl: "https://www.ted.com/speakers/chris_anderson_ted",
+    canonicalStatus: "accepted_same_page",
+    language: "en",
+    openGraph: { type: "profile", siteName: "TED" },
+    declaredApplications: { generators: ["Next.js"], applicationNames: ["TED"] },
+    jsonLdTypes: ["Person", "Organization"],
+    observedResourceHosts: ["cdn.jsdelivr.net", "static.cloudflareinsights.com"],
+    observedProviderFamilies: ["jsdelivr", "cloudflare"],
+    bounded: false,
+    spoofable: true,
+    scopeNote: "Fixture metadata is page-declared and does not establish hosting ownership.",
+  },
+  temporal: {
+    observedAfter: "2020-01-01T00:00:00.000Z",
+    observedOnOrBefore: "2024-01-01T00:00:00.000Z",
+    thenCaptureUrl: "https://web.archive.org/web/20200101000000id_/https://www.ted.com/speakers/chris_anderson_ted",
+    nowCaptureUrl: "https://web.archive.org/web/20240101000000id_/https://www.ted.com/speakers/chris_anderson_ted",
+    bodyChanged: true,
+    visibleTextChanged: true,
+    metadataChanged: true,
+    structureChanged: false,
+    changedMetadataFields: ["title", "description"],
+    addedTextFragments: ["Chris Anderson became TED's founder and chairman."],
+    removedTextFragments: ["Chris Anderson served as TED's curator."],
+    addedFragmentCount: 1,
+    removedFragmentCount: 1,
+    unchangedFragmentCount: 3,
+    comparisonBounded: true,
+    scopeNote: "Fixture comparison binds only the two captured responses and does not identify an editor.",
+  },
+  bodyOnlyTemporal: {
+    observedAfter: "2024-01-01T00:00:00.000Z",
+    observedOnOrBefore: "2025-01-01T00:00:00.000Z",
+    bodyChanged: true,
+    visibleTextChanged: false,
+    metadataChanged: false,
+    structureChanged: false,
+    changedMetadataFields: [],
+    addedTextFragments: [],
+    removedTextFragments: [],
+    addedFragmentCount: 0,
+    removedFragmentCount: 0,
+    unchangedFragmentCount: 1,
+    comparisonBounded: false,
+  },
+};
+
 function prefixGraph(graph, nodeCount) {
   const nodes = [...graph.nodes]
     .sort((left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id))
@@ -24,6 +76,40 @@ export async function denseReplayFixture() {
     readFile(exampleOutputUrl, "utf8").then(JSON.parse),
     readFile(exampleTraceUrl, "utf8").then(JSON.parse),
   ]);
+  if (report.evidence.length < 2) {
+    throw new Error("The dense browser fixture needs separate footprint and temporal evidence records.");
+  }
+  report.evidence[0].canonicalSubset = {
+    ...(report.evidence[0].canonicalSubset ?? {}),
+    pageFootprint: structuredClone(reportEvidenceContextFixture.footprint),
+    pageFootprintHash: `sha256:${"d".repeat(64)}`,
+  };
+  report.evidence[1].canonicalSubset = {
+    ...(report.evidence[1].canonicalSubset ?? {}),
+    temporalComparison: structuredClone(reportEvidenceContextFixture.temporal),
+  };
+  if (report.evidence.length < 3) {
+    throw new Error("The dense browser fixture needs one hostile unbound context record.");
+  }
+  report.evidence[2].canonicalSubset = {
+    ...(report.evidence[2].canonicalSubset ?? {}),
+    pageFootprint: {
+      ...structuredClone(reportEvidenceContextFixture.footprint),
+      observedResourceHosts: ["ATLAS_CONTEXT_SENTINEL_SHOULD_NOT_RENDER.example"],
+    },
+    temporalComparison: {
+      ...structuredClone(reportEvidenceContextFixture.temporal),
+      observedAfter: "2025-01-01T00:00:00.000Z",
+      observedOnOrBefore: "2024-01-01T00:00:00.000Z",
+      addedTextFragments: ["ATLAS_CONTEXT_SENTINEL_SHOULD_NOT_RENDER"],
+    },
+  };
+  report.evidence[3].verificationMethod = "archive_snapshot";
+  report.evidence[3].sourceType = "web_archive";
+  report.evidence[3].excerpt = "A bounded normalized static-HTML projection was retained.";
+  report.evidence[3].canonicalSubset = {
+    temporalComparison: structuredClone(reportEvidenceContextFixture.bodyOnlyTemporal),
+  };
   const terminal = structuredClone(trace.at(-1));
   if (terminal?.name !== "result.terminal" || !terminal.payload?.report) {
     throw new Error("The dense browser fixture must end in one result.terminal report.");

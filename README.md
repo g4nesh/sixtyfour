@@ -2,11 +2,11 @@
 
 Atlas is an auditable public-source research agent for resolving professional identities. Its live scheduler performs a visible best-first search over a canonical execution graph: it expands the lowest-cost legal source frontier first, keeps rejected and ambiguous branches, and reserves a small deterministic Metropolis-Hastings mutation lane for useful adjacent exploration. It separates same-name candidates, attaches every finding to direct evidence, exposes the full execution trace, and stops honestly when identity or coverage is insufficient.
 
-The default experience is a deterministic, zero-network replay. Live research is an explicit server-side mode backed by OpenRouter; no provider key is required to evaluate the three included runs.
+The browser workbench runs live research when a server-side OpenAI, Gemini, or OpenRouter provider is configured. Three deterministic zero-network replays remain available through the CLI and API, so the evidence model and visualization can be evaluated without a provider key.
 
 ![Atlas People Intelligence workbench](public/og.png)
 
-## Five-minute replay
+## Five-minute local preview
 
 Requirements: Node.js `>=22.13.0` and npm.
 
@@ -15,7 +15,9 @@ npm ci --ignore-scripts
 npm run dev
 ```
 
-Open `http://localhost:3000`, select a verified capture, and run it. The black graph workspace shows every queued, selected, verified, exhausted, mutated, and rejected path; the source ladder groups retained frontier state and admitted evidence by website tier while execution telemetry reports actual tool calls; the trace remains append-only; and the final report can be downloaded as deterministic Markdown or a polished client-rendered PDF. The replay path performs no outbound requests.
+Open `http://localhost:3000`. With live bindings configured, enter a public-professional target, choose Quick, Standard, or Deep, and run it. Deep is the browser default so the complete bounded operator program remains reachable; lower depths intentionally trade breadth for smaller request, token, and time budgets. The black graph workspace streams queued, selected, verified, exhausted, mutated, and rejected paths; the source ladder groups frontier state and admitted evidence by website tier; the trace remains append-only; and the final report can be downloaded as deterministic Markdown or a polished client-rendered PDF.
+
+For a credential-free, zero-network evaluation, use one of the checked-in replays below. Replay execution never performs an outbound request.
 
 The same artifacts are available from the CLI:
 
@@ -114,10 +116,10 @@ The kernel searches the strongest legal public-professional tier before broader 
 | --- | --- | --- |
 | T0 | Exact user-supplied HTTPS URL, domain/repository/DOI/ORCID/package/handle, or exact email codegraph | Exact-input only; direct content still passes hardened evidence admission |
 | T1 | First-party organization pages, official biographies, explicit personal sites | Direct fetch required for evidence |
-| T2 | Professional/code profiles, publication indexes, patents, official organization filings, public proof systems | Host-classified and candidate-bound where required; structured claims remain labeled |
+| T2 | Professional/code profiles, publication indexes, patents, official organization filings, public proof systems, and official App Store listings | Host-classified and candidate-bound where required; structured or page-declared metadata remains labeled |
 | T3 | Universities, conferences, and primary publishers | Direct source required |
 | T4 | Reputable reporting and named interviews | Corroboration and timeline context |
-| T5 | Candidate-linked Wayback history | Exact already-bound HTTPS URL only |
+| T5 | Temporal provenance diff | Exact already-bound HTTPS URL only; bounded raw captures and observation-window language |
 | T6 | General web discovery and candidate-bound hardened fetches for otherwise unclassified leads | Snippets have zero finding weight; fetched pages still pass identity separation and evidence admission |
 
 People-search sites, reverse-phone services, data brokers, residential/property/tax-assessor surfaces, family mapping, credentials, and private contact enrichment are denied before frontier creation. Official organization filings are allowed only for public-professional organization context.
@@ -128,15 +130,27 @@ See [docs/architecture.md](docs/architecture.md) for the trust boundary and scal
 
 ## Differentiated OSINT tactics
 
+### Deterministic operator-query program
+
+For a public-professional name, role, or organization, `compileOsintQueries` creates at most ten auditable query instructions. The first is an untouched quoted exact-match baseline. Later variants may add a separately labeled noise-exclusion refinement, exact organization/role context, mechanically derived initials or punctuation folding, `site:` scopes for GitHub, ORCID, Google Scholar, an official App Store listing, up to two explicitly admitted academic domains, and a bounded `filetype:pdf`/`intitle:` document pivot. A selected frontier entry—not model prose—owns the query that actually reaches the search transport, and every returned URL remains discovery-only until an exact hardened fetch succeeds.
+
+Atlas never generates email variants. An email enters the stack only when the user supplied that exact value, and the existing GitHub codegraph boundary remains its only specialist lookup. Exclusion variants always follow the neutral baseline, so they cannot erase the trace of an unmodified search. Search operators improve discovery precision; a zero-result operator query is never treated as proof of absence.
+
 ### Exact email → GitHub codegraph
 
 `github_email_codegraph` is legal only when the user explicitly supplied one exact email. It searches GitHub public commits with the literal `author-email:<exact> is:public` qualifier, normalizes immutable commit URLs and SHAs, records linked accounts/repositories/dates, and inspects the strongest commit's signature. It may query Keybase only for a GitHub login already linked by that graph.
 
 Raw Git author metadata is labeled spoofable. A verified signature helps only when its verified identity matches the relevant author edge. Git-only support cannot reach high confidence; a distinct non-Git source family or genuinely unique strong anchor is required. Zero hits means “not observed in indexed public default branches,” not “no activity,” and GitHub `incomplete_results` and rate state remain visible.
 
-### Candidate-linked Wayback history
+### Temporal provenance diff
 
-`wayback_profile_history` accepts only an HTTPS profile, team, or personal URL already linked to one candidate. It performs a bounded CDX lookup, collapses duplicate digests, and inspects at most a few snapshots to produce quote-backed Then/Now changes. It cannot discover or merge a candidate, and archive unavailability fails softly.
+`wayback_profile_history` accepts only an exact HTTPS profile, team, repository, listing, or personal URL already attached to one candidate by admitted non-discovery evidence. It performs an exact CDX lookup, validates every returned original URL, retains a bounded digest-change timeline, and retrieves at most two raw `id_` captures with redirects disabled. The result includes exact raw-body SHA-256, bounded normalized static-HTML-text/metadata/HTML-structure hashes, the actual earliest/latest selection policy, changed metadata fields, and short normalized static-HTML text fragments added or removed between the selected captures. This is an inert HTML projection, not a CSS/layout/JavaScript rendering. A change is reported only as observed after the earlier capture and on or before the later capture—not as an exact edit date. It cannot identify the editor, prove page ownership or archive completeness, discover or merge a candidate, or call Save Page Now; archive unavailability fails softly.
+
+### Page-declared web and app footprint
+
+Every already-authorized HTML fetch can produce a small inert `public_page_footprint_v1` projection without another request. It retains safe title/description, same-page canonical status, language, selected Open Graph fields, generator/application names, bounded JSON-LD `@type` values, and referenced public resource hosts/provider families. This can surface an official App Store listing or a page-observed CDN/cloud family, but it never enumerates subdomains, buckets, accounts, ports, apps, or credentials and never follows the observed resources. Observed values originate in spoofable page-authored declarations; Atlas-derived classifications do not establish hosting ownership. Atlas does not run AI-authorship detectors or infer that a person used AI from detector scores.
+
+If exact-quote extraction fails or the extracted subject must be quarantined, a SHA-256-bound footprint may survive only as a visibly unverified, discovery-only metadata observation. That record carries no excerpt, identity or ownership binding, finding authority, or confidence weight; ordinary search-result metadata still cannot smuggle a footprint into a report.
 
 ## Trace semantics
 
@@ -168,7 +182,7 @@ npm run test:selenium   # independent headless Chrome geometry/console pass
 
 Set `ATLAS_SELENIUM_BROWSER=safari` to repeat the Selenium smoke in Safari after enabling Safari Developer → Allow Remote Automation. The test harness never changes that operating-system setting itself.
 
-The test suite covers all three target shapes, deterministic safety classes, general identifier parsing, same-name isolation, no cross-candidate evidence, spoofable-confidence caps, source-family deduplication, immutable cumulative costs, tier ordering, dominance pruning, deterministic MH math and mutation-share caps, graph/trace/action integrity, LangGraph control flow, snippet exclusion, CoT-field exclusion, budgets/cancellation, NDJSON ordering and terminal closure, replay zero-network stability, Markdown determinism, PDF smoke, and rendered accessibility foundations. Tool fixtures cover SSRF/redirect/size/timeout controls, `429`/`Retry-After`, malformed responses, GitHub incomplete results, `author: null`, multiple accounts, signature mismatch, stale Keybase proofs, and unavailable Wayback.
+The test suite covers all three target shapes, deterministic safety classes, general identifier parsing, same-name isolation, no cross-candidate evidence, spoofable-confidence caps, source-family deduplication, immutable cumulative costs, tier ordering, dominance pruning, deterministic query compilation and canonical execution, deterministic MH math and mutation-share caps, graph/trace/action integrity, LangGraph control flow, snippet exclusion, CoT-field exclusion, budgets/cancellation, NDJSON ordering and terminal closure, replay zero-network stability, Markdown determinism, PDF smoke, and rendered accessibility foundations. Tool fixtures cover SSRF/redirect/size/timeout controls, `429`/`Retry-After`, malformed responses, GitHub incomplete results, `author: null`, multiple accounts, signature mismatch, stale Keybase proofs, adversarial page metadata, and exact raw Wayback capture/diff behavior.
 
 Container verification uses Node 22:
 

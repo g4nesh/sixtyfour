@@ -40,7 +40,9 @@ import {
   admitGraphNode,
   assertSearchGraph,
   enqueueCandidateFrontier,
+  enqueueCandidateUrlFrontier,
   frontierEntryById,
+  isCanonicalCompilerSearchEntry,
   isDeniedResearchSource,
   isDeniedResearchTool,
   markSearchGraphTerminal,
@@ -811,7 +813,11 @@ async function executeActions(
       frontierEntryId: entry.id,
       tool: proposal.tool.trim(),
       purpose: proposal.purpose.trim(),
-      arguments: cloneJson(proposal.arguments),
+      arguments: proposal.tool.trim() === "search_web"
+        ? { query: entry.queryHint }
+        : proposal.tool.trim() === "wayback_profile_history"
+          ? { url: entry.queryHint }
+          : cloneJson(proposal.arguments),
       ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
       budgetClass: actionBudgetClass(proposal),
       sourceTier: entry.sourceTier,
@@ -937,12 +943,18 @@ async function executeActions(
     const proposedCandidates: Array<{
       draft: CandidateDraft;
       isolated: boolean;
+      expandFrontier: boolean;
       parentCandidateId?: string;
     }> = [
-      ...(result.candidates ?? []).map((draft) => ({ draft, isolated: false })),
+      ...(result.candidates ?? []).map((draft) => ({
+        draft,
+        isolated: false,
+        expandFrontier: draft.frontierExpansion !== "none",
+      })),
       ...(result.candidateBranches ?? []).map((branch) => ({
         draft: branch.candidate,
         isolated: true,
+        expandFrontier: false,
         parentCandidateId: branch.parentCandidateId,
       })),
     ];
@@ -972,7 +984,11 @@ async function executeActions(
         continue;
       }
       try {
-        const { signals: proposedSignals, ...identityDraft } = draft;
+        const {
+          signals: proposedSignals,
+          frontierExpansion: _frontierExpansion,
+          ...identityDraft
+        } = draft;
         const candidateMutation = engine.addCandidate(identityDraft);
         if (draft.ref) localCandidateIds.set(draft.ref, candidateMutation.candidate.id);
         if (proposal.isolated) isolatedCandidateIds.add(candidateMutation.candidate.id);
@@ -1048,7 +1064,7 @@ async function executeActions(
           recordSearchEvents(engine, separation.events, spanId);
         }
 
-        if (candidateMutation.created && !proposal.isolated) {
+        if (candidateMutation.created && !proposal.isolated && proposal.expandFrontier) {
           const candidateFrontier = enqueueCandidateFrontier(
             graph,
             state.target,
@@ -1336,6 +1352,30 @@ async function executeActions(
           graph = evidenceCandidateEdge.graph;
           recordSearchEvents(engine, evidenceCandidateEdge.events, spanId);
         }
+        if (
+          !discoveryOnly
+          && admission.evidence.sourceType !== "web_archive"
+          && admission.evidence.candidateId
+          && availableTools.includes("wayback_profile_history")
+        ) {
+          const archiveCandidate = engine.snapshot().candidates.find((candidate) =>
+            candidate.id === admission.evidence?.candidateId);
+          if (archiveCandidate) {
+            const archiveFrontier = enqueueCandidateUrlFrontier(
+              graph,
+              state.target,
+              archiveCandidate,
+              admission.evidence.sourceUrl,
+              entry,
+              sourceNodeAdmission.value.id,
+              availableTools,
+              engine.ids,
+              engine.clock.now(),
+            );
+            graph = archiveFrontier.graph;
+            recordSearchEvents(engine, archiveFrontier.events, spanId);
+          }
+        }
       }
     }
     pendingSignalUpdates.push(...(result.candidateSignals ?? []));
@@ -1522,17 +1562,24 @@ async function executeActions(
     // attached to the now-closed span.
     recordSearchEvents(engine, outcome.events);
 
-    // A zero-request classified-lead mismatch closes one finite, canonical
-    // source lane. Count that scheduler contraction as progress so a safe T6
-    // lead can traverse past inapplicable T1-T4 candidate lanes instead of
-    // tripping the no-progress stop before its mechanically derived lane.
-    // The exhausted entry cannot run again, so this cannot create an unbounded
-    // no-op loop or upgrade evidence trust.
-    if (
+    // Exhausting either a canonical compiler query or a zero-request
+    // classified-lead mismatch closes one finite scheduler branch. Count that
+    // irreversible contraction as progress so the bounded search can reach
+    // later legal tiers instead of tripping the no-progress stop. Neither case
+    // admits evidence or upgrades trust, and exhausted entries cannot rerun.
+    const exhaustedCanonicalCompilerQuery =
+      actionMutations === 0
+      && action.tool === "search_web"
+      && result.status === "not_found"
+      && isCanonicalCompilerSearchEntry(entry);
+    const exhaustedMismatchedLeadLane =
       actionMutations === 0
       && result.status === "skipped"
       && (result.meta?.requests ?? 0) === 0
-      && result.diagnostics?.some((diagnostic) => diagnostic.code === "lead_lane_mismatch")
+      && result.diagnostics?.some((diagnostic) => diagnostic.code === "lead_lane_mismatch") === true;
+    if (
+      exhaustedCanonicalCompilerQuery
+      || exhaustedMismatchedLeadLane
     ) {
       mutations += 1;
     }

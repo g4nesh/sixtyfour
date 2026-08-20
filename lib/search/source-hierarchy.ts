@@ -6,6 +6,7 @@ import type {
   SourceTier,
   TargetKind,
 } from "../domain/types";
+import { compileOsintQueries, type CompiledOsintQuery } from "./osint-query-compiler";
 
 export type SourceAdmission = "admissible_after_fetch" | "discovery_only";
 
@@ -194,8 +195,8 @@ export const SOURCE_HIERARCHY: readonly SourceLane[] = [
   {
     id: "t5.candidate_wayback",
     tier: 5,
-    label: "Candidate-linked Wayback history",
-    description: "Inspect only an exact HTTPS URL already bound to the candidate by admitted evidence.",
+    label: "Temporal provenance diff",
+    description: "Compare bounded raw captures of only an exact HTTPS URL already bound to the candidate by admitted evidence.",
     allowedTools: ["wayback_profile_history"],
     targetKinds: ALL_TARGET_KINDS,
     identifierKinds: [],
@@ -262,11 +263,18 @@ const DENIED_SOURCE_TEXT =
   /(?:people[\s_-]*(?:finder|lookup|search)|person[\s_-]*(?:lookup|search)|phone[\s_-]*(?:book|lookup|search)|reverse[\s_-]*phone|home[\s_-]*address|residential[\s_-]*address|property[\s_-]*(?:lookup|owner|ownership|record|tax|assessor)|tax[\s_-]*assessor|family[\s_-]*(?:member|tree)|relative[\s_-]*lookup|credential[\s_-]*(?:dump|broker)|data[\s_-]*broker|private[\s_-]*contact|face[\s_-]*recognition|breach|password)/i;
 
 const DENIED_COMPACT_MARKERS = [
+  "accountenumeration",
+  "accountexistence",
   "beenverified",
+  "bucketbruteforce",
+  "bucketenumeration",
+  "cloudenumeration",
   "familytree",
   "familytreenow",
   "fastpeoplesearch",
   "homeaddress",
+  "iosbinaryanalysis",
+  "ipadecryption",
   "intelius",
   "peekyou",
   "peoplefinder",
@@ -277,11 +285,16 @@ const DENIED_COMPACT_MARKERS = [
   "propertylookup",
   "propertyowner",
   "propertyrecord",
+  "portscan",
   "radaris",
   "residentialaddress",
   "reversephone",
   "spokeo",
+  "subdomainbruteforce",
+  "subdomainenumeration",
   "taxassessor",
+  "testflightprobe",
+  "trafficinterception",
   "truepeoplesearch",
   "usphonebook",
   "whitepages",
@@ -309,6 +322,12 @@ export function isDeniedResearchTool(value: string): boolean {
     if (DENIED_SOURCE_TEXT.test(variant)) return true;
     const compact = variant.toLocaleLowerCase("en-US").replace(/[^a-z0-9]+/g, "");
     return DENIED_COMPACT_MARKERS.some((marker) => compact.includes(marker))
+      || /(?:s3|cloud)?bucket(?:bruteforce|discover|enum|list|scan)/.test(compact)
+      || /account(?:discover|enum|existence|lookup|probe|scan)/.test(compact)
+      || /subdomain(?:bruteforce|discover|enum|lookup|scan)/.test(compact)
+      || /(?:ios|ipa)(?:binary)?(?:analysis|decrypt|dump|extract|inspect)/.test(compact)
+      || /testflight(?:discover|enum|lookup|probe|scan)/.test(compact)
+      || /(?:packet|traffic)(?:capture|intercept|sniff)/.test(compact)
       || /(?:^|lookup)411(?:com|lookup|$)/.test(compact);
   });
 }
@@ -386,10 +405,18 @@ export function sourceLaneForFrontierEntry(entry: {
 }): SourceLane | undefined {
   const registered = sourceLaneById(entry.sourceLaneId);
   if (registered) {
+    const candidateIndependentCompilerSearch = registered.requiresCandidate
+      && entry.candidateId === null
+      && entry.allowedTools.length === 1
+      && entry.allowedTools[0] === "search_web"
+      && registered.allowedTools.includes("search_web");
     return registered.tier === entry.sourceTier
       && entry.allowedTools.length > 0
       && entry.allowedTools.every((tool) => registered.allowedTools.includes(tool))
-      && registered.requiresCandidate === (entry.candidateId !== null)
+      && (
+        registered.requiresCandidate === (entry.candidateId !== null)
+        || candidateIndependentCompilerSearch
+      )
       ? registered
       : undefined;
   }
@@ -486,6 +513,50 @@ function hostMatches(host: string, suffixes: readonly string[]): boolean {
   return suffixes.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
+/** Only canonical public App Store product listings qualify as T2 metadata. */
+function isCanonicalAppStoreListingUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:"
+      || url.hostname.toLocaleLowerCase("en-US") !== "apps.apple.com"
+      || url.username
+      || url.password
+      || (url.port && url.port !== "443")
+    ) return false;
+    const segments = url.pathname.split("/").filter(Boolean);
+    if (/^[a-z]{2}(?:-[a-z]{2})?$/i.test(segments[0] ?? "")) segments.shift();
+    if (segments[0]?.toLocaleLowerCase("en-US") !== "app") return false;
+    if (segments.length !== 2 && segments.length !== 3) return false;
+    const listingId = segments.at(-1) ?? "";
+    const slug = segments.length === 3 ? segments[1] : null;
+    return /^id\d+$/.test(listingId) && (slug === null || Boolean(slug));
+  } catch {
+    return false;
+  }
+}
+
+/** Only an exact public Scholar author page qualifies for T2 discovery. */
+function isCanonicalGoogleScholarProfileUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:"
+      || url.hostname.toLocaleLowerCase("en-US") !== "scholar.google.com"
+      || url.pathname !== "/citations"
+      || url.username
+      || url.password
+      || (url.port && url.port !== "443")
+    ) return false;
+    const user = url.searchParams.get("user") ?? "";
+    const allowedParameters = new Set(["user", "hl"]);
+    return /^[A-Za-z0-9_-]{4,64}$/.test(user)
+      && [...url.searchParams.keys()].every((key) => allowedParameters.has(key));
+  } catch {
+    return false;
+  }
+}
+
 /** Classify fetched URLs from host and admitted context, never model prose. */
 export function deterministicSourceTypeForUrl(
   value: string,
@@ -497,6 +568,8 @@ export function deterministicSourceTypeForUrl(
   if (!host) return null;
   if (hostMatches(host, PROFESSIONAL_PROFILE_HOSTS)) return "professional_profile";
   if (host === "github.com" || host.endsWith(".github.io")) return "code_profile";
+  if (isCanonicalAppStoreListingUrl(value)) return "public_document";
+  if (isCanonicalGoogleScholarProfileUrl(value)) return "public_document";
   if (hostMatches(host, REPUTABLE_MEDIA_HOSTS)) return "news";
   if (hostMatchesFirstPartyContext(host, context)) return preferredFirstPartyType;
   if (
@@ -552,6 +625,8 @@ export function sourceTierForUrl(
     || host === "crossref.org"
     || host === "patentsview.org"
     || host === "npmjs.com"
+    || isCanonicalAppStoreListingUrl(value)
+    || isCanonicalGoogleScholarProfileUrl(value)
   ) return 2;
   if (host.endsWith(".edu") || sourceType === "public_document") return 3;
   if (sourceType === "news") return 4;
@@ -571,7 +646,15 @@ function laneMatchesTarget(lane: SourceLane, target: ParsedTarget): boolean {
 export function sourceLanesForTarget(
   target: ParsedTarget,
   availableTools: readonly string[],
-  options: { candidateId?: string | null } = {},
+  options: {
+    candidateId?: string | null;
+    /**
+     * Expose only the search projection of candidate-gated lanes so canonical
+     * compiler queries can discover a candidate. Fetch and specialist tools
+     * remain unavailable until a candidate exists.
+     */
+    includeCompilerDiscovery?: boolean;
+  } = {},
 ): SourceLane[] {
   const suppliedValues = target.identifiers
     .filter((identifier) => identifier.provenance === "user_input")
@@ -583,8 +666,20 @@ export function sourceLanesForTarget(
   const toolSet = new Set(availableTools);
   const registered = SOURCE_HIERARCHY
     .filter((lane) => laneMatchesTarget(lane, target))
-    .filter((lane) => Boolean(options.candidateId) === lane.requiresCandidate || !lane.requiresCandidate)
-    .map((lane) => ({ ...lane, allowedTools: lane.allowedTools.filter((tool) => toolSet.has(tool)) }))
+    .filter((lane) =>
+      !lane.requiresCandidate
+      || Boolean(options.candidateId)
+      || (options.includeCompilerDiscovery === true && lane.allowedTools.includes("search_web")))
+    .map((lane) => ({
+      ...lane,
+      allowedTools: lane.allowedTools.filter((tool) =>
+        toolSet.has(tool)
+        && (
+          !lane.requiresCandidate
+          || Boolean(options.candidateId)
+          || tool === "search_web"
+        )),
+    }))
     .filter((lane) => lane.allowedTools.length > 0);
 
   const knownTools = new Set(SOURCE_HIERARCHY.flatMap((lane) => lane.allowedTools));
@@ -603,6 +698,58 @@ export function sourceLanesForTarget(
 export function sourceLaneQueryHint(target: ParsedTarget, lane: SourceLane): string {
   const explicit = target.identifiers.find((identifier) =>
     identifier.provenance === "user_input" && lane.identifierKinds.includes(identifier.kind));
-  const base = explicit?.value ?? target.normalizedQuery;
+  const compiled = explicit ? null : compiledQueryForLane(target, lane);
+  const base = explicit?.value ?? compiled?.query ?? target.normalizedQuery;
   return normalizeWhitespace(base).slice(0, 320);
+}
+
+/**
+ * Project the finite compiler plan into legal source lanes. Each surviving
+ * compiler query is assigned exactly once: baseline to T1, structured sites
+ * to T2, institution/document operators to T3, supplied context to T4, and
+ * bounded general/name refinements to discovery-only T6.
+ */
+export function compiledQueriesForLane(
+  target: ParsedTarget,
+  lane: Pick<SourceLane, "id" | "allowedTools">,
+): CompiledOsintQuery[] {
+  if (!lane.allowedTools.includes("search_web")) return [];
+  const institutionDomains = target.identifiers
+    .filter((identifier) => identifier.provenance === "user_input")
+    .flatMap((identifier) => {
+      if (identifier.kind === "email") return [identifier.normalizedValue.split("@")[1] ?? ""];
+      if (identifier.kind === "domain") return [identifier.normalizedValue];
+      return [];
+    });
+  const plan = compileOsintQueries(target, { institutionDomains });
+  if (plan.status !== "compiled") return [];
+  if (lane.id === "t1.first_party") {
+    return plan.queries.filter((query) => query.kind === "exact_baseline");
+  }
+  if (lane.id === "t2.structured_professional") {
+    return plan.queries.filter((query) =>
+      query.kind === "professional_site" || query.kind === "public_metadata_site");
+  }
+  if (lane.id === "t3.institutional") {
+    return plan.queries.filter((query) =>
+      query.kind === "institution_site" || query.kind === "public_document");
+  }
+  if (lane.id === "t4.reputable_media") {
+    return plan.queries.filter((query) => query.kind === "exact_context");
+  }
+  if (lane.id === "t6.general_discovery") {
+    return plan.queries.filter((query) =>
+      query.kind === "exact_refinement"
+      || query.kind === "orthographic_name"
+      || query.kind === "initial_name");
+  }
+  return [];
+}
+
+/** Compatibility helper for callers that need only the first lane query. */
+export function compiledQueryForLane(
+  target: ParsedTarget,
+  lane: Pick<SourceLane, "id" | "allowedTools">,
+): CompiledOsintQuery | null {
+  return compiledQueriesForLane(target, lane)[0] ?? null;
 }
