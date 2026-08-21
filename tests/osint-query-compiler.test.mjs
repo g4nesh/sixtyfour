@@ -107,6 +107,32 @@ test("compiler emits a finite, ordered exact-name plan with public-professional 
   assert.ok(plan.queries.every((query) => query.site === null || allowedSites.has(query.site)));
 });
 
+test("compiler remains query-generic for multiple Latin and non-Latin names", () => {
+  for (const name of ["Ashwin Rokkam", "Chinmay Bhat", "张伟", "Ольга Иванова", "अनन्या शर्मा"]) {
+    const target = domain.parseTarget(name);
+    const plan = search.compileOsintQueries(target);
+    assert.equal(target.kind, "named_person", name);
+    assert.equal(plan.status, "compiled", name);
+    assert.equal(plan.queries[0].query, `"${target.name}"`, name);
+    assert.ok(
+      plan.queries.some((query) => query.site === "github.com"),
+      name,
+    );
+    assert.ok(
+      plan.queries.some((query) => query.site === "scholar.google.com"),
+      name,
+    );
+    assert.ok(
+      plan.queries.some((query) => query.kind === "public_document"),
+      name,
+    );
+    assert.ok(
+      plan.queries.every((query) => query.query.includes(`"${query.subjectPhrase}"`)),
+      name,
+    );
+  }
+});
+
 test("deep compiler can retain sixteen bounded variants without dropping allowlisted scopes", () => {
   const plan = search.compileOsintQueries(domain.parseTarget("Renée D'Angelo Smith, Example Labs, in Phoenix"), {
     institutionDomains: ["asu.edu", "ox.ac.uk"],

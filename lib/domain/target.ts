@@ -62,7 +62,8 @@ function titleCaseName(value: string): string {
     .split(/\s+/)
     .map((part) => {
       if (/^[A-Z]{2,5}$/.test(part)) return part;
-      return part.length > 0 ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : part;
+      const [first, ...rest] = Array.from(part);
+      return first ? `${first.toUpperCase()}${rest.join("").toLowerCase()}` : part;
     })
     .join(" ");
 }
@@ -72,7 +73,7 @@ function looksLikePersonName(value: string): boolean {
   if (words.length < 1 || words.length > 5) return false;
   if (ROLE_PATTERNS.some(({ pattern }) => pattern.test(value))) return false;
   if (words.length === 1 && NON_PERSON_MONONYMS.has(normalizeComparable(words[0]))) return false;
-  return words.every((word) => /^[\p{L}][\p{L}'’.-]*$/u.test(word));
+  return words.every((word) => /^[\p{L}][\p{L}\p{M}'’.-]*$/u.test(word));
 }
 
 function leadingPersonLocation(value: string): { person: string; location: string } | null {

@@ -1190,6 +1190,21 @@ test("API rejects malformed and unmatched requests without starting synthetic re
   );
   assert.equal(malformed.status, 400);
 
+  for (const requestedCategories of [[], ["identity", "employer", "profiles"], ["identity", 42]]) {
+    const invalidCategories = await api.handleApiRequest(
+      new Request("https://atlas.test/api/research", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: "Ada Lovelace", mode: "replay", requestedCategories }),
+      }),
+      {},
+    );
+    assert.equal(invalidCategories.status, 400);
+    const payload = await invalidCategories.json();
+    assert.equal(payload.error, "invalid_request");
+    assert.match(payload.message, /requestedCategories must contain only/);
+  }
+
   const unmatched = await api.handleApiRequest(
     new Request("https://atlas.test/api/research", {
       method: "POST",

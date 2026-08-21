@@ -64,6 +64,8 @@ import { inspectWaybackHistory } from "../tools/wayback";
 import {
   classifiedFetchLaneId,
   deterministicSourceTypeForUrl,
+  githubHandleFromCanonicalProfileUrl,
+  groundedGithubHandleForCandidate,
   sourceLaneById,
   sourceTierContextForState,
   sourceTierForUrl,
@@ -1580,6 +1582,30 @@ export function createLiveDependencies(
         modelTelemetry: mechanicalModelTelemetry(),
       };
     }
+    const keybaseActions = (context.selectedFrontierEntries ?? []).flatMap((entry) => {
+      if (!entry.candidateId || entry.allowedTools.length !== 1 || entry.allowedTools[0] !== "keybase_identity_proofs")
+        return [];
+      const candidate = context.state.candidates.find((item) => item.id === entry.candidateId);
+      const githubHandle = candidate ? groundedGithubHandleForCandidate(candidate) : null;
+      if (!githubHandle || entry.queryHint !== githubHandle) return [];
+      return [
+        {
+          frontierEntryId: entry.id,
+          tool: "keybase_identity_proofs",
+          purpose: "Check public Keybase proofs for this evidence-grounded GitHub handle.",
+          arguments: { githubHandle },
+          candidateId: entry.candidateId,
+        },
+      ];
+    });
+    if (keybaseActions.length > 0) {
+      return {
+        kind: "actions",
+        decisionSummary: "Applied deterministic candidate-bound GitHub-to-Keybase proof routing.",
+        actions: keybaseActions,
+        modelTelemetry: mechanicalModelTelemetry(),
+      };
+    }
     // Each admitted search lead owns one canonical candidate/lane fetch pivot.
     // Resolving that opaque capability is policy bookkeeping, not a reasoning
     // task, and remains legal after earlier direct evidence was admitted.
@@ -2429,6 +2455,9 @@ export function createLiveDependencies(
         normalizeComparable(attestedSubjectName) === normalizeComparable(targetName) &&
         candidate?.normalizedName === normalizeComparable(targetName),
       );
+      const deterministicGithubHandle = deterministicGithubLead
+        ? githubHandleFromCanonicalProfileUrl(fetched.data.finalUrl)
+        : null;
       const duckDuckGoNamedPersonLead = Boolean(
         leadEvidence &&
         leadEvidence.attributes.provider === "duckduckgo:html_search" &&
@@ -2634,6 +2663,18 @@ export function createLiveDependencies(
                       assurance: "spoofable",
                       sourceFamily: family,
                     },
+                    ...(deterministicGithubHandle
+                      ? [
+                          {
+                            kind: "social_handle" as const,
+                            value: deterministicGithubHandle,
+                            normalizedValue: deterministicGithubHandle,
+                            strength: "strong" as const,
+                            assurance: "spoofable" as const,
+                            sourceFamily: family,
+                          },
+                        ]
+                      : []),
                     ...(extracted.organization
                       ? [
                           {
@@ -2728,6 +2769,18 @@ export function createLiveDependencies(
           assurance: "spoofable" as const,
           sourceFamily: family,
         },
+        ...(deterministicGithubHandle
+          ? [
+              {
+                kind: "social_handle" as const,
+                value: deterministicGithubHandle,
+                normalizedValue: deterministicGithubHandle,
+                strength: "strong" as const,
+                assurance: "spoofable" as const,
+                sourceFamily: family,
+              },
+            ]
+          : []),
         ...((targetContext.organization ?? extracted.organization)
           ? [
               {
@@ -2914,10 +2967,8 @@ export function createLiveDependencies(
           meta: { requests: 0, llmCalls: 0 },
         };
       const candidate = context.state.candidates.find((item) => item.id === action.candidateId);
-      const linked = candidate?.signals.some(
-        (signal) => signal.kind === "social_handle" && signal.normalizedValue === handle.toLocaleLowerCase("en-US"),
-      );
-      if (!linked)
+      const linkedHandle = candidate ? groundedGithubHandleForCandidate(candidate) : null;
+      if (!linkedHandle || linkedHandle !== handle.toLocaleLowerCase("en-US"))
         return {
           status: "skipped",
           diagnostics: [

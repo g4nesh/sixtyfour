@@ -85,7 +85,11 @@ export function dedupeSignals(signals: readonly IdentitySignal[]): IdentitySigna
     }
   }
 
-  return [...byKey.values()].sort((left, right) => signalKey(left).localeCompare(signalKey(right)));
+  return [...byKey.values()].sort((left, right) => {
+    const leftKey = signalKey(left);
+    const rightKey = signalKey(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
 }
 
 function matchesTarget(signal: IdentitySignal, target: ParsedTarget): boolean {
@@ -129,7 +133,10 @@ export function identitySignalGroundedByEvidence(signal: IdentitySignal, evidenc
   )
     return false;
   const needle = normalizeComparable(signal.value);
-  if (needle.replace(/\s+/g, "").length < 3) return false;
+  const compactNeedle = needle.replace(/\s+/g, "");
+  const codePointLength = Array.from(compactNeedle).length;
+  const shortNonLatinName = signal.kind === "name" && codePointLength >= 2 && /[^\p{ASCII}]/u.test(compactNeedle);
+  if (codePointLength < 3 && !shortNonLatinName) return false;
   const rawMaterial = [
     evidence.claim,
     evidence.excerpt ?? "",

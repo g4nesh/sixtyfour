@@ -135,7 +135,29 @@ test("frontier schedules exact person context before generic professional site s
   assert.deepEqual(search.validateSearchGraph(mononym.graph), []);
 });
 
-test("frontier schedules every surviving compiler variant on its legal source lane", () => {
+test("Ashwin Rokkam and Chinmay Bhat receive the complete canonical hierarchy without name-specific code", () => {
+  for (const name of ["Ashwin Rokkam", "Chinmay Bhat"]) {
+    const { graph, target } = seededGraph(name, ["search_web", "fetch_public_source"]);
+    const plan = search.compileOsintQueries(target);
+    const compilerEntries = graph.frontier.filter((entry) => entry.intent.startsWith("OSINT query "));
+
+    assert.equal(target.kind, "named_person", name);
+    assert.equal(plan.status, "compiled", name);
+    assert.equal(plan.queries.length, 12, name);
+    assert.deepEqual(
+      new Set(compilerEntries.map((entry) => entry.queryHint)),
+      new Set(plan.queries.map((query) => query.query)),
+      name,
+    );
+    assert.deepEqual(new Set(compilerEntries.map((entry) => entry.sourceTier)), new Set([1, 2, 3, 6]), name);
+    const first = search.selectFrontierBatch(graph, 16, "2026-08-20T20:19:01.000Z");
+    assert.deepEqual(new Set(first.value.map((entry) => entry.sourceTier)), new Set([1]), name);
+    assert.equal(first.value[0].queryHint, `"${name}"`, name);
+    assert.deepEqual(search.validateSearchGraph(first.graph), [], name);
+  }
+});
+
+test("frontier schedules every surviving compiler variant on its legal source lane", async () => {
   const target = domain.parseTarget("Denise Hilary, https://asu.edu");
   const t1 = search.sourceLaneById("t1.first_party");
   const t2 = search.sourceLaneById("t2.structured_professional");
@@ -221,7 +243,7 @@ test("frontier schedules every surviving compiler variant on its legal source la
   const candidateFrontier = search.enqueueCandidateFrontier(
     candidateEdge.graph,
     target,
-    { id: "candidate-denise", displayName: "Denise Hilary" },
+    { id: "candidate-denise", displayName: "Denise Hilary", signals: [] },
     baseline,
     baseline.nodeId,
     ["search_web", "fetch_public_source", "keybase_identity_proofs"],
@@ -249,15 +271,13 @@ test("frontier schedules every surviving compiler variant on its legal source la
   assert.ok(
     compilerEntries.every((entry) => entry.allowedTools.length === 1 && entry.allowedTools[0] === "search_web"),
   );
-  const t2Specialist = candidateFrontier.value.find(
+  const nameOnlySpecialist = candidateFrontier.value.find(
     (entry) =>
       entry.sourceLaneId === "t2.structured_professional" && entry.allowedTools.includes("keybase_identity_proofs"),
   );
   const t2Searches = compilerEntries.filter((entry) => entry.sourceLaneId === "t2.structured_professional");
-  assert.ok(t2Specialist);
+  assert.equal(nameOnlySpecialist, undefined, "a name-only candidate must not open an unusable Keybase frontier");
   assert.ok(t2Searches.length > 0);
-  assert.equal(t2Specialist.candidateId, "candidate-denise");
-  assert.deepEqual(t2Specialist.allowedTools, ["keybase_identity_proofs"]);
   assert.equal(
     candidateFrontier.value.some((entry) => entry.allowedTools.includes("fetch_public_source")),
     false,
@@ -303,19 +323,135 @@ test("frontier schedules every surviving compiler variant on its legal source la
   );
   assert.deepEqual(search.validateSearchGraph(candidateFrontier.graph), []);
 
-  const duplicated = search.enqueueCandidateFrontier(
+  const groundedCandidate = {
+    id: "candidate-denise",
+    displayName: "Denise Hilary",
+    signals: [
+      {
+        kind: "social_handle",
+        value: "denise-hilary",
+        normalizedValue: "denise-hilary",
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: "github.com",
+        sourceEvidenceId: "evidence-denise-github",
+      },
+    ],
+  };
+  assert.equal(search.githubHandleFromCanonicalProfileUrl("https://github.com/denise-hilary"), "denise-hilary");
+  assert.equal(search.githubHandleFromCanonicalProfileUrl("https://github.com/denise-hilary/project"), null);
+  assert.equal(search.githubHandleFromCanonicalProfileUrl("https://github.com/denise-hilary?tab=repositories"), null);
+  assert.equal(
+    search.groundedGithubHandleForCandidate({
+      signals: [{ ...groundedCandidate.signals[0], sourceEvidenceId: undefined }],
+    }),
+    null,
+  );
+  assert.equal(
+    search.groundedGithubHandleForCandidate({
+      signals: [
+        groundedCandidate.signals[0],
+        {
+          ...groundedCandidate.signals[0],
+          value: "different-handle",
+          normalizedValue: "different-handle",
+          sourceEvidenceId: "evidence-different-github",
+        },
+      ],
+    }),
+    null,
+    "conflicting grounded GitHub handles must fail closed",
+  );
+  assert.equal(search.groundedGithubHandleForCandidate(groundedCandidate), "denise-hilary");
+  const grounded = search.enqueueCandidateFrontier(
     candidateFrontier.graph,
     target,
-    { id: "candidate-denise", displayName: "Denise Hilary" },
+    groundedCandidate,
     baseline,
     baseline.nodeId,
     ["search_web", "fetch_public_source", "keybase_identity_proofs"],
     ids,
     "2026-08-20T20:20:00.004Z",
   );
+  const t2Specialist = grounded.value.find(
+    (entry) =>
+      entry.sourceLaneId === "t2.structured_professional" && entry.allowedTools.includes("keybase_identity_proofs"),
+  );
+  assert.ok(t2Specialist);
+  assert.equal(t2Specialist.candidateId, "candidate-denise");
+  assert.equal(t2Specialist.queryHint, "denise-hilary");
+  assert.deepEqual(t2Specialist.allowedTools, ["keybase_identity_proofs"]);
+  const successfulSpecialist = search.recordFrontierOutcome(
+    search.setFrontierStatus(grounded.graph, [t2Specialist.id], "running", "2026-08-20T20:20:00.004Z"),
+    t2Specialist,
+    "verified",
+    "2026-08-20T20:20:00.005Z",
+  );
+  const beforeSpecialistMutation = structuredClone(successfulSpecialist.graph);
+  assert.equal(search.deriveMutationProposal(successfulSpecialist.graph, target, t2Specialist, 0), null);
+  const specialistMutation = await search.proposeBoundedMutation(
+    successfulSpecialist.graph,
+    target,
+    t2Specialist,
+    ids,
+    "2026-08-20T20:20:00.006Z",
+  );
+  assert.equal(specialistMutation.value, null);
+  assert.deepEqual(specialistMutation.events, []);
+  assert.deepEqual(
+    specialistMutation.graph,
+    beforeSpecialistMutation,
+    "a successful exact-handle specialist must produce no mutation telemetry or child frontier",
+  );
+
+  const duplicated = search.enqueueCandidateFrontier(
+    grounded.graph,
+    target,
+    groundedCandidate,
+    baseline,
+    baseline.nodeId,
+    ["search_web", "fetch_public_source", "keybase_identity_proofs"],
+    ids,
+    "2026-08-20T20:20:00.005Z",
+  );
   assert.equal(duplicated.value.length, 0);
-  assert.equal(duplicated.graph.frontier.length, candidateFrontier.graph.frontier.length);
+  assert.equal(duplicated.graph.frontier.length, grounded.graph.frontier.length);
   assert.ok(duplicated.events.some((event) => event.name === "frontier.pruned"));
+
+  let traversed = candidateFrontier.graph;
+  const traversedLanes = new Set();
+  for (let step = 0; step < 32; step += 1) {
+    const selected = search.selectFrontierBatch(
+      traversed,
+      16,
+      `2026-08-20T20:21:${String(step).padStart(2, "0")}.000Z`,
+    );
+    traversed = selected.graph;
+    if (selected.value.length === 0) break;
+    selected.value.forEach((entry) => traversedLanes.add(entry.sourceLaneId));
+    traversed = search.setFrontierStatus(
+      traversed,
+      selected.value.map((entry) => entry.id),
+      "running",
+      `2026-08-20T20:21:${String(step).padStart(2, "0")}.100Z`,
+    );
+    for (const entry of selected.value) {
+      traversed = search.recordFrontierOutcome(
+        traversed,
+        entry,
+        "exhausted",
+        `2026-08-20T20:21:${String(step).padStart(2, "0")}.200Z`,
+      ).graph;
+    }
+  }
+  assert.ok(traversedLanes.has("t3.institutional"), "unsupported specialists must not strand T3 breadth");
+  assert.ok(traversedLanes.has("t6.general_discovery"), "unsupported specialists must not strand T6 breadth");
+  assert.ok(
+    traversed.frontier
+      .filter((entry) => ["t3.institutional", "t6.general_discovery"].includes(entry.sourceLaneId))
+      .every((entry) => entry.status === "exhausted"),
+  );
+  assert.deepEqual(search.validateSearchGraph(traversed), []);
 
   const forged = structuredClone(candidateFrontier.graph);
   const github = forged.frontier.find((entry) => entry.queryHint.includes("site:github.com"));
@@ -410,7 +546,7 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
   assert.deepEqual(search.validateSearchGraph(graph), []);
 });
 
-test("candidate lead fetch frontiers bind exact capabilities and dedupe canonical URLs across queries", () => {
+test("candidate lead fetch frontiers bind exact capabilities, dedupe URLs, and never mutate opaque capabilities", async () => {
   const { graph: seeded, target, ids } = seededGraph("Alex Kim", ["search_web", "fetch_public_source"]);
   const parent = seeded.frontier.find((entry) => entry.sourceLaneId === "t1.first_party");
   let graph = search.setFrontierStatus(seeded, [parent.id], "running", "2026-08-20T21:59:57.000Z");
@@ -620,6 +756,69 @@ test("candidate lead fetch frontiers bind exact capabilities and dedupe canonica
     new Set(selected.value.map((entry) => entry.leadId)),
     new Set(["lead_alex_1", "lead_alex_2", "lead_alex_3"]),
   );
+
+  const lateDiscovery = structuredClone(duplicate.graph);
+  lateDiscovery.currentSourceTier = 6;
+  assert.ok(
+    lateDiscovery.frontier.some(
+      (entry) =>
+        entry.sourceTier === 2 &&
+        entry.intent.startsWith("OSINT query ") &&
+        entry.status === "queued" &&
+        entry.leadId === undefined,
+    ),
+    "the fixture must retain arbitrary nondependency T2 breadth below the T6 cursor",
+  );
+  const selectedAfterBreadthAdvance = search.selectFrontierBatch(lateDiscovery, 4, "2026-08-20T22:00:23.000Z");
+  assert.deepEqual(
+    new Set(selectedAfterBreadthAdvance.value.map((entry) => entry.leadId)),
+    new Set(["lead_alex_1", "lead_alex_2", "lead_alex_3"]),
+    "a late T6 query may expose an exact T2 lead dependency without reopening arbitrary T2 breadth",
+  );
+  assert.deepEqual(new Set(selectedAfterBreadthAdvance.value.map((entry) => entry.sourceTier)), new Set([2]));
+  assert.ok(
+    selectedAfterBreadthAdvance.graph.frontier.some(
+      (entry) =>
+        entry.sourceTier === 2 &&
+        entry.intent.startsWith("OSINT query ") &&
+        entry.status === "queued" &&
+        entry.leadId === undefined,
+    ),
+    "late dependency execution must not reopen arbitrary T2 breadth below the cursor",
+  );
+  assert.ok(
+    selectedAfterBreadthAdvance.graph.frontier.some(
+      (entry) => entry.sourceTier === 6 && entry.intent.startsWith("OSINT query ") && entry.status === "queued",
+    ),
+    "unrelated T6 breadth must remain queued while the exact dependency runs",
+  );
+  assert.equal(
+    selectedAfterBreadthAdvance.graph.currentSourceTier,
+    6,
+    "executing an exact lead dependency must not regress the breadth cursor",
+  );
+  assert.deepEqual(search.validateSearchGraph(selectedAfterBreadthAdvance.graph), []);
+
+  const parentOutcome = search.recordFrontierOutcome(duplicate.graph, parent, "verified", "2026-08-20T22:00:24.000Z");
+  const runningLead = search.setFrontierStatus(
+    parentOutcome.graph,
+    [admitted[0].id],
+    "running",
+    "2026-08-20T22:00:24.500Z",
+  );
+  const leadOutcome = search.recordFrontierOutcome(runningLead, admitted[0], "verified", "2026-08-20T22:00:25.000Z");
+  assert.equal(search.deriveMutationProposal(leadOutcome.graph, target, admitted[0], 0), null);
+  const beforeMutation = structuredClone(leadOutcome.graph);
+  const mutation = await search.proposeBoundedMutation(
+    leadOutcome.graph,
+    target,
+    admitted[0],
+    ids,
+    "2026-08-20T22:00:26.000Z",
+  );
+  assert.equal(mutation.value, null);
+  assert.deepEqual(mutation.events, []);
+  assert.deepEqual(mutation.graph, beforeMutation, "opaque lead mutation rejection must emit no telemetry");
   assert.deepEqual(search.validateSearchGraph(duplicate.graph), []);
 });
 
@@ -682,6 +881,302 @@ test("the standard runner exhausts every canonical name query before terminating
   assert.equal(
     completed.report.searchGraph.frontier.every((entry) => entry.status === "exhausted"),
     true,
+  );
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+});
+
+test("a synthesis outage continues canonical frontier work in unused calibrate capacity", async () => {
+  const targetRaw = "Chinmay Bhat";
+  const queryPlan = search.compileOsintQueries(domain.parseTarget(targetRaw));
+  assert.equal(queryPlan.status, "compiled");
+  const executedQueries = [];
+  let plannerCalls = 0;
+  let synthesisCalls = 0;
+  let firstAction = true;
+  const updates = [];
+
+  for await (const update of agent.runResearch(
+    targetRaw,
+    {
+      clock: domain.createSequenceClock("2026-08-20T20:27:30.000Z", 1),
+      ids: domain.createDeterministicIdFactory("phase-cap-synthesis-outage"),
+      planner: async ({ selectedFrontierEntries }) => {
+        plannerCalls += 1;
+        return {
+          kind: "actions",
+          decisionSummary: "Execute only the selected canonical public-professional frontier entries.",
+          actions: selectedFrontierEntries.map((entry) => ({
+            frontierEntryId: entry.id,
+            tool: "search_web",
+            purpose: "Search the selected public-professional source lane.",
+            arguments: { query: entry.queryHint },
+          })),
+        };
+      },
+      executeAction: async (action) => {
+        executedQueries.push(action.arguments.query);
+        if (firstAction) {
+          firstAction = false;
+          return {
+            status: "succeeded",
+            candidates: [{ ref: "chinmay", displayName: targetRaw, frontierExpansion: "none" }],
+            evidence: [],
+            meta: { requests: 0, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        return {
+          status: "not_found",
+          evidence: [],
+          meta: { requests: 0, bytesRead: 0, incomplete: false, llmCalls: 0 },
+        };
+      },
+      synthesize: async () => {
+        synthesisCalls += 1;
+        throw new Error("forced synthesis outage after corroboration cap");
+      },
+    },
+    {
+      availableTools: ["search_web"],
+      budget: {
+        maxTurns: 8,
+        maxLlmCalls: 12,
+        maxToolCalls: 20,
+        maxSearchCalls: 20,
+        maxConsecutiveNoProgress: 8,
+        maxActionsPerTurn: 6,
+        phaseCaps: { plan: 1, discover: 2, separate_candidates: 2, corroborate: 1, calibrate: 4, report: 1 },
+      },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(completed.report.stop.reason, "no_legal_actions");
+  assert.equal(synthesisCalls, 1, "the provider outage opens a run-scoped synthesis circuit");
+
+  const toolStarts = completed.trace.events.filter(
+    (event) => event.kind === "span_start" && event.name === "tool.search_web",
+  );
+  const executedFrontierIds = new Set(toolStarts.map((event) => event.payload.frontierEntryId));
+  assert.equal(toolStarts.length, executedQueries.length);
+  assert.equal(completed.report.usage.toolCalls, executedQueries.length);
+  assert.equal(completed.report.usage.llmCalls, plannerCalls + synthesisCalls);
+  assert.ok(completed.report.usage.llmCalls < completed.state.budget.limits.maxLlmCalls);
+  assert.equal(executedFrontierIds.size, toolStarts.length, "frontier actions remain at-most-once");
+
+  const compilerEntries = completed.report.searchGraph.frontier.filter((entry) =>
+    search.isCanonicalCompilerSearchEntry(entry),
+  );
+  assert.equal(compilerEntries.length, queryPlan.queries.length);
+  assert.ok(
+    compilerEntries.every((entry) => executedFrontierIds.has(entry.id)),
+    "every finite compiler query must reach its tool adapter despite the synthesis outage",
+  );
+  assert.deepEqual(
+    executedQueries.filter((query) => queryPlan.queries.some((compiled) => compiled.query === query)).sort(),
+    queryPlan.queries.map((query) => query.query).sort(),
+  );
+  const t6CompilerEntries = compilerEntries.filter((entry) => entry.sourceTier === 6);
+  assert.equal(t6CompilerEntries.length, 2);
+  assert.ok(
+    t6CompilerEntries.every((entry) => executedFrontierIds.has(entry.id)),
+    "the two formerly stranded T6 queries must execute exactly once",
+  );
+
+  const synthesisEnds = completed.trace.events.filter(
+    (event) => event.kind === "span_end" && event.name === "synthesis.findings",
+  );
+  assert.equal(synthesisEnds.length, 1);
+  assert.equal(synthesisEnds[0].status, "failed");
+  const capStops = completed.trace.events.filter(
+    (event) => event.name === "phase.cap_reached" && event.payload.reason === "pending_frontier_continues_in_calibrate",
+  );
+  assert.equal(capStops.length, 1);
+  assert.equal(capStops[0].payload.cappedPhase, "corroborate");
+  assert.equal(capStops[0].payload.nextPhase, "calibrate");
+  assert.ok(capStops[0].payload.pendingFrontierEntries >= t6CompilerEntries.length);
+
+  const { limits, usage } = completed.state.budget;
+  for (const [phase, turns] of Object.entries(usage.phaseTurns)) {
+    const cap = limits.phaseCaps[phase];
+    if (cap !== undefined) assert.ok(turns <= cap, `${phase} exceeded its configured turn cap`);
+  }
+  assert.equal(usage.phaseTurns.corroborate, 1);
+  assert.ok(usage.phaseTurns.calibrate > 0);
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
+test("runner opens and executes Keybase only after a GitHub handle is grounded, then reaches T3 and T6", async () => {
+  const targetRaw = "Chinmay Bhat";
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: targetRaw,
+    requestedDepth: "deep",
+  });
+  let emittedGithubLead = false;
+  let keybaseCalls = 0;
+  let plannerProviderCalls = 0;
+  let providerCallsAtKeybase = null;
+  const liveDependencies = live.createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    fetch: async () => {
+      plannerProviderCalls += 1;
+      return new Response(JSON.stringify({ error: { message: "planner quota exhausted" } }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "0" },
+      });
+    },
+  });
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-20T20:28:00.000Z", 1),
+      ids: domain.createDeterministicIdFactory("grounded-keybase-lifecycle"),
+      planner: liveDependencies.planner,
+      executeAction: async (action) => {
+        if (
+          action.tool === "search_web" &&
+          action.sourceLaneId === "t6.general_discovery" &&
+          !action.arguments.query.includes('"C. Bhat"') &&
+          !emittedGithubLead
+        ) {
+          emittedGithubLead = true;
+          return {
+            status: "succeeded",
+            candidates: [{ ref: "chinmay", displayName: targetRaw }],
+            evidence: [
+              {
+                candidateRef: "chinmay",
+                claim: "Search surfaced one exact GitHub public-profile lead.",
+                disposition: "discovery_only",
+                sourceUrl: "https://github.com/chinmay-bhat",
+                sourceType: "search_result",
+                canonicalSubset: { providerAttestedUrl: true },
+                verificationMethod: "search_discovery",
+                attributes: {
+                  leadId: "lead_chinmay_github",
+                  classifiedSourceLaneId: "t2.structured_professional",
+                  classifiedSourceTier: 2,
+                  classifiedSourceType: "code_profile",
+                },
+              },
+            ],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        if (action.tool === "fetch_public_source") {
+          return {
+            status: "succeeded",
+            evidence: [
+              {
+                candidateId: action.candidateId,
+                claim: "Chinmay Bhat — chinmay-bhat",
+                excerpt: "Chinmay Bhat — chinmay-bhat",
+                title: "Chinmay Bhat (chinmay-bhat)",
+                sourceUrl: "https://github.com/chinmay-bhat",
+                sourceType: "code_profile",
+                httpStatus: 200,
+                verificationMethod: "direct_fetch",
+              },
+            ],
+            candidateSignals: [
+              {
+                candidateId: action.candidateId,
+                signals: [
+                  {
+                    kind: "social_handle",
+                    value: "chinmay-bhat",
+                    normalizedValue: "chinmay-bhat",
+                    strength: "strong",
+                    assurance: "spoofable",
+                    sourceFamily: "github.com",
+                  },
+                ],
+              },
+            ],
+            meta: { requests: 1, bytesRead: 128, incomplete: false, llmCalls: 0 },
+          };
+        }
+        if (action.tool === "keybase_identity_proofs") {
+          keybaseCalls += 1;
+          providerCallsAtKeybase = plannerProviderCalls;
+          assert.equal(action.arguments.githubHandle, "chinmay-bhat");
+          return { status: "not_found", evidence: [], meta: { requests: 1, bytesRead: 0, llmCalls: 0 } };
+        }
+        return { status: "not_found", evidence: [], meta: { requests: 1, bytesRead: 0, llmCalls: 0 } };
+      },
+      synthesize: async () => ({ decisionSummary: "No findings.", openQuestions: [], findings: [] }),
+    },
+    {
+      availableTools: ["search_web", "fetch_public_source", "keybase_identity_proofs"],
+      budget: { maxTurns: 16, maxToolCalls: 32, maxSearchCalls: 24 },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  const specialist = completed.report.searchGraph.frontier.find((entry) =>
+    entry.allowedTools.includes("keybase_identity_proofs"),
+  );
+  assert.equal(
+    keybaseCalls,
+    1,
+    JSON.stringify({
+      stop: completed.report.stop,
+      candidates: completed.report.candidates,
+      frontier: completed.report.searchGraph.frontier.map((entry) => ({
+        id: entry.id,
+        lane: entry.sourceLaneId,
+        tools: entry.allowedTools,
+        hint: entry.queryHint,
+        leadId: entry.leadId,
+        parent: entry.parentFrontierEntryId,
+        status: entry.status,
+      })),
+      rejectedSignals: completed.trace.events.filter((event) => event.name === "candidate_signal.rejected"),
+      evidenceAdmissions: completed.trace.events.filter((event) => event.name === "evidence.admission"),
+      actionRejected: completed.trace.events.filter((event) => event.name === "action.rejected"),
+    }),
+  );
+  assert.ok(plannerProviderCalls >= 1);
+  assert.equal(
+    providerCallsAtKeybase,
+    plannerProviderCalls,
+    "the grounded Keybase action must be routed mechanically without another provider attempt",
+  );
+  assert.equal(
+    completed.trace.events.filter(
+      (event) => event.name === "planner.decision" && event.kind === "span_end" && event.usage.llmCalls === 1,
+    ).length,
+    1,
+    "bounded retry exhaustion is one logical planner call before the run-scoped mechanical circuit opens",
+  );
+  assert.ok(specialist);
+  assert.equal(specialist.queryHint, "chinmay-bhat");
+  assert.equal(specialist.status, "exhausted");
+  const specialistParent = completed.report.searchGraph.frontier.find(
+    (entry) => entry.id === specialist.parentFrontierEntryId,
+  );
+  assert.equal(specialistParent.leadId, "lead_chinmay_github");
+  const candidate = completed.report.candidates.find((item) => item.id === specialist.candidateId);
+  assert.ok(
+    candidate.signals.some(
+      (signal) =>
+        signal.kind === "social_handle" &&
+        signal.normalizedValue === "chinmay-bhat" &&
+        signal.sourceFamily === "github.com" &&
+        Boolean(signal.sourceEvidenceId),
+    ),
+  );
+  assert.ok(
+    completed.report.searchGraph.frontier
+      .filter((entry) => ["t3.institutional", "t6.general_discovery"].includes(entry.sourceLaneId))
+      .every((entry) => entry.status === "exhausted"),
+    "grounded specialist handling must not strand canonical T3/T6 breadth",
   );
   assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
 });
@@ -1215,6 +1710,12 @@ test("denied generic research tools never seed a lane or reach an adapter", asyn
     assert.equal(updates.at(-1).report.stop.reason, "no_legal_actions", tool);
     assert.equal(updates.at(-1).report.searchGraph.frontier.length, 0, tool);
   }
+
+  assert.deepEqual(
+    search.sourceLanesForTarget(target, ["工具"]),
+    [],
+    "Unicode name support must not broaden the ASCII-only generic tool identifier grammar",
+  );
 
   const legitimateTool = "professional_registry_search";
   assert.equal(search.isDeniedResearchTool(legitimateTool), false);

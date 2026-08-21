@@ -211,10 +211,14 @@ function parseResearchBody(value: unknown): ResearchRequestBody {
     if (!Array.isArray(record.requestedCategories)) {
       throw new TypeError("requestedCategories must be an array of report categories.");
     }
-    const filtered = [...new Set(record.requestedCategories)].filter((item): item is FindingCategory =>
-      FINDING_CATEGORIES.includes(item as FindingCategory),
-    );
-    if (filtered.length > 0) requestedCategories = filtered;
+    const unique = [...new Set(record.requestedCategories)];
+    if (
+      unique.length === 0 ||
+      unique.some((item) => typeof item !== "string" || !FINDING_CATEGORIES.includes(item as FindingCategory))
+    ) {
+      throw new TypeError(`requestedCategories must contain only: ${FINDING_CATEGORIES.join(", ")}.`);
+    }
+    requestedCategories = unique as FindingCategory[];
   }
   return {
     query,

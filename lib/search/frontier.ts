@@ -4,6 +4,7 @@ import type { IdFactory } from "../domain/runtime";
 import { parseTarget } from "../domain/target";
 import {
   SEARCH_GRAPH_SCHEMA_VERSION,
+  type Candidate,
   type EvidenceSourceType,
   type FrontierMutationMetadata,
   type JsonObject,
@@ -26,6 +27,7 @@ import {
   sourceLaneForFrontierEntry,
   sourceLaneQueryHint,
   sourceLanesForTarget,
+  githubHandleFromCanonicalProfileUrl,
   type SourceLane,
 } from "./source-hierarchy";
 
@@ -550,7 +552,7 @@ export function seedFrontier(
 export function enqueueCandidateFrontier(
   graphValue: SearchGraph,
   target: ParsedTarget,
-  candidate: { id: string; displayName: string },
+  candidate: Pick<Candidate, "id" | "displayName" | "signals">,
   parentEntry: SearchFrontierEntry,
   parentNodeId: string,
   availableTools: readonly string[],
@@ -560,6 +562,7 @@ export function enqueueCandidateFrontier(
   let graph = cloneJson(graphValue);
   const entries: SearchFrontierEntry[] = [];
   const events: SearchKernelEvent[] = [];
+  const githubHandle = groundedGithubHandleForCandidate(candidate);
   for (const lane of sourceLanesForTarget(target, availableTools, { candidateId: candidate.id })) {
     if (!lane.requiresCandidate) continue;
     // Lanes that require an exact candidate-linked URL (e.g. Wayback) cannot be
@@ -576,17 +579,23 @@ export function enqueueCandidateFrontier(
       const remainingTools = lane.allowedTools.filter(
         (tool) => tool !== "search_web" && tool !== "fetch_public_source",
       );
-      if (remainingTools.length > 0) {
+      const eligibleTools = remainingTools.filter(
+        (tool) => tool !== "keybase_identity_proofs" || githubHandle !== null,
+      );
+      if (eligibleTools.length > 0) {
         const enqueued = enqueueFrontier(
           graph,
           {
-            lane: laneWithTools(lane, remainingTools),
+            lane: laneWithTools(lane, eligibleTools),
             target,
             parentNodeId,
             parentFrontierEntry: parentEntry,
             candidateId: candidate.id,
             candidateLabel: candidate.displayName,
-            queryHint: `${candidate.displayName} ${target.organizationHints.map((item) => item.name).join(" ")}`,
+            queryHint:
+              eligibleTools.length === 1 && eligibleTools[0] === "keybase_identity_proofs" && githubHandle
+                ? githubHandle
+                : `${candidate.displayName} ${target.organizationHints.map((item) => item.name).join(" ")}`,
           },
           ids,
           timestamp,
@@ -598,17 +607,21 @@ export function enqueueCandidateFrontier(
       continue;
     }
     const remainingTools = lane.allowedTools.filter((tool) => tool !== "search_web" && tool !== "fetch_public_source");
-    if (remainingTools.length === 0) continue;
+    const eligibleTools = remainingTools.filter((tool) => tool !== "keybase_identity_proofs" || githubHandle !== null);
+    if (eligibleTools.length === 0) continue;
     const enqueued = enqueueFrontier(
       graph,
       {
-        lane: laneWithTools(lane, remainingTools),
+        lane: laneWithTools(lane, eligibleTools),
         target,
         parentNodeId,
         parentFrontierEntry: parentEntry,
         candidateId: candidate.id,
         candidateLabel: candidate.displayName,
-        queryHint: `${candidate.displayName} ${target.organizationHints.map((item) => item.name).join(" ")}`,
+        queryHint:
+          eligibleTools.length === 1 && eligibleTools[0] === "keybase_identity_proofs" && githubHandle
+            ? githubHandle
+            : `${candidate.displayName} ${target.organizationHints.map((item) => item.name).join(" ")}`,
       },
       ids,
       timestamp,
@@ -618,6 +631,28 @@ export function enqueueCandidateFrontier(
     if (enqueued.value) entries.push(enqueued.value);
   }
   return { graph, value: entries, events };
+}
+
+/**
+ * Return one unambiguous GitHub login only after the candidate ledger has
+ * bound a social-handle signal to admitted GitHub evidence. Name-only,
+ * self-asserted, provisional, malformed, and conflicting handles fail closed.
+ */
+export function groundedGithubHandleForCandidate(candidate: Pick<Candidate, "signals">): string | null {
+  const handles = new Set<string>();
+  for (const signal of candidate.signals ?? []) {
+    if (
+      signal.kind !== "social_handle" ||
+      signal.sourceFamily?.toLocaleLowerCase("en-US") !== "github.com" ||
+      !signal.sourceEvidenceId ||
+      signal.assurance === "self_asserted"
+    )
+      continue;
+    const handle = githubHandleFromCanonicalProfileUrl(`https://github.com/${signal.value}`);
+    if (!handle || signal.normalizedValue !== handle) continue;
+    handles.add(handle);
+  }
+  return handles.size === 1 ? [...handles][0] : null;
 }
 
 export interface CandidateLeadFetchBinding {
@@ -809,6 +844,12 @@ function isCandidateLeadFetchEntry(entry: SearchFrontierEntry): boolean {
   );
 }
 
+function isKeybaseSpecialistEntry(entry: SearchFrontierEntry): boolean {
+  return (
+    entry.mutation === null && entry.allowedTools.length === 1 && entry.allowedTools[0] === "keybase_identity_proofs"
+  );
+}
+
 function isClassifiedLeadDependency(graph: SearchGraph, entry: SearchFrontierEntry): boolean {
   if (!isCandidateLeadFetchEntry(entry) || entry.candidateId === null) return false;
   return graph.nodes.some(
@@ -819,6 +860,23 @@ function isClassifiedLeadDependency(graph: SearchGraph, entry: SearchFrontierEnt
       node.data.sourceType === "search_result" &&
       node.data.classifiedSourceLaneId === entry.sourceLaneId &&
       node.data.leadId === entry.leadId,
+  );
+}
+
+function isGroundedKeybaseDependency(graph: SearchGraph, entry: SearchFrontierEntry): boolean {
+  if (
+    !isKeybaseSpecialistEntry(entry) ||
+    entry.candidateId === null ||
+    githubHandleFromCanonicalProfileUrl(`https://github.com/${entry.queryHint}`) !== entry.queryHint ||
+    entry.parentFrontierEntryId === null
+  )
+    return false;
+  const parent = graph.frontier.find((candidate) => candidate.id === entry.parentFrontierEntryId);
+  return Boolean(
+    parent &&
+    parent.candidateId === entry.candidateId &&
+    parent.status === "verified" &&
+    isClassifiedLeadDependency(graph, parent),
   );
 }
 
@@ -836,13 +894,18 @@ export function selectFrontierBatch(
   // batch may expand only the lowest tier that has an action executable now;
   // this prevents broad discovery from racing an unexhausted exact/official
   // lane while still allowing mutation-cap-deferred entries to wait safely.
-  // The cursor is monotonic: entries below the current tier (e.g. a candidate
-  // lane opened after the run already advanced) are not revisited downward.
+  // The breadth cursor is monotonic, but an exact candidate dependency may be
+  // admitted only after a later search query exposes it. Such a dependency is
+  // allowed to run in its deterministically classified lane without reopening
+  // arbitrary lower-tier breadth.
   const tierFloor = graph.currentSourceTier ?? 0;
   const initiallyExecutable = queued.filter((entry) => {
     const exactUrlDependency = sourceLaneById(entry.sourceLaneId)?.requiresExactCandidateUrl === true;
     return (
-      (entry.sourceTier >= tierFloor || exactUrlDependency) &&
+      (entry.sourceTier >= tierFloor ||
+        exactUrlDependency ||
+        isClassifiedLeadDependency(graph, entry) ||
+        isGroundedKeybaseDependency(graph, entry)) &&
       (entry.mutation === null || mutationSelectionLegal(graph))
     );
   });
@@ -1240,7 +1303,15 @@ export function deriveMutationProposal(
   proposalIndex: number,
 ): DerivedMutationProposal | null {
   const lane = sourceLaneById(parent.sourceLaneId);
-  if (!lane || parent.mutation || !Number.isInteger(proposalIndex) || proposalIndex < 0) return null;
+  if (
+    !lane ||
+    parent.mutation ||
+    parent.leadId != null ||
+    isKeybaseSpecialistEntry(parent) ||
+    !Number.isInteger(proposalIndex) ||
+    proposalIndex < 0
+  )
+    return null;
   const strategies = mutationStrategies(parent, target);
   if (strategies.length === 0) return null;
   const selector = deterministicSha256UnitSync(`${graph.runId}|${graph.seed}|${parent.id}|${proposalIndex}|strategy`);
@@ -1300,7 +1371,7 @@ export async function proposeBoundedMutation(
   timestamp: string,
 ): Promise<SearchKernelResult<SearchFrontierEntry | null>> {
   let graph = cloneJson(graphValue);
-  if (parent.mutation || graph.telemetry.toolCalls < 1) {
+  if (parent.mutation || parent.leadId != null || isKeybaseSpecialistEntry(parent) || graph.telemetry.toolCalls < 1) {
     return { graph, value: null, events: [] };
   }
   const proposalIndex = graph.mutationStep;
@@ -2427,7 +2498,12 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     graph.currentSourceTier !== [...selectedTiers][0] &&
     !graph.selectedFrontierEntryIds.every((id) => {
       const entry = graph.frontier.find((item) => item.id === id);
-      return Boolean(entry && (isClassifiedLeadDependency(graph, entry) || isExactCandidateUrlDependency(entry)));
+      return Boolean(
+        entry &&
+        (isClassifiedLeadDependency(graph, entry) ||
+          isExactCandidateUrlDependency(entry) ||
+          isGroundedKeybaseDependency(graph, entry)),
+      );
     })
   ) {
     issues.push({

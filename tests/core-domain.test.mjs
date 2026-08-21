@@ -57,6 +57,67 @@ test("target parsing distinguishes names, exact user identifiers, and role-only 
   assert.equal(domain.parseTarget("Chris Public").name, "Chris Public");
 });
 
+test("target and identity normalization preserve non-Latin public names deterministically", () => {
+  for (const [raw, expectedName, expectedNormalized] of [
+    ["张伟", "张伟", "张伟"],
+    ["Ольга Иванова", "Ольга Иванова", "ольга иванова"],
+    ["अनन्या शर्मा", "अनन्या शर्मा", "अनन्या शर्मा"],
+  ]) {
+    const target = domain.parseTarget(raw);
+    assert.equal(target.kind, "named_person", raw);
+    assert.equal(target.name, expectedName, raw);
+    assert.equal(target.normalizedName, expectedNormalized, raw);
+    assert.equal(domain.normalizeComparable(raw), expectedNormalized, raw);
+  }
+
+  const cjkEvidence = {
+    id: "evidence-cjk-name",
+    candidateId: "candidate-cjk-name",
+    disposition: "supports",
+    sourceType: "official_profile",
+    sourceFamily: "example.edu",
+    claim: "张伟",
+    excerpt: "张伟",
+    title: "张伟",
+    publisher: "Example University",
+    sourceUrl: "https://example.edu/people/zhang-wei",
+    canonicalUrl: "https://example.edu/people/zhang-wei",
+    canonicalSubset: null,
+    attributes: {},
+  };
+  assert.equal(
+    domain.identitySignalGroundedByEvidence(
+      {
+        kind: "name",
+        value: "张伟",
+        normalizedValue: "张伟",
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: "example.edu",
+        sourceEvidenceId: cjkEvidence.id,
+      },
+      cjkEvidence,
+    ),
+    true,
+  );
+  assert.equal(
+    domain.identitySignalGroundedByEvidence(
+      {
+        kind: "social_handle",
+        value: "张伟",
+        normalizedValue: "张伟",
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: "example.edu",
+        sourceEvidenceId: cjkEvidence.id,
+      },
+      cjkEvidence,
+    ),
+    false,
+    "short non-Latin names must not weaken the minimum for unrelated signal kinds",
+  );
+});
+
 test("target parsing retains bounded public-professional context for mononyms, roles, affiliations, and locations", () => {
   const mononym = domain.parseTarget("Usher");
   assert.equal(mononym.kind, "named_person");

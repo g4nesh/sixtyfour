@@ -1585,6 +1585,24 @@ test("exact live name streams graph snapshots, classifies fetch lanes, and prese
   );
   assert.equal(matchingCandidates.length, 2, "the fetched subject must remain separate from the name-only seed");
   assert.notEqual(direct.candidateId, discovery.candidateId);
+  const directCandidate = matchingCandidates.find((candidate) => candidate.id === direct.candidateId);
+  assert.ok(
+    directCandidate.signals.some(
+      (signal) =>
+        signal.kind === "social_handle" &&
+        signal.normalizedValue === "g4nesh" &&
+        signal.sourceFamily === "github.com" &&
+        signal.sourceEvidenceId === direct.id,
+    ),
+    "the canonical GitHub profile must derive its exact evidence-grounded public handle",
+  );
+  assert.equal(
+    terminal.payload.report.searchGraph.frontier.some(
+      (entry) => entry.candidateId === directCandidate.id && entry.allowedTools.includes("keybase_identity_proofs"),
+    ),
+    false,
+    "a quarantined candidate branch must never expand into a Keybase specialist",
+  );
   const candidateNodeById = new Map(
     terminal.payload.report.searchGraph.nodes
       .filter((node) => node.kind === "candidate")
@@ -1821,6 +1839,363 @@ test("mechanical planning fetches every exact same-name lead after earlier direc
   assert.ok(exactFetchSpans.every((event) => event.usage.networkRequests === 1));
   assert.equal(JSON.stringify(exactFetchSpans).includes("lead_lane_mismatch"), false);
   assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
+test("repeated T1 and T2 profile leads reuse only the evidence-backed isolated candidate", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Chinmay Bhat",
+    requestedDepth: "deep",
+  });
+  const repeatedUrl = "https://github.com/chinmay-bhat";
+  const repeatedVariant = "https://GitHub.com/chinmay-bhat/?utm_source=atlas#profile";
+  const distinctUrl = "https://github.com/chinmay-bhat-distinct";
+  const ungroundedUrl = "https://github.com/chinmay-bhat-ungrounded";
+  const ungroundedVariant = "https://github.com/chinmay-bhat-ungrounded/?utm_source=atlas";
+  const ambiguousUrl = "https://github.com/chinmay-bhat-ambiguous";
+  const ambiguousVariant = "https://github.com/chinmay-bhat-ambiguous/#repeat";
+  const unrelatedUrl = "https://github.com/unrelated-cross-url";
+  const leads = new Map([
+    ["lead_chinmay_t1_exact", { sourceUrl: repeatedUrl, excerpt: "Chinmay Bhat · GitHub", candidateRef: "chinmay-t1" }],
+    [
+      "lead_chinmay_t1_ungrounded",
+      {
+        sourceUrl: ungroundedUrl,
+        excerpt: "Chinmay Bhat · Ungrounded GitHub",
+        candidateRef: "chinmay-t1-ungrounded",
+        groundProfile: false,
+      },
+    ],
+    [
+      "lead_chinmay_t1_ambiguous",
+      {
+        sourceUrl: ambiguousUrl,
+        excerpt: "Chinmay Bhat · Ambiguous GitHub",
+        candidateRef: "chinmay-t1-ambiguous",
+        branchCount: 2,
+      },
+    ],
+    [
+      "lead_chinmay_t2_repeat",
+      {
+        sourceUrl: repeatedVariant,
+        excerpt: "Chinmay Bhat · GitHub",
+        candidateRef: "chinmay-t2-repeat",
+        addCrossUrlEvidence: true,
+      },
+    ],
+    [
+      "lead_chinmay_t2_distinct",
+      { sourceUrl: distinctUrl, excerpt: "Chinmay Bhat · Distinct GitHub", candidateRef: "chinmay-t2-distinct" },
+    ],
+    [
+      "lead_chinmay_t2_ungrounded_repeat",
+      {
+        sourceUrl: ungroundedVariant,
+        excerpt: "Chinmay Bhat · Ungrounded GitHub",
+        candidateRef: "chinmay-t2-ungrounded-repeat",
+      },
+    ],
+    [
+      "lead_chinmay_t2_ambiguous_repeat",
+      {
+        sourceUrl: ambiguousVariant,
+        excerpt: "Chinmay Bhat · Ambiguous GitHub",
+        candidateRef: "chinmay-t2-ambiguous-repeat",
+      },
+    ],
+  ]);
+  let exactSearchCalls = 0;
+  let githubSiteSearchCalls = 0;
+  const fetchCalls = [];
+  const dependencies = {
+    clock: domain.createSequenceClock("2026-08-21T02:00:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("chinmay-repeat-profile"),
+    planner: async ({ selectedFrontierEntries }) => ({
+      kind: "actions",
+      decisionSummary: "Execute every selected deterministic frontier entry.",
+      actions: selectedFrontierEntries.map((entry) => ({
+        frontierEntryId: entry.id,
+        tool: entry.allowedTools[0],
+        purpose: "Exercise exact hierarchy and candidate-bound lead admission.",
+        arguments: entry.allowedTools[0] === "search_web" ? { query: entry.queryHint } : {},
+        ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
+      })),
+    }),
+    executeAction: async (action) => {
+      if (action.tool === "search_web") {
+        const isExactT1 = action.sourceLaneId === "t1.first_party" && action.arguments.query === '"Chinmay Bhat"';
+        const isGithubT2 =
+          action.sourceLaneId === "t2.structured_professional" &&
+          String(action.arguments.query).includes("site:github.com");
+        if (!isExactT1 && !isGithubT2) return { status: "not_found", meta: { requests: 0 } };
+
+        if (isExactT1) exactSearchCalls += 1;
+        if (isGithubT2) githubSiteSearchCalls += 1;
+        const surfacedLeadIds = isExactT1
+          ? ["lead_chinmay_t1_exact", "lead_chinmay_t1_ungrounded", "lead_chinmay_t1_ambiguous"]
+          : [
+              "lead_chinmay_t2_repeat",
+              "lead_chinmay_t2_distinct",
+              "lead_chinmay_t2_ungrounded_repeat",
+              "lead_chinmay_t2_ambiguous_repeat",
+            ];
+        return {
+          status: "succeeded",
+          candidates: surfacedLeadIds.map((leadId) => {
+            const lead = leads.get(leadId);
+            assert.ok(lead);
+            return {
+              ref: `search:${leadId}`,
+              displayName: "Chinmay Bhat",
+              signals: [
+                {
+                  kind: "name",
+                  value: "Chinmay Bhat",
+                  normalizedValue: "chinmay bhat",
+                  strength: "weak",
+                  assurance: "self_asserted",
+                  sourceFamily: "github.com",
+                },
+              ],
+            };
+          }),
+          evidence: surfacedLeadIds.map((leadId) => {
+            const lead = leads.get(leadId);
+            assert.ok(lead);
+            return {
+              candidateRef: `search:${leadId}`,
+              claim: `Search surfaced ${leadId}.`,
+              disposition: "discovery_only",
+              sourceUrl: lead.sourceUrl,
+              sourceType: "search_result",
+              canonicalSubset: { providerAttestedUrl: true },
+              verificationMethod: "search_discovery",
+              temporalStatus: "unknown",
+              reliability: 0,
+              spoofable: true,
+              attributes: {
+                leadId,
+                classifiedSourceLaneId: "t2.structured_professional",
+                classifiedSourceTier: 2,
+                classifiedSourceType: "code_profile",
+              },
+            };
+          }),
+          meta: { requests: 1 },
+        };
+      }
+
+      if (action.tool === "fetch_public_source" && typeof action.arguments.leadId === "string") {
+        const lead = leads.get(action.arguments.leadId);
+        assert.ok(lead, `unknown Chinmay lead ${String(action.arguments.leadId)}`);
+        assert.ok(action.candidateId);
+        fetchCalls.push(action.arguments.leadId);
+        const candidateRefs = Array.from(
+          { length: lead.branchCount ?? 1 },
+          (_, index) => `${lead.candidateRef}${lead.branchCount ? `-${index + 1}` : ""}`,
+        );
+        return {
+          status: "partial",
+          candidateBranches: candidateRefs.map((candidateRef) => ({
+            parentCandidateId: action.candidateId,
+            reason: "fetched_subject_unverified",
+            candidate: {
+              ref: candidateRef,
+              displayName: "Chinmay Bhat",
+              signals: [
+                {
+                  kind: "name",
+                  value: "Chinmay Bhat",
+                  normalizedValue: "chinmay bhat",
+                  strength: "strong",
+                  assurance: "spoofable",
+                  sourceFamily: "github.com",
+                },
+                ...(lead.groundProfile === false
+                  ? []
+                  : [
+                      {
+                        kind: "profile_url",
+                        value: lead.sourceUrl,
+                        normalizedValue: lead.sourceUrl,
+                        strength: "strong",
+                        assurance: "spoofable",
+                        sourceFamily: "github.com",
+                      },
+                    ]),
+              ],
+            },
+          })),
+          evidence: [
+            ...candidateRefs.map((candidateRef) => ({
+              candidateRef,
+              claim: lead.excerpt,
+              excerpt: lead.excerpt,
+              sourceUrl: lead.sourceUrl,
+              sourceType: "code_profile",
+              verificationMethod: "direct_fetch",
+              disposition: "supports",
+              temporalStatus: "current",
+              reliability: 0.7,
+              spoofable: true,
+            })),
+            ...(lead.addCrossUrlEvidence
+              ? [
+                  {
+                    candidateRef: lead.candidateRef,
+                    claim: "A reused candidate ref must not authorize a different page.",
+                    excerpt: "A reused candidate ref must not authorize a different page.",
+                    sourceUrl: unrelatedUrl,
+                    sourceType: "code_profile",
+                    verificationMethod: "direct_fetch",
+                    disposition: "supports",
+                    temporalStatus: "current",
+                    reliability: 0.7,
+                    spoofable: true,
+                  },
+                ]
+              : []),
+          ],
+          meta: { requests: 1 },
+        };
+      }
+      return { status: "not_found", meta: { requests: 0 } };
+    },
+    synthesize: async () => ({
+      decisionSummary: "Retain exact page identities without name-only candidate merging.",
+      openQuestions: [],
+      findings: [],
+    }),
+  };
+
+  const updates = [];
+  for await (const update of agent.runResearch(input, dependencies, {
+    availableTools: ["search_web", "fetch_public_source"],
+    budget: {
+      maxTurns: 24,
+      maxLlmCalls: 40,
+      maxToolCalls: 64,
+      maxSearchCalls: 48,
+      maxEvidenceAttempts: 64,
+      maxConsecutiveNoProgress: 8,
+      maxActionsPerTurn: 6,
+      phaseCaps: { plan: 4, discover: 12, separate_candidates: 12, corroborate: 20, calibrate: 4, report: 1 },
+    },
+  }))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(exactSearchCalls, 1);
+  assert.equal(githubSiteSearchCalls, 1);
+  assert.deepEqual(new Set(fetchCalls), new Set(leads.keys()));
+
+  const directEvidence = completed.report.evidence.filter(
+    (evidence) => evidence.verificationMethod === "direct_fetch" && evidence.disposition === "supports",
+  );
+  assert.equal(directEvidence.length, 7);
+  const repeatedEvidence = directEvidence.filter((evidence) => evidence.canonicalUrl === repeatedUrl);
+  const distinctEvidence = directEvidence.filter((evidence) => evidence.canonicalUrl === distinctUrl);
+  const ungroundedEvidence = directEvidence.filter((evidence) => evidence.canonicalUrl === ungroundedUrl);
+  const ambiguousEvidence = directEvidence.filter((evidence) => evidence.canonicalUrl === ambiguousUrl);
+  assert.equal(repeatedEvidence.length, 1);
+  assert.equal(distinctEvidence.length, 1);
+  assert.equal(ungroundedEvidence.length, 2, "direct evidence without a grounded profile signal must not be reused");
+  assert.equal(
+    new Set(ungroundedEvidence.map((evidence) => evidence.candidateId)).size,
+    2,
+    "ungrounded same-page candidates must stay separate",
+  );
+  assert.equal(ambiguousEvidence.length, 3, "two prior grounded subjects make later reuse ambiguous and fail closed");
+  assert.equal(new Set(ambiguousEvidence.map((evidence) => evidence.candidateId)).size, 3);
+  assert.equal(
+    directEvidence.some((evidence) => evidence.canonicalUrl === unrelatedUrl),
+    false,
+  );
+  assert.notEqual(repeatedEvidence[0].candidateId, distinctEvidence[0].candidateId);
+
+  const directCandidateIds = new Set(directEvidence.map((evidence) => evidence.candidateId));
+  assert.equal(directCandidateIds.size, 7, "only the unique grounded exact-page subject may be reused");
+  const discoveryCandidateIds = new Set(
+    completed.report.evidence
+      .filter(
+        (evidence) =>
+          evidence.verificationMethod === "search_discovery" && typeof evidence.attributes.leadId === "string",
+      )
+      .map((evidence) => evidence.candidateId),
+  );
+  assert.equal(discoveryCandidateIds.size, leads.size, "generic same-name search candidates must remain separate");
+  assert.ok(
+    [...directCandidateIds].every((candidateId) => !discoveryCandidateIds.has(candidateId)),
+    "name-only discovery candidates cannot be reused without prior same-page direct evidence",
+  );
+  assert.equal(
+    completed.report.candidates.filter((candidate) =>
+      candidate.evidenceIds.some((evidenceId) => directEvidence.some((evidence) => evidence.id === evidenceId)),
+    ).length,
+    7,
+  );
+  assert.equal(
+    completed.report.candidates.filter((candidate) =>
+      candidate.signals.some(
+        (signal) => signal.kind === "profile_url" && signal.sourceEvidenceId === repeatedEvidence[0].id,
+      ),
+    ).length,
+    1,
+    "only one evidence-grounded candidate may represent the repeated canonical profile",
+  );
+
+  const reused = completed.trace.events.filter((event) => event.name === "candidate.reused");
+  assert.equal(reused.length, 1);
+  assert.equal(reused[0].payload.candidateId, repeatedEvidence[0].candidateId);
+  assert.equal(reused[0].payload.canonicalProfileUrl, repeatedUrl);
+  assert.equal(reused[0].payload.groundedProfileSignal, true);
+  assert.equal(reused[0].payload.reason, "same_canonical_profile_direct_fetch");
+  assert.ok(
+    completed.trace.events.some(
+      (event) =>
+        event.name === "evidence.admission" &&
+        event.payload.reason === "duplicate_url" &&
+        event.payload.duplicateOf === repeatedEvidence[0].id,
+    ),
+  );
+  assert.equal(completed.report.telemetry.evidence.duplicate, 1);
+  assert.ok(
+    completed.trace.events.some(
+      (event) =>
+        event.name === "evidence.admission" &&
+        event.payload.reason === "candidate_reuse_source_mismatch" &&
+        event.payload.expectedSourceUrl === repeatedUrl,
+    ),
+    "a reused candidate ref must stay scoped to its exact canonical page",
+  );
+
+  const graph = completed.report.searchGraph;
+  assert.equal(
+    graph.nodes.filter((node) => node.kind === "evidence" && node.evidenceId === repeatedEvidence[0].id).length,
+    1,
+  );
+  assert.equal(
+    graph.nodes.filter((node) => node.kind === "candidate" && node.candidateId === repeatedEvidence[0].candidateId)
+      .length,
+    1,
+  );
+  assert.ok(graph.edges.every((edge) => edge.kind !== "separates" || edge.fromNodeId !== edge.toNodeId));
+  const candidateNodeById = new Map(
+    graph.nodes.filter((node) => node.kind === "candidate").map((node) => [node.candidateId, node.id]),
+  );
+  assert.ok(
+    graph.edges.some(
+      (edge) =>
+        edge.kind === "separates" &&
+        new Set([edge.fromNodeId, edge.toNodeId]).has(candidateNodeById.get(repeatedEvidence[0].candidateId)) &&
+        new Set([edge.fromNodeId, edge.toNodeId]).has(candidateNodeById.get(distinctEvidence[0].candidateId)),
+    ),
+    "different canonical profile URLs must preserve an explicit candidate-separation edge",
+  );
+  assert.deepEqual(search.validateSearchGraph(graph), []);
   assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
 });
 

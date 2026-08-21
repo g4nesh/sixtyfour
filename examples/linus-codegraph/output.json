@@ -1075,7 +1075,7 @@
         "candidateId": null,
         "depth": 0,
         "ordinal": 3,
-        "dedupeKey": "t0.explicit email codegraph unbound torvalds@linux-foundation.org base",
+        "dedupeKey": "t0.explicit email codegraph|unbound|torvalds@linux-foundation.org|base",
         "utility": {
           "relevance": 0.94,
           "novelty": 0.88,
@@ -1112,7 +1112,7 @@
         "candidateId": null,
         "depth": 0,
         "ordinal": 6,
-        "dedupeKey": "t1.first party unbound torvalds@linux-foundation.org base",
+        "dedupeKey": "t1.first party|unbound|torvalds@linux-foundation.org|base",
         "utility": {
           "relevance": 0.94,
           "novelty": 0.88,
@@ -1148,7 +1148,7 @@
         "candidateId": null,
         "depth": 0,
         "ordinal": 9,
-        "dedupeKey": "t6.general discovery unbound torvalds@linux-foundation.org base",
+        "dedupeKey": "t6.general discovery|unbound|torvalds@linux-foundation.org|base",
         "utility": {
           "relevance": 0.58,
           "novelty": 0.88,
@@ -1186,7 +1186,7 @@
         "candidateId": "linus_replay_candidate_0001",
         "depth": 1,
         "ordinal": 12,
-        "dedupeKey": "t2.structured professional linus replay candidate 0001 torvalds linux commit 3a0dd7ba4f44cdc116d83712f61e7c1a95be3588 base",
+        "dedupeKey": "t2.structured professional|linus replay candidate 0001|torvalds/linux commit 3a0dd7ba4f44cdc116d83712f61e7c1a95be3588|base",
         "utility": {
           "relevance": 0.78,
           "novelty": 0.76,
@@ -1224,7 +1224,7 @@
         "candidateId": "linus_replay_candidate_0001",
         "depth": 1,
         "ordinal": 15,
-        "dedupeKey": "t2.structured professional linus replay candidate 0001 keybase github torvalds proof base",
+        "dedupeKey": "t2.structured professional|linus replay candidate 0001|keybase github torvalds proof|base",
         "utility": {
           "relevance": 0.78,
           "novelty": 0.76,
@@ -1262,7 +1262,7 @@
         "candidateId": "linus_replay_candidate_0001",
         "depth": 1,
         "ordinal": 18,
-        "dedupeKey": "t2.structured professional linus replay candidate 0001 torvalds linux submitting-patches documentation linus torvalds base",
+        "dedupeKey": "t2.structured professional|linus replay candidate 0001|torvalds/linux submitting-patches documentation linus torvalds|base",
         "utility": {
           "relevance": 0.78,
           "novelty": 0.76,
@@ -1300,7 +1300,7 @@
         "candidateId": "linus_replay_candidate_0001",
         "depth": 2,
         "ordinal": 33,
-        "dedupeKey": "t2.structured professional linus replay candidate 0001 torvalds linux submitting-patches documentation linus torvalds exact phrase",
+        "dedupeKey": "t2.structured professional|linus replay candidate 0001|\"torvalds/linux submitting-patches documentation linus torvalds\"|exact phrase",
         "utility": {
           "relevance": 0.78,
           "novelty": 0.84,

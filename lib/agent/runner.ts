@@ -1,6 +1,7 @@
 import { canTransitionPhase } from "../domain/state-machine";
 import { evaluateStop, type StopEvaluationOptions } from "../domain/stopping";
 import { classifySafety } from "../domain/safety";
+import { canonicalizeSourceUrl } from "../domain/evidence";
 import {
   containsRestrictedPublicContent,
   isCompactPhoneNumberValue,
@@ -8,7 +9,7 @@ import {
   urlContainsRestrictedParameters,
 } from "../domain/content-policy";
 import type { Clock, IdFactory } from "../domain/runtime";
-import { cloneJson, isJsonValue } from "../domain/runtime";
+import { cloneJson, isJsonValue, normalizeComparable } from "../domain/runtime";
 import { identitySignalGroundedByEvidence } from "../domain/candidates";
 import { assessConfidence } from "../domain/confidence";
 import { evidenceSupportsFindingCategory } from "../domain/integrity";
@@ -44,6 +45,7 @@ import {
   enqueueCandidateLeadFetchFrontier,
   enqueueCandidateUrlFrontier,
   frontierEntryById,
+  groundedGithubHandleForCandidate,
   isCanonicalCompilerSearchEntry,
   isDeniedResearchSource,
   isDeniedResearchTool,
@@ -472,6 +474,80 @@ interface ModelAccountingSummary {
   networkRequests: number | null;
   tokenUsage: Partial<TokenUsage>;
   usageUnavailableReason?: string;
+}
+
+interface ReusableIsolatedCandidate {
+  candidateId: string;
+  canonicalProfileUrl: string;
+  supportingEvidenceId: string;
+}
+
+interface ReusedCandidateRefBinding extends ReusableIsolatedCandidate {
+  candidateRef: string;
+}
+
+function safeCanonicalProfileUrl(rawUrl: string): string | null {
+  try {
+    const canonicalUrl = canonicalizeSourceUrl(rawUrl);
+    if (new URL(canonicalUrl).protocol !== "https:" || isDeniedResearchSource(canonicalUrl)) return null;
+    return canonicalUrl;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A later fetched-subject branch may point at a page Atlas already admitted
+ * for the same named subject. Reuse is deliberately narrower than candidate
+ * merging: name equality and a draft URL alone are never enough. The existing
+ * candidate must already own supporting direct-fetch evidence for the exact
+ * safely canonicalized profile URL. Ambiguous matches fail closed.
+ */
+function reusableIsolatedCandidate(
+  draft: CandidateDraft,
+  state: Pick<InvestigationState, "candidates" | "evidence">,
+): ReusableIsolatedCandidate | null {
+  const normalizedName = normalizeComparable(draft.displayName);
+  if (!normalizedName) return null;
+
+  const strongProfileSignals = (draft.signals ?? []).filter(
+    (signal) => signal.kind === "profile_url" && signal.strength === "strong",
+  );
+  const canonicalSignals = strongProfileSignals.map((signal) => safeCanonicalProfileUrl(signal.value));
+  if (canonicalSignals.length === 0 || canonicalSignals.some((value) => value === null)) return null;
+  const canonicalProfileUrls = [...new Set(canonicalSignals.filter((value): value is string => value !== null))];
+  if (canonicalProfileUrls.length !== 1) return null;
+  const canonicalProfileUrl = canonicalProfileUrls[0];
+
+  const eligible = state.candidates.flatMap((candidate) => {
+    if (candidate.normalizedName !== normalizedName) return [];
+    const supportingEvidence = state.evidence.filter(
+      (evidence) =>
+        evidence.candidateId === candidate.id &&
+        evidence.disposition === "supports" &&
+        evidence.verificationMethod === "direct_fetch" &&
+        evidence.canonicalUrl === canonicalProfileUrl,
+    );
+    if (supportingEvidence.length === 0) return [];
+    const evidenceIds = new Set(supportingEvidence.map((evidence) => evidence.id));
+    const groundedProfileSignal = candidate.signals.some(
+      (signal) =>
+        signal.kind === "profile_url" &&
+        signal.strength === "strong" &&
+        Boolean(signal.sourceEvidenceId && evidenceIds.has(signal.sourceEvidenceId)) &&
+        safeCanonicalProfileUrl(signal.value) === canonicalProfileUrl,
+    );
+    if (!groundedProfileSignal) return [];
+    return [
+      {
+        candidateId: candidate.id,
+        canonicalProfileUrl,
+        supportingEvidenceId: supportingEvidence[0].id,
+      },
+    ];
+  });
+
+  return eligible.length === 1 ? eligible[0] : null;
 }
 
 interface InternalModelAccounting extends ModelAttemptAccounting {
@@ -958,6 +1034,7 @@ async function executeActions(
     let actionTrustMutations = 0;
     const localCandidateIds = new Map<string, string>();
     const isolatedCandidateIds = new Set<string>();
+    const reusedCandidateRefs = new Map<string, ReusedCandidateRefBinding>();
     const pendingSignalUpdates: CandidateSignalUpdate[] = [];
     const sourceLane = sourceLaneForFrontierEntry(entry);
     const proposedCandidates: Array<{
@@ -999,6 +1076,28 @@ async function executeActions(
               ? "invalid_quarantined_candidate_branch"
               : "candidate_bound_action_cannot_create_candidates",
             expectedCandidateId: action.candidateId,
+          },
+        });
+        continue;
+      }
+      const reusable = proposal.isolated ? reusableIsolatedCandidate(draft, engine.snapshot()) : null;
+      if (reusable && draft.ref) {
+        localCandidateIds.set(draft.ref, reusable.candidateId);
+        reusedCandidateRefs.set(draft.ref, { ...reusable, candidateRef: draft.ref });
+        // This is not a candidate merge. It grants only this action's
+        // candidateRef-bound evidence for the exact same canonical page a
+        // narrow admission path. The ledger still decides whether the
+        // evidence is a duplicate, and no identity signals are copied over.
+        engine.trace.record("candidate.reused", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            candidateId: reusable.candidateId,
+            candidateRef: draft.ref,
+            canonicalProfileUrl: reusable.canonicalProfileUrl,
+            supportingEvidenceId: reusable.supportingEvidenceId,
+            groundedProfileSignal: true,
+            reason: "same_canonical_profile_direct_fetch",
           },
         });
         continue;
@@ -1130,6 +1229,7 @@ async function executeActions(
     const sourceTierContext = sourceTierContextForState(state, action.candidateId);
     for (const draft of result.evidence ?? []) {
       const candidateFromRef = draft.candidateRef ? localCandidateIds.get(draft.candidateRef) : undefined;
+      const reusedBinding = draft.candidateRef ? reusedCandidateRefs.get(draft.candidateRef) : undefined;
       const candidateId = draft.candidateId ?? candidateFromRef ?? action.candidateId;
       if (draft.candidateRef && !candidateFromRef) {
         engine.trace.record("evidence.admission", {
@@ -1162,9 +1262,29 @@ async function executeActions(
         continue;
       }
       if (
+        reusedBinding &&
+        (candidateFromRef !== reusedBinding.candidateId ||
+          safeCanonicalProfileUrl(draft.sourceUrl) !== reusedBinding.canonicalProfileUrl)
+      ) {
+        engine.trace.record("evidence.admission", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            admitted: false,
+            reason: "candidate_reuse_source_mismatch",
+            evidenceId: null,
+            candidateId: candidateId ?? null,
+            candidateRef: reusedBinding.candidateRef,
+            expectedSourceUrl: reusedBinding.canonicalProfileUrl,
+            sourceType: draft.sourceType,
+          },
+        });
+        continue;
+      }
+      if (
         action.candidateId &&
         candidateId !== action.candidateId &&
-        !(candidateFromRef && isolatedCandidateIds.has(candidateFromRef))
+        !(candidateFromRef && (isolatedCandidateIds.has(candidateFromRef) || reusedBinding !== undefined))
       ) {
         engine.trace.record("evidence.admission", {
           phase: engine.phase,
@@ -1519,9 +1639,33 @@ async function executeActions(
       }
       if (accepted.length === 0) continue;
       try {
-        engine.addCandidateSignals(update.candidateId, accepted);
+        const updatedCandidate = engine.addCandidateSignals(update.candidateId, accepted);
         mutations += 1;
         actionMutations += 1;
+        const groundedGithubHandle = groundedGithubHandleForCandidate(updatedCandidate);
+        if (
+          groundedGithubHandle &&
+          !isolatedCandidateIds.has(update.candidateId) &&
+          accepted.some(
+            (signal) =>
+              signal.kind === "social_handle" &&
+              Boolean(signal.sourceEvidenceId) &&
+              signal.normalizedValue === groundedGithubHandle,
+          )
+        ) {
+          const specialistFrontier = enqueueCandidateFrontier(
+            graph,
+            state.target,
+            updatedCandidate,
+            entry,
+            entry.nodeId,
+            availableTools,
+            engine.ids,
+            engine.clock.now(),
+          );
+          graph = specialistFrontier.graph;
+          recordSearchEvents(engine, specialistFrontier.events, spanId);
+        }
         if (
           accepted.some((signal) => {
             if (!signal.sourceEvidenceId) return false;
@@ -2073,6 +2217,7 @@ export async function* runResearch(
   let turnMutations = 0;
   let turnStarted = false;
   let traceCursor = 0;
+  let synthesisUnavailable = false;
 
   const emitPending = (): ResearchUpdate[] => {
     const pending = pendingUpdates(engine, traceCursor);
@@ -2084,6 +2229,12 @@ export async function* runResearch(
 
   const hasPendingFrontier = (): boolean =>
     graph.frontier.some((entry) => entry.status === "queued" || entry.status === "mutated");
+
+  const phaseTurnCapReached = (phase: ResearchPhase): boolean => {
+    const { limits, usage } = engine.snapshot().budget;
+    const cap = limits.phaseCaps[phase];
+    return cap !== undefined && (usage.phaseTurns[phase] ?? 0) >= cap;
+  };
 
   const finish = (decision: ReturnType<typeof evaluateStop>, stopOptions: StopEvaluationOptions = {}): void => {
     graph = terminalizeWithGraph(engine, graph, decision, stopOptions);
@@ -2138,20 +2289,23 @@ export async function* runResearch(
           finish(evaluateStop(engine.snapshot(), { canceled: true }), { canceled: true });
           return { route: "terminal", selectedFrontierEntryIds: [] };
         }
-        if (!engine.canStartTurn()) {
+        const cappedPhases = new Set<ResearchPhase>();
+        while (!engine.canStartTurn()) {
           const stop = evaluateStop(engine.snapshot(), completionStopOptions);
           if (stop.allowed) {
             finish(stop, completionStopOptions);
             return { route: "terminal", selectedFrontierEntryIds: [] };
           }
+          const cappedPhase = engine.phase;
+          cappedPhases.add(cappedPhase);
           const next = naturalNextPhase(engine.snapshot());
-          if (next && canTransitionPhase(engine.phase, next)) {
+          if (next && next !== "report" && !cappedPhases.has(next) && canTransitionPhase(engine.phase, next)) {
             engine.trace.record("phase.cap_reached", {
               phase: engine.phase,
-              payload: { nextPhase: next },
+              payload: { cappedPhase, nextPhase: next },
             });
             engine.transition(next);
-            if (engine.phase === "calibrate") return { route: "synthesize" };
+            if (engine.phase === "calibrate" && !synthesisUnavailable) return { route: "synthesize" };
           } else {
             finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
             return { route: "terminal", selectedFrontierEntryIds: [] };
@@ -2188,7 +2342,7 @@ export async function* runResearch(
             });
           }
           engine.replaceSearchGraph(graph);
-          if (engine.snapshot().evidence.length > 0 && advanceToCalibrate()) {
+          if (!synthesisUnavailable && engine.snapshot().evidence.length > 0 && advanceToCalibrate()) {
             return { route: "synthesize", selectedFrontierEntryIds: [] };
           }
           finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
@@ -2284,7 +2438,12 @@ export async function* runResearch(
         if (stop.allowed && stop.reason === "goal_satisfied" && completeIfSatisfied()) {
           return { route: "terminal" };
         }
-        if (engine.phase === "calibrate") return { route: "synthesize" };
+        if (engine.phase === "calibrate") {
+          if (!synthesisUnavailable) return { route: "synthesize" };
+          if (hasPendingFrontier()) return { route: "select_frontier" };
+          finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
+          return { route: "terminal" };
+        }
 
         const requestedNext = plannerDecision?.kind === "advance" ? plannerDecision.nextPhase : undefined;
         const next =
@@ -2293,7 +2452,9 @@ export async function* runResearch(
             : naturalNextPhase(engine.snapshot());
         if (next && canTransitionPhase(engine.phase, next)) {
           engine.transition(next);
-          return { route: next === "calibrate" ? "synthesize" : "select_frontier" };
+          return {
+            route: next === "calibrate" && !synthesisUnavailable ? "synthesize" : "select_frontier",
+          };
         }
         if (engine.phase === "report") {
           finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
@@ -2307,7 +2468,10 @@ export async function* runResearch(
           finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
           return { route: "terminal" };
         }
-        const synthesis = await synthesizeFindings(engine, dependencies, options.signal);
+        const synthesis = synthesisUnavailable
+          ? ({ mutations: 0, outcome: "unavailable" } as const)
+          : await synthesizeFindings(engine, dependencies, options.signal);
+        if (synthesis.outcome !== "succeeded") synthesisUnavailable = true;
         const deterministic = synthesis.outcome === "unavailable" ? admitDeterministicFallbackFinding(engine) : 0;
         graph = admitMissingFindingNodes(engine, graph);
         engine.replaceSearchGraph(graph);
@@ -2327,6 +2491,24 @@ export async function* runResearch(
         }
         if (hasPendingFrontier()) {
           if (engine.phase === "calibrate" && canTransitionPhase("calibrate", "corroborate")) {
+            if (phaseTurnCapReached("corroborate")) {
+              if (phaseTurnCapReached("calibrate")) {
+                finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
+                return { route: "terminal" };
+              }
+              engine.trace.record("phase.cap_reached", {
+                phase: engine.phase,
+                payload: {
+                  cappedPhase: "corroborate",
+                  nextPhase: "calibrate",
+                  pendingFrontierEntries: graph.frontier.filter(
+                    (entry) => entry.status === "queued" || entry.status === "mutated",
+                  ).length,
+                  reason: "pending_frontier_continues_in_calibrate",
+                },
+              });
+              return { route: "select_frontier" };
+            }
             engine.transition("corroborate");
           }
           return { route: "select_frontier" };

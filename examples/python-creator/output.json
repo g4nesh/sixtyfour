@@ -862,7 +862,7 @@
         "candidateId": null,
         "depth": 0,
         "ordinal": 3,
-        "dedupeKey": "t1.first party unbound the creator of python base",
+        "dedupeKey": "t1.first party|unbound|the creator of python|base",
         "utility": {
           "relevance": 0.94,
           "novelty": 0.88,
@@ -899,7 +899,7 @@
         "candidateId": "python_replay_candidate_0001",
         "depth": 1,
         "ordinal": 6,
-        "dedupeKey": "t3.institutional python replay candidate 0001 guido van rossum creator python foreword python.org base",
+        "dedupeKey": "t3.institutional|python replay candidate 0001|guido van rossum creator python foreword python.org|base",
         "utility": {
           "relevance": 0.78,
           "novelty": 0.76,
@@ -936,7 +936,7 @@
         "candidateId": null,
         "depth": 1,
         "ordinal": 17,
-        "dedupeKey": "t1.first party unbound the creator of python exact phrase",
+        "dedupeKey": "t1.first party|unbound|\"the creator of python\"|exact phrase",
         "utility": {
           "relevance": 0.94,
           "novelty": 0.96,
@@ -983,7 +983,7 @@
         "candidateId": "python_replay_candidate_0001",
         "depth": 1,
         "ordinal": 20,
-        "dedupeKey": "t3.institutional python replay candidate 0001 guido van rossum python creator conference biography base",
+        "dedupeKey": "t3.institutional|python replay candidate 0001|guido van rossum python creator conference biography|base",
         "utility": {
           "relevance": 0.78,
           "novelty": 0.76,
@@ -1019,7 +1019,7 @@
         "candidateId": null,
         "depth": 0,
         "ordinal": 23,
-        "dedupeKey": "t6.general discovery unbound the creator of python base",
+        "dedupeKey": "t6.general discovery|unbound|the creator of python|base",
         "utility": {
           "relevance": 0.58,
           "novelty": 0.88,

@@ -352,7 +352,13 @@ function genericSourceLane(tool: string): SourceLane | undefined {
     SOURCE_HIERARCHY.some((lane) => lane.allowedTools.includes(tool))
   )
     return undefined;
-  const slug = normalizeComparable(tool).replace(/\s+/g, "_");
+  // Generic tool lane identifiers deliberately retain the legacy ASCII-only
+  // slug grammar even though human-name comparison supports Unicode.
+  const slug = Array.from(normalizeComparable(tool))
+    .map((character) => (character.charCodeAt(0) <= 0x7f ? character : " "))
+    .join("")
+    .trim()
+    .replace(/\s+/g, "_");
   if (!slug) return undefined;
   const requiresCandidate = /(?:fetch|verify|corroborate|profile|company)/i.test(tool);
   const discoveryOnly = /search/i.test(tool);
@@ -440,6 +446,35 @@ export interface SourceTierContext {
   firstPartyHosts?: readonly string[];
   /** Explicit target organization names used only for exact domain-label matches. */
   organizationNames?: readonly string[];
+}
+
+const GITHUB_HANDLE_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+
+/**
+ * Extract a GitHub login only from the canonical public-profile URL shape.
+ * Repository paths, query variants, fragments, credentials, and alternate
+ * hosts are deliberately excluded so this value can safely parameterize a
+ * candidate-bound identity-proof lookup.
+ */
+export function githubHandleFromCanonicalProfileUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname.toLocaleLowerCase("en-US") !== "github.com" ||
+      url.username ||
+      url.password ||
+      url.port ||
+      url.search ||
+      url.hash
+    )
+      return null;
+    const match = url.pathname.match(/^\/([^/]+)\/?$/);
+    if (!match || !GITHUB_HANDLE_PATTERN.test(match[1])) return null;
+    return match[1].toLocaleLowerCase("en-US");
+  } catch {
+    return null;
+  }
 }
 
 function publicHostname(value: string): string | null {
