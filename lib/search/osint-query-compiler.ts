@@ -1,15 +1,20 @@
+import { containsRestrictedPublicContent } from "../domain/content-policy";
 import { normalizeWhitespace } from "../domain/runtime";
 import type { ParsedTarget, TargetKind } from "../domain/types";
 
 export const OSINT_QUERY_COMPILER_VERSION = 1 as const;
-export const MAX_OSINT_QUERY_VARIANTS = 10 as const;
+export const MAX_OSINT_QUERY_VARIANTS = 16 as const;
 export const MAX_INSTITUTION_SITE_SCOPES = 2 as const;
 export const MAX_COMPILED_OSINT_QUERY_CHARACTERS = 320 as const;
 
 const COMPILER_SITE_SCOPES = [
   { site: "github.com", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
+  { site: "linkedin.com", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
   { site: "orcid.org", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
   { site: "scholar.google.com", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
+  { site: "openreview.net", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
+  { site: "semanticscholar.org", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
+  { site: "openalex.org", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
   { site: "apps.apple.com", kind: "public_metadata_site", derivedFrom: "compiler_public_metadata_allowlist" },
 ] as const satisfies ReadonlyArray<{
   site: string;
@@ -86,7 +91,7 @@ export interface CompileOsintQueryOptions {
    * domains are intentionally not accepted as institution scopes.
    */
   institutionDomains?: readonly string[];
-  /** Defaults to the hard maximum and is always clamped to [1, 10]. */
+  /** Defaults to the hard maximum and is always clamped to [1, 16]. */
   maxQueries?: number;
 }
 
@@ -117,14 +122,15 @@ function sanitizePersonName(value: string | undefined): string | null {
   if (!value) return null;
   const normalized = normalizeWhitespace(value.normalize("NFKC")).replace(/["“”\\]/gu, "");
   const words = normalized.split(" ");
-  if (words.length < 2 || words.length > 5 || normalized.length > 160) return null;
+  if (words.length < 1 || words.length > 5 || normalized.length > 160 || containsRestrictedPublicContent(normalized))
+    return null;
   return words.every((word) => /^[\p{L}\p{M}][\p{L}\p{M}'’.-]{0,63}$/u.test(word)) ? normalized : null;
 }
 
 function sanitizeProfessionalPhrase(value: string | undefined): string | null {
   if (!value) return null;
   const normalized = normalizeWhitespace(value.normalize("NFKC")).replace(/["“”\\]/gu, "");
-  if (!normalized || normalized.length > 160) return null;
+  if (!normalized || normalized.length > 160 || containsRestrictedPublicContent(normalized)) return null;
   if (
     /\b(?:api[-_ ]?keys?|access[-_ ]?tokens?|passwords?|credentials?|private[-_ ]?keys?|secret(?:s|[-_ ]?keys?)?)\b/i.test(
       normalized,
@@ -152,9 +158,18 @@ function subjectContextForTarget(target: ParsedTarget): SubjectContext | null {
     if (!subjectPhrase) return null;
     const organization = sanitizeProfessionalPhrase(target.organizationHints[0]?.name);
     const role = sanitizeProfessionalPhrase(target.roleHints[0]);
+    const location = sanitizeProfessionalPhrase(target.locationHints[0]);
+    const contextPhrases = [organization, role, location]
+      .filter((item): item is string => Boolean(item))
+      .filter(
+        (item, index, all) =>
+          all.findIndex((candidate) => candidate.toLocaleLowerCase("en-US") === item.toLocaleLowerCase("en-US")) ===
+          index,
+      )
+      .slice(0, 3);
     return {
       subjectPhrase,
-      contextPhrases: [organization, role].filter((item): item is string => Boolean(item)).slice(0, 2),
+      contextPhrases,
     };
   }
 

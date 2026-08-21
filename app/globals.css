@@ -177,23 +177,9 @@ select:focus-visible,
 .atlas-wordmark {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  min-width: 6.5rem;
+  min-width: 4rem;
   color: var(--atlas-text);
   text-decoration: none;
-}
-
-.atlas-wordmark > span {
-  display: grid;
-  width: 1.75rem;
-  height: 1.75rem;
-  place-items: center;
-  border: 1px solid var(--atlas-line-strong);
-  border-radius: var(--radius-md);
-  background: var(--atlas-panel-strong);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
 }
 
 .atlas-wordmark strong {
@@ -246,28 +232,6 @@ select:focus-visible,
 }
 .command-search input::-webkit-search-cancel-button {
   display: none;
-}
-
-.research-depth-select {
-  height: 1.75rem;
-  max-width: 7rem;
-  flex: 0 0 auto;
-  border: 0;
-  border-left: 1px solid var(--atlas-line);
-  outline: 0;
-  padding: 0 var(--space-5) 0 var(--space-3);
-  background: transparent;
-  color: var(--atlas-text-soft);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-}
-
-.research-depth-select:focus-visible {
-  color: var(--atlas-text);
-}
-
-.research-depth-select:disabled {
-  opacity: 0.55;
 }
 
 .run-button,
@@ -906,7 +870,7 @@ kbd {
   z-index: 20;
   bottom: calc(var(--trace-height) + var(--space-3));
   left: calc(17rem + 5.5rem);
-  display: flex;
+  display: none;
   transform: none;
   align-items: center;
   gap: var(--space-3);
@@ -2021,6 +1985,26 @@ kbd {
   font-size: var(--text-sm);
 }
 
+.candidate-ambiguity-note {
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--atlas-amber) 45%, var(--atlas-line));
+  border-left: 3px solid var(--atlas-amber);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--atlas-amber) 7%, var(--atlas-panel));
+}
+
+.candidate-ambiguity-note strong {
+  color: var(--atlas-text);
+  font-size: var(--text-sm);
+}
+
+.candidate-ambiguity-note p {
+  margin: var(--space-1) 0 0;
+  color: var(--atlas-text-soft);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+
 .candidate-report-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2080,6 +2064,58 @@ kbd {
   font-size: var(--text-sm);
   line-height: var(--leading-body);
   overflow-wrap: anywhere;
+}
+
+.candidate-profile-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.candidate-profile-metrics span {
+  padding: 0.125rem 0.4rem;
+  border: 1px solid var(--atlas-line);
+  border-radius: 999px;
+  color: var(--atlas-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.candidate-profile-sources {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.candidate-profile-sources a {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--atlas-blue);
+  font-size: var(--text-xs);
+  line-height: var(--leading-ui);
+  overflow-wrap: anywhere;
+}
+
+.candidate-profile-sources svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex: 0 0 auto;
+}
+
+.candidate-report-card > small,
+.finding-candidate-label,
+.evidence-candidate-label {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--atlas-text-faint);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-ui);
 }
 
 .candidate-report-card code {
@@ -2447,7 +2483,7 @@ kbd {
     width: 15.5rem;
   }
   .graph-toolbar {
-    top: 6rem;
+    top: 7rem;
   }
   .graph-legend {
     display: none;
@@ -2513,11 +2549,6 @@ kbd {
   .command-search kbd {
     display: none;
   }
-  .research-depth-select {
-    max-width: 6.5rem;
-    padding-inline: var(--space-2) var(--space-4);
-  }
-
   .scope-row {
     top: var(--space-2);
     right: var(--space-2);
@@ -2543,7 +2574,7 @@ kbd {
   }
 
   .graph-toolbar {
-    top: 7.5rem;
+    top: 8.75rem;
     right: var(--space-2);
   }
   .graph-canvas {
@@ -2768,9 +2799,6 @@ kbd {
 }
 
 @media (max-width: 400px) {
-  .atlas-wordmark strong {
-    display: none;
-  }
   .report-button span,
   .graph-fit-button span,
   .graph-fit-button kbd {

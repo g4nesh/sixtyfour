@@ -4,6 +4,7 @@ import { createServer } from "vite";
 
 const vite = await createServer({
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -33,6 +34,10 @@ test("compiler emits a finite, ordered exact-name plan with public-professional 
       "professional_site",
       "professional_site",
       "professional_site",
+      "professional_site",
+      "professional_site",
+      "professional_site",
+      "professional_site",
       "public_metadata_site",
       "institution_site",
       "institution_site",
@@ -51,6 +56,10 @@ test("compiler emits a finite, ordered exact-name plan with public-professional 
     true,
   );
   assert.equal(
+    plan.queries.find((query) => query.site === "linkedin.com")?.query.startsWith('"Denise Hilary" site:linkedin.com '),
+    true,
+  );
+  assert.equal(
     plan.queries.find((query) => query.site === "orcid.org")?.query.startsWith('"Denise Hilary" site:orcid.org '),
     true,
   );
@@ -64,6 +73,12 @@ test("compiler emits a finite, ordered exact-name plan with public-professional 
   assert.equal(appStore?.kind, "public_metadata_site");
   assert.equal(appStore?.derivedFrom, "compiler_public_metadata_allowlist");
   assert.equal(appStore?.query.startsWith('"Denise Hilary" site:apps.apple.com '), true);
+  for (const site of ["openreview.net", "semanticscholar.org", "openalex.org"]) {
+    const query = plan.queries.find((item) => item.site === site);
+    assert.equal(query?.kind, "professional_site", site);
+    assert.equal(query?.derivedFrom, "compiler_professional_allowlist", site);
+    assert.equal(query?.query.startsWith(`"Denise Hilary" site:${site} `), true, site);
+  }
   assert.ok(
     plan.queries.some(
       (query) =>
@@ -79,13 +94,45 @@ test("compiler emits a finite, ordered exact-name plan with public-professional 
   }
   const allowedSites = new Set([
     "github.com",
+    "linkedin.com",
     "orcid.org",
     "scholar.google.com",
+    "openreview.net",
+    "semanticscholar.org",
+    "openalex.org",
     "apps.apple.com",
     "asu.edu",
     "ox.ac.uk",
   ]);
   assert.ok(plan.queries.every((query) => query.site === null || allowedSites.has(query.site)));
+});
+
+test("deep compiler can retain sixteen bounded variants without dropping allowlisted scopes", () => {
+  const plan = search.compileOsintQueries(domain.parseTarget("Renée D'Angelo Smith, Example Labs, in Phoenix"), {
+    institutionDomains: ["asu.edu", "ox.ac.uk"],
+  });
+
+  assert.equal(search.MAX_OSINT_QUERY_VARIANTS, 16);
+  assert.equal(plan.queries.length, 16);
+  assert.equal(
+    plan.diagnostics.some((item) => item.code === "query_limit_applied"),
+    false,
+  );
+  assert.deepEqual(
+    plan.queries.filter((query) => query.site).map((query) => query.site),
+    [
+      "github.com",
+      "linkedin.com",
+      "orcid.org",
+      "scholar.google.com",
+      "openreview.net",
+      "semanticscholar.org",
+      "openalex.org",
+      "apps.apple.com",
+      "asu.edu",
+      "ox.ac.uk",
+    ],
+  );
 });
 
 test("name transformations are mechanical and retain their derivation", () => {
@@ -126,6 +173,52 @@ test("parsed organization and role context produce quoted, deterministic profess
   assert.ok(
     role.queries.some((query) => query.kind === "public_document" && query.query.includes("intitle:leadership")),
   );
+});
+
+test("context compiler supports mononyms and retains bounded organization, role, and location discriminators", () => {
+  const mononym = search.compileOsintQueries(domain.parseTarget("Usher"));
+  assert.equal(mononym.status, "compiled");
+  assert.equal(mononym.queries[0].query, '"Usher"');
+  assert.equal(
+    mononym.queries.some((query) => query.kind === "initial_name"),
+    false,
+  );
+
+  const professor = search.compileOsintQueries(domain.parseTarget("Michael Jordan, professor at UC Berkeley"));
+  assert.ok(
+    professor.queries.some(
+      (query) => query.kind === "exact_context" && query.query.startsWith('"Michael Jordan" "UC Berkeley" "Professor"'),
+    ),
+  );
+
+  const location = search.compileOsintQueries(domain.parseTarget("Ganesh Talluri based in Peoria"));
+  assert.ok(
+    location.queries.some(
+      (query) => query.kind === "exact_context" && query.query.startsWith('"Ganesh Talluri" "Peoria"'),
+    ),
+  );
+
+  for (const query of ["Ganesh Talluri at Arizona State University", "Ganesh Talluri with Example Labs"]) {
+    const plan = search.compileOsintQueries(domain.parseTarget(query));
+    assert.ok(
+      plan.queries.some((item) => item.kind === "exact_context"),
+      query,
+    );
+  }
+});
+
+test("context compiler drops restricted location fragments before rendering search syntax", () => {
+  const base = domain.parseTarget("Ada Lovelace");
+  for (const unsafeContext of ["123 Main Street", "6025550199", "high school student age 16"]) {
+    const plan = search.compileOsintQueries({ ...base, locationHints: [unsafeContext] });
+    assert.equal(plan.status, "compiled");
+    assert.equal(JSON.stringify(plan).includes(unsafeContext), false, unsafeContext);
+    assert.equal(
+      plan.queries.some((query) => query.kind === "exact_context"),
+      false,
+      unsafeContext,
+    );
+  }
 });
 
 test("institution scopes are academic-only, bounded, deduplicated, and never echo rejects", () => {
@@ -209,7 +302,7 @@ test("query limit is clamped and reports omitted variants without changing stabl
     plan.queries.map((query) => query.id),
     ["osint_query_01", "osint_query_02", "osint_query_03"],
   );
-  assert.ok(plan.diagnostics.some((item) => item.code === "query_limit_applied" && item.count === 7));
+  assert.ok(plan.diagnostics.some((item) => item.code === "query_limit_applied" && item.count === 11));
 
   const clamped = search.compileOsintQueries(domain.parseTarget("Denise Hilary"), {
     maxQueries: 100_000,

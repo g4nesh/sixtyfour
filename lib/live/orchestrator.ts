@@ -22,6 +22,7 @@ import {
   normalizeComparable,
   labelOccursAsTokenPhrase,
   normalizeOrganizationIdentity,
+  normalizeWhitespace,
   type Clock,
   type IdFactory,
 } from "../domain/runtime";
@@ -227,6 +228,7 @@ function compactState(state: InvestigationState): JsonObject {
       name: state.target.name ?? null,
       roles: state.target.roleHints,
       organizations: state.target.organizationHints.map((item) => item.name),
+      locations: state.target.locationHints,
       explicitIdentifiers: state.target.identifiers
         .filter((item) => item.provenance === "user_input")
         .map((item) => ({ kind: item.kind, value: item.value })),
@@ -737,6 +739,14 @@ const ROLE_ATTESTATION_LABELS: Readonly<Record<string, readonly string[]>> = {
   "Product Designer": ["Product Designer"],
   Designer: ["Designer"],
   Researcher: ["Researcher", "Research Scientist"],
+  Professor: [
+    "Professor",
+    "Assistant Professor",
+    "Associate Professor",
+    "Adjunct Professor",
+    "Visiting Professor",
+    "Emeritus Professor",
+  ],
   Investor: ["Investor", "Partner"],
 };
 
@@ -1035,6 +1045,75 @@ function organizationMatches(left: string, right: string): boolean {
   return shorter.length >= 3 && (longer.startsWith(`${shorter} `) || longer.endsWith(` ${shorter}`));
 }
 
+/**
+ * Context is useful for identity binding only when it occurs near the exact
+ * extracted subject on the fetched page. A global footer or unrelated team
+ * member elsewhere on the document cannot satisfy the user's constraints.
+ */
+function subjectContextWindows(sourceText: string, subjectName: string): string[] {
+  const text = normalizeWhitespace(sourceText);
+  const subject = normalizeWhitespace(subjectName);
+  if (!text || !subject) return [];
+  const pattern = subject
+    .split(/\s+/u)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
+  const windows: string[] = [];
+  for (const match of text.matchAll(new RegExp(pattern, "giu"))) {
+    const index = match.index;
+    if (index === undefined) continue;
+    const start = Math.max(0, index - 240);
+    const end = Math.min(text.length, index + match[0].length + 760);
+    windows.push(text.slice(start, end));
+    if (windows.length >= 12) break;
+  }
+  return windows;
+}
+
+interface MatchedTargetContext {
+  organization: string | null;
+  role: string | null;
+  location: string | null;
+}
+
+function matchedTargetContext(
+  target: ParsedTarget,
+  subjectName: string,
+  organization: string | null,
+  sourceText: string,
+): MatchedTargetContext {
+  const windows = subjectContextWindows(sourceText, subjectName);
+  const organizationMatch = target.organizationHints.find(
+    (hint) =>
+      (organization ? organizationMatches(hint.name, organization) : false) ||
+      windows.some((window) => labelOccursAsTokenPhrase(window, hint.name)),
+  );
+  const roleMatch = target.roleHints.find((role) => {
+    const labels = ROLE_ATTESTATION_LABELS[role] ?? [role];
+    return windows.some((window) => labels.some((label) => labelOccursAsTokenPhrase(window, label)));
+  });
+  const locationMatch = target.locationHints.find((location) =>
+    windows.some((window) => labelOccursAsTokenPhrase(window, location)),
+  );
+  return {
+    organization: organizationMatch?.name ?? null,
+    role: roleMatch ?? null,
+    location: locationMatch ?? null,
+  };
+}
+
+function publicProfessionalClaimFocus(target: ParsedTarget): string {
+  const context = [
+    target.name ? `subject ${target.name}` : null,
+    target.roleHints.length > 0 ? `role ${target.roleHints.join(" or ")}` : null,
+    target.organizationHints.length > 0
+      ? `organization ${target.organizationHints.map((item) => item.name).join(" or ")}`
+      : null,
+    target.locationHints.length > 0 ? `coarse public location ${target.locationHints.join(" or ")}` : null,
+  ].filter((item): item is string => Boolean(item));
+  return `Public professional identity${context.length > 0 ? `; ${context.join("; ")}` : ""}`.slice(0, 500);
+}
+
 function exactIdentifierMatchesSource(target: ParsedTarget, sourceUrl: string | null): boolean {
   const normalizedSource = sourceUrl ? safeHttpsUrl(sourceUrl) : null;
   if (!normalizedSource) return false;
@@ -1081,6 +1160,8 @@ export interface ExtractedCandidateGate {
     | "subject_mismatch"
     | "organization_missing"
     | "organization_mismatch"
+    | "role_missing"
+    | "location_missing"
     | "strong_binding_missing";
 }
 
@@ -1095,6 +1176,7 @@ export function gateExtractedCandidate(
   subjectName: string | null,
   organization: string | null,
   sourceUrl: string | null = null,
+  sourceText = "",
 ): ExtractedCandidateGate {
   if (!candidateId) return { allowed: false, reason: "candidate_missing" };
   const candidate = state.candidates.find((item) => item.id === candidateId);
@@ -1123,23 +1205,38 @@ export function gateExtractedCandidate(
   if (!knownNames.some((knownName) => nameMatches(knownName, subjectName))) {
     return { allowed: false, reason: "subject_mismatch" };
   }
+  const context = matchedTargetContext(state.target, subjectName, organization, sourceText);
   const targetOrganizationConstraints = state.target.organizationHints.map((hint) => hint.name);
   const candidateOrganizationConstraints = candidate.signals
     .filter((signal) => signal.kind === "organization" && signal.assurance !== "self_asserted")
     .map((signal) => signal.value);
   if (targetOrganizationConstraints.length > 0 || candidateOrganizationConstraints.length > 0) {
-    if (!organization) return { allowed: false, reason: "organization_missing" };
+    if (!organization && !context.organization) return { allowed: false, reason: "organization_missing" };
     const targetMatches =
       targetOrganizationConstraints.length === 0 ||
-      targetOrganizationConstraints.some((known) => organizationMatches(known, organization));
+      (organization
+        ? targetOrganizationConstraints.some((known) => organizationMatches(known, organization))
+        : context.organization !== null);
     const candidateMatches =
       candidateOrganizationConstraints.length === 0 ||
-      candidateOrganizationConstraints.some((known) => organizationMatches(known, organization));
+      candidateOrganizationConstraints.some(
+        (known) =>
+          (organization ? organizationMatches(known, organization) : false) ||
+          subjectContextWindows(sourceText, subjectName).some((window) => labelOccursAsTokenPhrase(window, known)),
+      );
     if (!targetMatches || !candidateMatches) {
       return { allowed: false, reason: "organization_mismatch" };
     }
-    return { allowed: true, reason: "matched" };
   }
+  if (state.target.roleHints.length > 0 && !context.role) return { allowed: false, reason: "role_missing" };
+  if (state.target.locationHints.length > 0 && !context.location) return { allowed: false, reason: "location_missing" };
+  if (
+    targetOrganizationConstraints.length > 0 ||
+    candidateOrganizationConstraints.length > 0 ||
+    state.target.roleHints.length > 0 ||
+    state.target.locationHints.length > 0
+  )
+    return { allowed: true, reason: "matched" };
 
   // Name equality is never an identity edge. Without a pre-existing org
   // constraint, an arbitrary page may bind only when this exact source URL was
@@ -1483,16 +1580,9 @@ export function createLiveDependencies(
         modelTelemetry: mechanicalModelTelemetry(),
       };
     }
-    // Once a search has yielded opaque candidate-scoped leads, choosing the
-    // lead that belongs to a deterministic source lane is policy bookkeeping,
-    // not a reasoning task. Avoid another billed provider turn (and a new 429
-    // failure point) for this mechanical hand-off.
-    if (
-      context.state.evidence.some(
-        (evidence) => evidence.disposition !== "discovery_only" && evidence.sourceType !== "search_result",
-      )
-    )
-      return null;
+    // Each admitted search lead owns one canonical candidate/lane fetch pivot.
+    // Resolving that opaque capability is policy bookkeeping, not a reasoning
+    // task, and remains legal after earlier direct evidence was admitted.
     const selected = context.selectedFrontierEntries ?? [];
     const actions: Array<{
       frontierEntryId: string;
@@ -1502,53 +1592,36 @@ export function createLiveDependencies(
       candidateId?: string;
     }> = [];
     for (const entry of selected) {
-      if (!entry.candidateId || !entry.allowedTools.includes("fetch_public_source")) continue;
-      const leads = context.state.evidence.filter(
+      if (
+        !entry.candidateId ||
+        !entry.leadId ||
+        entry.allowedTools.length !== 1 ||
+        entry.allowedTools[0] !== "fetch_public_source"
+      )
+        continue;
+      const lead = context.state.evidence.find(
         (evidence) =>
           evidence.candidateId === entry.candidateId &&
           evidence.disposition === "discovery_only" &&
           evidence.sourceType === "search_result" &&
-          typeof evidence.attributes.leadId === "string",
+          evidence.attributes.leadId === entry.leadId &&
+          evidence.attributes.classifiedSourceTier === entry.sourceTier &&
+          evidence.attributes.classifiedSourceLaneId === entry.sourceLaneId,
       );
-      if (leads.length === 0) continue;
+      if (!lead) continue;
       const lane = sourceLaneById(entry.sourceLaneId);
-      const compatibleLeads = lane
-        ? leads.filter(
-            (evidence) =>
-              evidence.attributes.classifiedSourceTier === entry.sourceTier &&
-              typeof evidence.attributes.classifiedSourceType === "string" &&
-              lane.sourceTypes.includes(evidence.attributes.classifiedSourceType as EvidenceSourceType),
-          )
-        : undefined;
-      // Within the broad T2 lane, prefer directly fetchable structured/code
-      // surfaces over professional-network profiles that commonly require
-      // authentication. Equal source types retain provider evidence order.
-      const structuredLeadRank: Partial<Record<EvidenceSourceType, number>> = {
-        code_commit: 0,
-        code_profile: 1,
-        keybase_proof: 2,
-        public_document: 3,
-        professional_profile: 4,
-      };
-      const compatible = compatibleLeads
-        ?.map((evidence, index) => ({ evidence, index }))
-        .sort((left, right) => {
-          const leftType = left.evidence.attributes.classifiedSourceType as EvidenceSourceType;
-          const rightType = right.evidence.attributes.classifiedSourceType as EvidenceSourceType;
-          return (structuredLeadRank[leftType] ?? 0) - (structuredLeadRank[rightType] ?? 0) || left.index - right.index;
-        })[0]?.evidence;
-      // A mismatched lead is still executed through the zero-request preflight
-      // so the lane closes honestly; the lead itself remains available for its
-      // later compatible lane.
-      const lead = compatible ?? leads[0];
+      if (
+        !lane ||
+        typeof lead.attributes.classifiedSourceType !== "string" ||
+        !lane.sourceTypes.includes(lead.attributes.classifiedSourceType as EvidenceSourceType)
+      )
+        continue;
       actions.push({
         frontierEntryId: entry.id,
         tool: "fetch_public_source",
-        purpose: compatible
-          ? `Fetch the exact provider-attested lead in ${entry.sourceLaneId}.`
-          : `Validate whether the exact provider-attested lead qualifies for ${entry.sourceLaneId}.`,
+        purpose: `Fetch the exact provider-attested lead in ${entry.sourceLaneId}.`,
         arguments: {
-          leadId: lead.attributes.leadId as string,
+          leadId: entry.leadId,
           claimFocus: "Public professional identity and organization",
         },
         candidateId: entry.candidateId,
@@ -1679,6 +1752,7 @@ export function createLiveDependencies(
           allowedTools: entry.allowedTools,
           intent: entry.intent,
           queryHint: entry.queryHint,
+          leadId: entry.leadId ?? null,
           candidateId: entry.candidateId,
           pathCost: entry.pathCost,
           mutated: entry.mutation !== null,
@@ -2336,7 +2410,9 @@ export function createLiveDependencies(
             : null;
       const metadataObservation = passivePageMetadataObservation(fetched.data, metadataBinding);
       const metadataEvidence = metadataObservation ? [metadataObservation] : [];
-      const focus = stringValue(action.arguments.claimFocus, 500) ?? action.purpose;
+      const targetFocus = publicProfessionalClaimFocus(context.state.target);
+      const requestedFocus = stringValue(action.arguments.claimFocus, 500) ?? action.purpose;
+      const focus = `${targetFocus}; ${requestedFocus}`.slice(0, 500);
       const candidate = context.state.candidates.find((item) => item.id === boundCandidateId);
       const attestedSubjectName = stringValue(leadEvidence?.attributes.attestedSubjectName, 120);
       const querySubjectName = stringValue(leadEvidence?.attributes.querySubjectName, 120);
@@ -2453,12 +2529,21 @@ export function createLiveDependencies(
       }
       if (!extracted) throw new Error("evidence extraction did not produce a record");
       const family = inferSourceFamily(fetched.data.finalUrl);
+      const targetContext = extracted.subjectName
+        ? matchedTargetContext(
+            context.state.target,
+            extracted.subjectName,
+            extracted.organization,
+            fetched.data.normalizedText,
+          )
+        : { organization: null, role: null, location: null };
       const gate = gateExtractedCandidate(
         context.state,
         boundCandidateId,
         extracted.subjectName,
         extracted.organization,
         fetched.data.finalUrl,
+        fetched.data.normalizedText,
       );
       const evidenceBase: EvidenceDraft = {
         // A verbatim, locally validated quote is the admitted claim. The
@@ -2501,6 +2586,9 @@ export function createLiveDependencies(
           extractedSubjectLabel: extracted.subjectName,
           extractedOrganization: extracted.organization ? normalizeOrganizationIdentity(extracted.organization) : null,
           extractedOrganizationLabel: extracted.organization,
+          ...(targetContext.organization ? { matchedTargetOrganization: targetContext.organization } : {}),
+          ...(targetContext.role ? { matchedTargetRole: targetContext.role } : {}),
+          ...(targetContext.location ? { matchedTargetLocation: targetContext.location } : {}),
           extractiveClaim: true,
           extractionMethod,
           ...(deterministicGithubLead
@@ -2519,6 +2607,9 @@ export function createLiveDependencies(
           : undefined;
         const mismatchIsTargetConflict =
           gate.reason === "organization_mismatch" ||
+          (gate.reason === "organization_missing" && context.state.target.organizationHints.length > 0) ||
+          gate.reason === "role_missing" ||
+          gate.reason === "location_missing" ||
           (gate.reason === "subject_mismatch" && Boolean(context.state.target.normalizedName));
         const candidates: CandidateDraft[] =
           candidateRef && extracted.subjectName
@@ -2607,7 +2698,7 @@ export function createLiveDependencies(
               code: `candidate_binding_${gate.reason}`,
               severity: "warning",
               message:
-                "The fetched page described a different or unverified subject, so it was not attached to the requested candidate.",
+                "The fetched page described a different or insufficiently contextualized subject, so it was not attached to the requested candidate.",
               retryable: false,
             },
           ],
@@ -2637,12 +2728,36 @@ export function createLiveDependencies(
           assurance: "spoofable" as const,
           sourceFamily: family,
         },
-        ...(extracted.organization
+        ...((targetContext.organization ?? extracted.organization)
           ? [
               {
                 kind: "organization" as const,
-                value: extracted.organization,
-                normalizedValue: normalizeComparable(extracted.organization),
+                value: (targetContext.organization ?? extracted.organization)!,
+                normalizedValue: normalizeComparable((targetContext.organization ?? extracted.organization)!),
+                strength: "strong" as const,
+                assurance: "spoofable" as const,
+                sourceFamily: family,
+              },
+            ]
+          : []),
+        ...(targetContext.role
+          ? [
+              {
+                kind: "role" as const,
+                value: targetContext.role,
+                normalizedValue: normalizeComparable(targetContext.role),
+                strength: "strong" as const,
+                assurance: "spoofable" as const,
+                sourceFamily: family,
+              },
+            ]
+          : []),
+        ...(targetContext.location
+          ? [
+              {
+                kind: "location" as const,
+                value: targetContext.location,
+                normalizedValue: normalizeComparable(targetContext.location),
                 strength: "strong" as const,
                 assurance: "spoofable" as const,
                 sourceFamily: family,

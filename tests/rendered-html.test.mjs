@@ -35,11 +35,48 @@ async function render() {
   );
 }
 
+test("config-less SSR loaders cannot overwrite the live Vite dependency cache", async () => {
+  const roots = [
+    new URL("../tests/", import.meta.url),
+    new URL("../scripts/", import.meta.url),
+    new URL("../bin/", import.meta.url),
+  ];
+  const files = (await Promise.all(roots.map(listFiles))).flat();
+  const loaders = [];
+  for (const file of files) {
+    if (!/\.(?:mjs|js|ts)$/.test(file.pathname)) continue;
+    const source = await readFile(file, "utf8");
+    if (!/configFile:\s*false/.test(source)) continue;
+    loaders.push(file.pathname);
+    assert.match(
+      source,
+      /configFile:\s*false,\s*cacheDir:\s*`node_modules\/\.vite-atlas-ssr\/\$\{process\.pid\}`/,
+      `${file.pathname} shares Vite's live client cache`,
+    );
+  }
+  assert.ok(loaders.length > 0, "expected at least one config-less SSR loader");
+});
+
 test("server-renders the black graph-first Atlas workspace", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-  assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+  assert.equal(
+    response.headers.get("content-security-policy"),
+    [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "connect-src 'self' data:",
+      "font-src 'self' data:",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+      "img-src 'self' data: blob:",
+      "object-src 'none'",
+      "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "worker-src 'self' blob:",
+    ].join("; "),
+  );
   assert.equal(response.headers.get("cross-origin-opener-policy"), "same-origin");
   assert.equal(
     response.headers.get("permissions-policy"),
@@ -52,9 +89,9 @@ test("server-renders the black graph-first Atlas workspace", async () => {
   assert.match(html, /<title>Atlas — People Intelligence<\/title>/i);
   assert.match(html, /class="atlas-shell"/);
   assert.match(html, /Public-professional research input/);
-  assert.match(html, /Research depth/);
-  assert.match(html, /<option value="deep" selected="">Deep<\/option>/);
-  assert.match(html, /Name, role, organization, work email, URL, handle, or publication/);
+  assert.match(html, /Any public context: name, role, company, city\/region, adult school, URL, or handle/);
+  assert.match(html, /<strong>Atlas<\/strong>/);
+  assert.doesNotMatch(html, /atlas-research-depth|research-depth-select|>Quick<|>Standard<|>Deep</);
   // Live-first workspace: no replay/example mode switch is exposed in the UI.
   assert.doesNotMatch(html, /Replay/);
   // Public-professional modality toggles are rendered.
@@ -67,7 +104,7 @@ test("server-renders the black graph-first Atlas workspace", async () => {
   assert.match(html, /Run a search to build the graph/);
   assert.match(html, /it is never invented from prose/i);
   // Safety scope banner stays visible on the input.
-  assert.match(html, /Home address, personal phone, and data-broker records are out of scope/);
+  assert.match(html, /Home addresses, personal phones, data-broker records, and research about minors are refused/);
   assert.match(html, /<main id="graph-workspace"/);
   assert.doesNotMatch(html, /Investigate a person, not just a name|class="codegraph"|class="dossier-panel"/i);
   assert.doesNotMatch(html, /Henry Wang|Illustrative public-source run|aria-valuenow="72"/i);
@@ -103,7 +140,7 @@ test("built Worker image route fails closed when local bindings are absent", asy
 });
 
 test("graph components preserve canonical state, accessible fallbacks, and client-only heavy libraries", async () => {
-  const [page, workbench, graphModel, workspace, canvas, inspector, report, layout, css, packageJson] =
+  const [page, workbench, graphModel, workspace, canvas, inspector, report, layout, css, packageJson, viteConfig] =
     await Promise.all([
       readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
       readFile(new URL("../app/workbench.tsx", import.meta.url), "utf8"),
@@ -115,6 +152,7 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
       readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
       readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
       readFile(new URL("../package.json", import.meta.url), "utf8"),
+      readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
     ]);
 
   await assert.rejects(access(new URL("app/_sites-preview", projectRoot)));
@@ -125,7 +163,9 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(workbench, /<label className="sr-only" htmlFor="atlas-query">/);
   assert.match(workbench, /aria-live="polite"/);
   assert.match(workbench, /aria-describedby="research-scope-note"/);
-  assert.match(workbench, /useState<ResearchDepth>\("deep"\)/);
+  assert.match(workbench, /requestedDepth: "deep"/);
+  assert.doesNotMatch(workbench, /ResearchDepth|researchDepth|atlas-research-depth|research-depth-select/);
+  assert.doesNotMatch(workbench, /<span aria-hidden="true">A<\/span>/);
   assert.match(workbench, /AbortController/);
   assert.match(workbench, /\/api\/research/);
   assert.match(workbench, /mergeGraphEvent/);
@@ -136,6 +176,8 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(workbench, /event\.key\.toLowerCase\(\) === "l"/);
   assert.match(workbench, /event\.key\.toLowerCase\(\) === "r"/);
   assert.doesNotMatch(workbench, /@xyflow\/react|elkjs/);
+  assert.doesNotMatch(css, /\.atlas-wordmark\s*>\s*span|\.research-depth-select/);
+  assert.match(layout, /<html lang="en" className=\{`\$\{geistSans\.variable\}/);
 
   assert.match(graphModel, /value\.schemaVersion !== 2/);
   assert.match(graphModel, /report\.searchGraph/);
@@ -147,6 +189,8 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(workspace, /rejected same-name candidates remain visible/i);
   assert.match(canvas, /@xyflow\/react/);
   assert.match(canvas, /import\("elkjs\/lib\/elk\.bundled\.js"\)/);
+  assert.match(viteConfig, /client:\s*\{\s*\/\/[^]*?optimizeDeps:\s*\{\s*include:/);
+  assert.match(viteConfig, /include:\s*\["@xyflow\/react", "elkjs\/lib\/elk\.bundled\.js", "@react-pdf\/renderer"\]/);
   assert.match(canvas, /deterministicGraphLayout/);
   assert.match(canvas, /BaseEdge/);
   assert.match(canvas, /ORTHOGONAL/);

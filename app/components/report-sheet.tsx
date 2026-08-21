@@ -228,9 +228,24 @@ export function ReportSheet({
   }, [onClose, open]);
 
   if (!open) return null;
-  const candidates = reportCandidates(report);
+  const allCandidates = reportCandidates(report);
   const evidence = reportEvidence(report);
   const findings = report?.findings ?? [];
+  const selectedCandidateId = report?.identity?.selectedCandidateId ?? report?.selectedCandidateId;
+  const candidates = [...allCandidates]
+    .sort((left, right) => {
+      const leftId = left.id ?? left.candidateId;
+      const rightId = right.id ?? right.candidateId;
+      if (leftId === selectedCandidateId) return -1;
+      if (rightId === selectedCandidateId) return 1;
+      return (
+        (candidateScore(right) ?? 0) - (candidateScore(left) ?? 0) || String(leftId).localeCompare(String(rightId))
+      );
+    })
+    .slice(0, 5);
+  const candidateNameById = new Map(
+    allCandidates.map((candidate) => [candidate.id ?? candidate.candidateId, candidateName(candidate)]),
+  );
   const reportId = report?.runId ?? report?.run?.id ?? "atlas-report";
   const coverageDiagnostics = [
     ...new Map(
@@ -348,13 +363,37 @@ export function ReportSheet({
             <section className="report-section" aria-labelledby="report-candidates-heading">
               <div className="report-section-heading">
                 <h3 id="report-candidates-heading">Identity branches</h3>
-                <span>{candidates.length}</span>
+                <span>{allCandidates.length}</span>
               </div>
+              {allCandidates.length > 1 ? (
+                <div className="candidate-ambiguity-note" role="note">
+                  <strong>{allCandidates.length} distinct candidate branches retained</strong>
+                  <p>
+                    Atlas did not merge same-name results without strong corroborating identifiers. The five
+                    highest-ranked candidate profiles are consolidated below.
+                  </p>
+                </div>
+              ) : null}
               {candidates.length > 0 ? (
                 <div className="candidate-report-grid">
                   {candidates.map((candidate) => {
                     const id = candidate.id ?? candidate.candidateId ?? candidateName(candidate);
                     const score = candidateScore(candidate);
+                    const branchEvidence = evidence.filter((item) => item.candidateId === id);
+                    const branchFindings = findings.filter((finding) => finding.candidateId === id);
+                    const directEvidence = branchEvidence.filter(
+                      (item) => item.disposition !== "discovery_only" && item.verificationMethod !== "search_discovery",
+                    );
+                    const branchSourceByHref = new Map<string, { href: string; title: string }>();
+                    for (const item of directEvidence) {
+                      const href = evidenceUrl(item);
+                      if (!href || branchSourceByHref.has(href)) continue;
+                      branchSourceByHref.set(href, {
+                        href,
+                        title: item.title ?? item.source?.title ?? item.claim ?? domainOf(href, "source"),
+                      });
+                    }
+                    const branchSources = [...branchSourceByHref.values()].slice(0, 3);
                     return (
                       <article key={id} className={`candidate-report-card status-${candidate.status ?? "unknown"}`}>
                         <header>
@@ -368,6 +407,24 @@ export function ReportSheet({
                             candidate.separationReason ??
                             "Candidate kept as a distinct graph branch."}
                         </p>
+                        <div className="candidate-profile-metrics">
+                          <span>{directEvidence.length} direct</span>
+                          <span>{branchEvidence.length} evidence</span>
+                          <span>{branchFindings.length} findings</span>
+                        </div>
+                        {branchSources.length > 0 ? (
+                          <ul className="candidate-profile-sources">
+                            {branchSources.map((source) => (
+                              <li key={source.href}>
+                                <a href={source.href} target="_blank" rel="noreferrer">
+                                  <ExternalIcon /> {source.title}
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <small>No directly fetched source was bound to this branch.</small>
+                        )}
                         <code>{id}</code>
                       </article>
                     );
@@ -392,6 +449,9 @@ export function ReportSheet({
                           <span>{humanize(finding.category)}</span>
                           <strong>{humanize(finding.confidence?.label ?? finding.confidenceBand)}</strong>
                         </header>
+                        <small className="finding-candidate-label">
+                          Candidate: {candidateNameById.get(finding.candidateId) ?? "Unresolved candidate branch"}
+                        </small>
                         <h4>{finding.title}</h4>
                         <p>{finding.description ?? finding.summary ?? finding.rationale}</p>
                         <footer className="finding-sources">
@@ -459,6 +519,11 @@ export function ReportSheet({
                             {item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} ·{" "}
                             {discoveryOnly ? discoveryLabel : humanize(item.verificationMethod)}
                           </small>
+                          {item.candidateId ? (
+                            <small className="evidence-candidate-label">
+                              Candidate: {candidateNameById.get(item.candidateId) ?? item.candidateId}
+                            </small>
+                          ) : null}
                           <strong>{title}</strong>
                           <p>
                             {discoveryOnly ? discoverySummary : (item.excerpt ?? item.minimalExcerpt ?? item.claim)}
@@ -498,7 +563,7 @@ export function ReportSheet({
           <div className="report-empty">
             <span aria-hidden="true">□</span>
             <h3>No report loaded</h3>
-            <p>Run a verified replay or live investigation before exporting.</p>
+            <p>Run a live investigation before exporting.</p>
           </div>
         )}
       </section>

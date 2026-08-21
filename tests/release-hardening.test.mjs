@@ -7,6 +7,7 @@ const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const vite = await createServer({
   root: projectRoot,
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -394,7 +395,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   );
 });
 
-test("extracted pages must name the candidate and satisfy every known organization constraint", () => {
+test("extracted pages must name the candidate and satisfy bounded organization, role, and location context", () => {
   const targetEngine = createEngine("Chris Anderson, TED", "candidate-gate-target");
   const targetCandidate = addCandidate(targetEngine, "Chris Anderson");
   const state = targetEngine.snapshot();
@@ -465,6 +466,65 @@ test("extracted pages must name the candidate and satisfy every known organizati
     allowed: false,
     reason: "organization_mismatch",
   });
+
+  const contextualEngine = createEngine(
+    "Michael Jordan, Professor, at UC Berkeley, in Berkeley California",
+    "candidate-gate-context",
+  );
+  const contextualCandidate = addCandidate(contextualEngine, "Michael Jordan");
+  const contextualState = contextualEngine.snapshot();
+  assert.deepEqual(contextualState.target.roleHints, ["Professor"]);
+  assert.deepEqual(
+    contextualState.target.organizationHints.map((item) => item.name),
+    ["UC Berkeley"],
+  );
+  assert.deepEqual(contextualState.target.locationHints, ["Berkeley California"]);
+  assert.deepEqual(
+    gateExtractedCandidate(
+      contextualState,
+      contextualCandidate.id,
+      "Michael Jordan",
+      null,
+      "https://berkeley.example/michael-jordan",
+      "Michael Jordan is an Associate Professor at UC Berkeley in Berkeley California.",
+    ),
+    { allowed: true, reason: "matched" },
+    "exact context near the named subject can bind a page without model-inferred fields",
+  );
+  assert.deepEqual(
+    gateExtractedCandidate(
+      contextualState,
+      contextualCandidate.id,
+      "Michael Jordan",
+      null,
+      "https://berkeley.example/michael-jordan",
+      "Michael Jordan is listed by UC Berkeley in Berkeley California.",
+    ),
+    { allowed: false, reason: "role_missing" },
+  );
+  assert.deepEqual(
+    gateExtractedCandidate(
+      contextualState,
+      contextualCandidate.id,
+      "Michael Jordan",
+      null,
+      "https://berkeley.example/michael-jordan",
+      "Michael Jordan is a Professor at UC Berkeley.",
+    ),
+    { allowed: false, reason: "location_missing" },
+  );
+  assert.deepEqual(
+    gateExtractedCandidate(
+      contextualState,
+      contextualCandidate.id,
+      "Michael Jordan",
+      null,
+      "https://berkeley.example/michael-jordan",
+      `Michael Jordan profile. ${"unrelated ".repeat(120)}Professor at UC Berkeley in Berkeley California.`,
+    ),
+    { allowed: false, reason: "organization_missing" },
+    "context elsewhere on a long page cannot bind an unrelated same-name section",
+  );
 
   const organizationEngine = createEngine("Sixtyfour AI", "candidate-gate-organization");
   const organizationCandidate = addCandidate(organizationEngine, "Sixtyfour AI");

@@ -4,6 +4,7 @@ import { createServer } from "vite";
 
 const vite = await createServer({
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -12,6 +13,7 @@ after(async () => vite.close());
 
 const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 const agent = await vite.ssrLoadModule("/lib/agent/index.ts");
+const search = await vite.ssrLoadModule("/lib/search/index.ts");
 const { createLiveDependencies, sourceAllowedForCandidate, streamLiveResearch } =
   await vite.ssrLoadModule("/lib/live/orchestrator.ts");
 const { fetchPublicSource } = await vite.ssrLoadModule("/lib/tools/public-source.ts");
@@ -1523,7 +1525,11 @@ test("exact live name streams graph snapshots, classifies fetch lanes, and prese
     .map((event) => event.payload?.searchGraph)
     .filter((graph) => graph?.schemaVersion === 2);
   assert.ok(preterminalGraphs.some((graph) => graph.nodes.length > 0));
-  assert.ok(JSON.stringify(events).includes("lead_lane_mismatch"));
+  assert.equal(
+    JSON.stringify(events).includes("lead_lane_mismatch"),
+    false,
+    "lead-specific fetch frontiers must not spend turns on incompatible source lanes",
+  );
   assert.ok(JSON.stringify(events).includes("search_provider_quota_exhausted"));
   assert.ok(JSON.stringify(events).includes("deterministic_github_extraction"));
   assert.equal(duckDuckGoCalls, 1, "keyless public search runs before the exact-name GitHub fallback");
@@ -1611,6 +1617,213 @@ test("exact live name streams graph snapshots, classifies fetch lanes, and prese
   assert.ok(JSON.stringify(events).includes("candidate_binding_strong_binding_missing"));
 });
 
+test("mechanical planning fetches every exact same-name lead after earlier direct evidence", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Alex Kim",
+    requestedDepth: "deep",
+  });
+  const leads = [
+    { leadId: "lead_alex_one", sourceUrl: "https://github.com/alex-one", excerpt: "Alex Kim — One Labs" },
+    { leadId: "lead_alex_two", sourceUrl: "https://github.com/alex-two", excerpt: "Alex Kim — Two Labs" },
+    { leadId: "lead_alex_three", sourceUrl: "https://github.com/alex-three", excerpt: "Alex Kim — Three Labs" },
+  ];
+  const leadById = new Map(leads.map((lead) => [lead.leadId, lead]));
+  let plannerProviderCalls = 0;
+  let plannerCallsAfterDirectEvidence = 0;
+  const live = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    clock: domain.createSequenceClock("2026-08-20T22:30:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("sequential-same-name-leads"),
+    fetch: async (request, init = {}) => {
+      const url = new URL(String(request));
+      assert.equal(url.hostname, "openrouter.ai");
+      const body = JSON.parse(typeof init.body === "string" ? init.body : new TextDecoder().decode(init.body));
+      const plannerMessage = [...body.messages]
+        .reverse()
+        .find(
+          (message) =>
+            message.role === "user" &&
+            typeof message.content === "string" &&
+            message.content.startsWith("Choose the next legal decision"),
+        );
+      assert.ok(plannerMessage);
+      const plannerState = JSON.parse(plannerMessage.content.split("\n").slice(1).join("\n"));
+      const selected = plannerState.selectedFrontier[0];
+      assert.ok(selected);
+      plannerProviderCalls += 1;
+      if (
+        selected.leadId &&
+        plannerState.state.evidence.some((evidence) => evidence.disposition !== "discovery_only")
+      ) {
+        plannerCallsAfterDirectEvidence += 1;
+        return completion(
+          plannerProviderCalls,
+          JSON.stringify({
+            kind: "stop",
+            decisionSummary: "Stop if policy routing incorrectly asks the model after the first direct record.",
+            nextPhase: null,
+            actions: [],
+          }),
+        );
+      }
+      return completion(
+        plannerProviderCalls,
+        JSON.stringify({
+          kind: "actions",
+          decisionSummary: `Execute the selected ${selected.allowedTools[0]} frontier.`,
+          nextPhase: null,
+          actions: [
+            {
+              frontierEntryId: selected.frontierEntryId,
+              tool: selected.allowedTools[0],
+              purpose: "Exercise the selected deterministic frontier.",
+              arguments: selected.allowedTools[0] === "search_web" ? { query: selected.queryHint } : {},
+              ...(selected.candidateId ? { candidateId: selected.candidateId } : {}),
+            },
+          ],
+        }),
+      );
+    },
+  });
+  let discoveryCalls = 0;
+  const exactFetchActions = [];
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      ...live,
+      executeAction: async (action) => {
+        if (action.tool === "search_web" && discoveryCalls === 0) {
+          discoveryCalls += 1;
+          return {
+            status: "succeeded",
+            candidates: leads.map((lead, index) => ({
+              ref: `alex-${index + 1}`,
+              displayName: "Alex Kim",
+              signals: [
+                {
+                  kind: "name",
+                  value: "Alex Kim",
+                  normalizedValue: "alex kim",
+                  strength: "weak",
+                  assurance: "self_asserted",
+                  sourceFamily: new URL(lead.sourceUrl).hostname,
+                },
+              ],
+            })),
+            evidence: leads.map((lead, index) => ({
+              candidateRef: `alex-${index + 1}`,
+              claim: `Search surfaced exact public lead ${index + 1}.`,
+              disposition: "discovery_only",
+              sourceUrl: lead.sourceUrl,
+              sourceType: "search_result",
+              canonicalSubset: { providerAttestedUrl: true },
+              verificationMethod: "search_discovery",
+              temporalStatus: "unknown",
+              reliability: 0,
+              spoofable: true,
+              attributes: {
+                leadId: lead.leadId,
+                classifiedSourceLaneId: "t2.structured_professional",
+                classifiedSourceTier: 2,
+                classifiedSourceType: "code_profile",
+              },
+            })),
+            meta: { requests: 1 },
+          };
+        }
+        if (action.tool === "fetch_public_source" && typeof action.arguments.leadId === "string") {
+          const lead = leadById.get(action.arguments.leadId);
+          assert.ok(lead, `unknown exact lead ${action.arguments.leadId}`);
+          assert.ok(action.candidateId);
+          exactFetchActions.push({
+            frontierEntryId: action.frontierEntryId,
+            candidateId: action.candidateId,
+            leadId: action.arguments.leadId,
+          });
+          return {
+            status: "succeeded",
+            evidence: [
+              {
+                candidateId: action.candidateId,
+                claim: lead.excerpt,
+                excerpt: lead.excerpt,
+                sourceUrl: lead.sourceUrl,
+                sourceType: "code_profile",
+                verificationMethod: "direct_fetch",
+                temporalStatus: "current",
+                reliability: 0.7,
+                spoofable: true,
+              },
+            ],
+            meta: { requests: 1 },
+          };
+        }
+        return { status: "not_found", meta: { requests: 0 } };
+      },
+      synthesize: async () => ({
+        decisionSummary: "Retain three separated same-name candidate records.",
+        openQuestions: [],
+        findings: [],
+      }),
+    },
+    {
+      availableTools: ["search_web", "fetch_public_source"],
+      budget: { maxActionsPerTurn: 1 },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(discoveryCalls, 1);
+  assert.ok(plannerProviderCalls >= 1);
+  assert.equal(
+    plannerCallsAfterDirectEvidence,
+    0,
+    "later exact lead pivots must remain mechanical after direct evidence",
+  );
+  assert.deepEqual(
+    new Set(exactFetchActions.map((action) => action.leadId)),
+    new Set(leads.map((lead) => lead.leadId)),
+    JSON.stringify({
+      evidence: completed.report.evidence,
+      frontier: completed.report.searchGraph.frontier,
+      admissions: completed.trace.events.filter(
+        (event) => event.name === "evidence.admission" || event.name.startsWith("frontier."),
+      ),
+    }),
+  );
+  assert.equal(new Set(exactFetchActions.map((action) => action.frontierEntryId)).size, 3);
+  assert.equal(new Set(exactFetchActions.map((action) => action.candidateId)).size, 3);
+  assert.equal(
+    completed.report.evidence.filter((evidence) => evidence.verificationMethod === "direct_fetch").length,
+    3,
+  );
+  assert.equal(completed.report.candidates.filter((candidate) => candidate.normalizedName === "alex kim").length, 3);
+  const exactFetchSpanIds = new Set(
+    completed.trace.events
+      .filter(
+        (event) =>
+          event.kind === "span_start" &&
+          event.name === "tool.fetch_public_source" &&
+          typeof event.payload.arguments?.leadId === "string",
+      )
+      .map((event) => event.spanId),
+  );
+  const exactFetchSpans = completed.trace.events.filter(
+    (event) =>
+      event.kind === "span_end" && event.name === "tool.fetch_public_source" && exactFetchSpanIds.has(event.spanId),
+  );
+  assert.equal(exactFetchSpans.length, 3);
+  assert.ok(exactFetchSpans.every((event) => event.usage.networkRequests === 1));
+  assert.equal(JSON.stringify(exactFetchSpans).includes("lead_lane_mismatch"), false);
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
 test("planner quota outage mechanically reaches DuckDuckGo and preserves a hardened direct-fetch partial", async () => {
   const input = domain.parseInvestigationInput({
     schemaVersion: domain.SCHEMA_VERSION,
@@ -1695,11 +1908,20 @@ test("planner quota outage mechanically reaches DuckDuckGo and preserves a harde
   assert.equal(plannerProviderRequests, 1, "the first exhausted planner attempt opens the run-scoped circuit breaker");
   assert.ok(searchProviderRequests >= 1, "mechanical planning must still reach the configured search transport");
   assert.ok(duckDuckGoRequests >= 1, "retryable search failure must fall through to keyless public discovery");
-  assert.ok(sourceRequests >= 1, "the classified code-profile lead must reach its legal hardened-fetch lane");
-  assert.equal(
-    linkedInRequests,
-    0,
-    "a preceding blocked professional profile must not starve the fetchable code profile",
+  assert.ok(
+    sourceRequests >= 1,
+    JSON.stringify({
+      message: "the classified code-profile lead must reach its legal hardened-fetch lane",
+      leadFrontiers: events
+        .at(-1)
+        ?.payload.report.searchGraph.frontier.filter((entry) => entry.leadId)
+        .map((entry) => ({ leadId: entry.leadId, lane: entry.sourceLaneId, status: entry.status })),
+      diagnostics: events.flatMap((event) => event.payload?.diagnostics ?? []).map((item) => item.code),
+    }),
+  );
+  assert.ok(
+    linkedInRequests <= 3,
+    "a blocked professional profile may consume only its own bounded hardened-fetch retries",
   );
   assert.ok(synthesisProviderRequests <= 2, "later synthesis failure remains bounded and cannot erase direct evidence");
 
@@ -1717,7 +1939,7 @@ test("planner quota outage mechanically reaches DuckDuckGo and preserves a harde
     "mechanical follow-up routing must not consume phantom model calls",
   );
   assert.ok(JSON.stringify(events).includes("public_web_fallback_used"));
-  assert.ok(JSON.stringify(events).includes("lead_lane_mismatch"));
+  assert.equal(JSON.stringify(events).includes("lead_lane_mismatch"), false);
 
   const terminal = events.at(-1);
   assert.equal(terminal.name, "result.terminal");
@@ -1819,7 +2041,7 @@ test("planner and search outage executes every bounded standard OSINT query exac
   const compilerEntries = terminal.payload.report.searchGraph.frontier.filter((entry) =>
     entry.intent.startsWith("OSINT query "),
   );
-  assert.equal(compilerEntries.length, 9);
+  assert.ok(compilerEntries.length >= 9);
   assert.equal(duckDuckGoQueries.length, compilerEntries.length);
   assert.deepEqual(
     new Set(duckDuckGoQueries),

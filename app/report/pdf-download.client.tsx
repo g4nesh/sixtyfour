@@ -228,12 +228,32 @@ function contextHuman(value: string): string {
   return human(value.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("-", " "));
 }
 
-function chunkItems<T>(items: readonly T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
+function evidencePageWeight(evidence: ReportEvidenceView): number {
+  const textWeight = Math.min(0.7, (evidence.claim.length + (evidence.exactExcerpt?.length ?? 0)) / 900);
+  return 1 + textWeight + (evidence.temporalComparison ? 1.25 : 0) + (evidence.pageFootprint ? 1.25 : 0);
+}
+
+/**
+ * Keep variable-height context cards from being grouped onto an explicit page
+ * that React-PDF must immediately abandon. Context-rich records receive their
+ * own page; two compact records may share one page.
+ */
+function evidencePagesFor(viewModel: ReportViewModel): ReportEvidenceView[][] {
+  const pages: ReportEvidenceView[][] = [];
+  let current: ReportEvidenceView[] = [];
+  let weight = 0;
+  for (const evidence of viewModel.evidence) {
+    const nextWeight = evidencePageWeight(evidence);
+    if (current.length > 0 && (current.length >= 2 || weight + nextWeight > 2.6)) {
+      pages.push(current);
+      current = [];
+      weight = 0;
+    }
+    current.push(evidence);
+    weight += nextWeight;
   }
-  return chunks;
+  if (current.length > 0) pages.push(current);
+  return pages.length > 0 ? pages : [[]];
 }
 
 function safeMetadataDate(value: string): Date | undefined {
@@ -324,6 +344,9 @@ function FindingCard({ finding, index }: { finding: ReportFindingView; index: nu
           {human(finding.confidenceLabel)} {percent(finding.confidenceScore)}
         </Text>
       </View>
+      <Text style={styles.evidenceLabel}>
+        CANDIDATE / {finding.candidateName} / {finding.candidateId}
+      </Text>
       <Text style={styles.findingDescription}>{finding.description}</Text>
       <Text style={styles.citationLine}>
         Sources:{" "}
@@ -508,8 +531,8 @@ function EvidenceCard({ evidence }: { evidence: ReportEvidenceView }) {
 function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
   const selected = viewModel.identity.selected;
   const created = safeMetadataDate(viewModel.run.generatedAt);
-  const evidencePages = chunkItems(viewModel.evidence, 3);
-  if (evidencePages.length === 0) evidencePages.push([]);
+  const evidencePages = evidencePagesFor(viewModel);
+  const uniqueLimitations = [...new Set([...viewModel.coverage.gaps, ...viewModel.limitations])];
   const statusCounts =
     viewModel.searchStrategy.nodeStatusCounts.map((item) => `${human(item.label)} ${item.count}`).join(" / ") ||
     "No canonical graph statistics";
@@ -610,21 +633,27 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
             <Text style={styles.decisionText}>{viewModel.identity.rationale}</Text>
           </View>
           <Text style={[styles.paragraph, styles.muted]}>
+            {viewModel.identity.retainedCandidateCount} distinct candidate branch
+            {viewModel.identity.retainedCandidateCount === 1 ? "" : "es"} retained / top five profiled below
+          </Text>
+          <Text style={[styles.paragraph, styles.muted]}>
             Runner-up margin {percent(viewModel.identity.runnerUpMargin)} / required margin{" "}
             {percent(viewModel.identity.marginThreshold)} / resolution threshold{" "}
             {percent(viewModel.identity.resolutionThreshold)}
           </Text>
-          {viewModel.identity.alternatives.length > 0 ? (
+          {viewModel.identity.profiles.length > 0 ? (
             <View>
-              <Text style={[styles.label, { marginBottom: 3 }]}>RETAINED ALTERNATIVES</Text>
-              {viewModel.identity.alternatives.map((candidate) => (
+              <Text style={[styles.label, { marginBottom: 3 }]}>TOP RETAINED CANDIDATE PROFILES</Text>
+              {viewModel.identity.profiles.map((candidate) => (
                 <View key={candidate.id} style={styles.candidateRow}>
                   <Text style={styles.candidateName}>{candidate.name}</Text>
                   <Text style={styles.candidateState}>
                     {human(candidate.status)} / {percent(candidate.score)}
                   </Text>
                   <Text style={styles.candidateSignals}>
-                    Matched {candidate.matchedSignals.join(", ") || "none"}; conflicts{" "}
+                    {candidate.directSourceCount} direct / {candidate.evidenceRefs.length} evidence /{" "}
+                    {candidate.findingIds.length} findings; {candidate.sourceDomains.join(", ") || "no source domains"};
+                    matched {candidate.matchedSignals.join(", ") || "none"}; conflicts{" "}
                     {candidate.conflictingSignals.join(", ") || "none"}
                   </Text>
                 </View>
@@ -735,13 +764,13 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
         </Section>
 
         <Section index="06 / LIMITS" title="Coverage gaps and limitations">
-          {[...viewModel.coverage.gaps, ...viewModel.limitations].map((item) => (
+          {uniqueLimitations.map((item) => (
             <View key={item} style={styles.bullet}>
               <Text style={styles.bulletMark}>-</Text>
               <Text style={styles.bulletText}>{item}</Text>
             </View>
           ))}
-          {viewModel.coverage.gaps.length + viewModel.limitations.length === 0 ? (
+          {uniqueLimitations.length === 0 ? (
             <Text style={styles.paragraph}>No additional limitation was recorded.</Text>
           ) : null}
         </Section>

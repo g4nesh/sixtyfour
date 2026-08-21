@@ -501,6 +501,8 @@ export interface SearchFrontierEntryV2 {
   allowedTools: string[];
   intent: string;
   queryHint: string;
+  /** Opaque discovery capability bound to one candidate-scoped fetch pivot. */
+  leadId?: string;
   candidateId: string | null;
   depth: number;
   ordinal: number;

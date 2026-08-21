@@ -44,8 +44,8 @@ function citedSourceLinks(sources: readonly ReportCitedSource[]): string {
 function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
   if (candidates.length === 0) return ["No alternative candidate was retained."];
   const lines = [
-    row(["Candidate", "Status", "Score", "Matched signals", "Conflicts", "Source families"]),
-    row(["---", "---", "---:", "---", "---", "---"]),
+    row(["Candidate", "Status", "Score", "Direct sources", "Evidence", "Findings", "Source domains", "Context"]),
+    row(["---", "---", "---:", "---:", "---", "---", "---", "---"]),
   ];
   for (const candidate of candidates) {
     lines.push(
@@ -53,9 +53,16 @@ function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
         candidate.name,
         human(candidate.status),
         percent(candidate.score),
-        candidate.matchedSignals.join(", ") || "None",
-        candidate.conflictingSignals.join(", ") || "None",
-        candidate.independentSourceFamilies.join(", ") || "None",
+        candidate.directSourceCount,
+        candidate.evidenceRefs.join(", ") || "None",
+        candidate.findingIds.join(", ") || "None",
+        candidate.sourceDomains.join(", ") || "None",
+        [
+          candidate.matchedSignals.length > 0 ? `matched ${candidate.matchedSignals.join(", ")}` : "no matched context",
+          candidate.conflictingSignals.length > 0
+            ? `conflicts ${candidate.conflictingSignals.join(", ")}`
+            : "no recorded conflicts",
+        ].join("; "),
       ]),
     );
   }
@@ -66,9 +73,10 @@ function findingSection(finding: ReportFindingView, index: number): string[] {
   const lines = [
     `### ${index + 1}. ${markdownInline(finding.title)}`,
     "",
-    `**Category:** ${markdownInline(human(finding.category))}  `,
-    `**Confidence:** ${markdownInline(human(finding.confidenceLabel))} (${percent(finding.confidenceScore)})  `,
-    `**Sources:** ${citedSourceLinks(finding.sources)}  `,
+    `**Category:** ${markdownInline(human(finding.category))}<br>`,
+    `**Candidate:** ${markdownInline(finding.candidateName)} (${markdownInline(finding.candidateId)})<br>`,
+    `**Confidence:** ${markdownInline(human(finding.confidenceLabel))} (${percent(finding.confidenceScore)})<br>`,
+    `**Sources:** ${citedSourceLinks(finding.sources)}<br>`,
     `**Counter-evidence:** ${referenceLinks(finding.counterCitations)}`,
     "",
     markdownInline(finding.description),
@@ -238,6 +246,8 @@ export function reportViewModelToMarkdown(viewModel: ReportViewModel): string {
     "",
     markdownInline(viewModel.identity.rationale),
     "",
+    `**Distinct candidate branches retained:** ${viewModel.identity.retainedCandidateCount}`,
+    "",
   ];
 
   if (viewModel.identity.selected) {
@@ -254,9 +264,9 @@ export function reportViewModelToMarkdown(viewModel: ReportViewModel): string {
   lines.push(
     `**Runner-up margin:** ${percent(viewModel.identity.runnerUpMargin)} (required ${percent(viewModel.identity.marginThreshold)})`,
     "",
-    "### Retained alternatives",
+    "### Top retained candidate profiles",
     "",
-    ...candidateTable(viewModel.identity.alternatives),
+    ...candidateTable(viewModel.identity.profiles),
     "",
     "## Findings",
     "",

@@ -7,6 +7,7 @@ const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const vite = await createServer({
   root: projectRoot,
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -102,6 +103,36 @@ test("frontier batches stay on the minimum executable tier until lower tiers exh
   assert.ok(second.value.length > 0);
   assert.deepEqual([...new Set(second.value.map((entry) => entry.sourceTier))], [2]);
   assert.ok(second.events.some((event) => event.name === "source.tier_advanced" && event.payload.sourceTier === 2));
+});
+
+test("frontier schedules exact person context before generic professional site scopes", () => {
+  for (const query of ["Michael Jordan, professor at UC Berkeley", "Ganesh Talluri based in Peoria"]) {
+    const { graph } = seededGraph(query, ["search_web"]);
+    const context = graph.frontier.find((entry) => entry.intent.includes(": exact_context;"));
+    const genericSite = graph.frontier.find((entry) => entry.queryHint.includes("site:github.com"));
+    assert.ok(context, query);
+    assert.ok(genericSite, query);
+    assert.equal(context.sourceLaneId, "t1.first_party", query);
+    assert.equal(context.sourceTier, 1, query);
+    assert.equal(genericSite.sourceLaneId, "t2.structured_professional", query);
+    assert.ok(context.pathCost < genericSite.pathCost, query);
+
+    const selected = search.selectFrontierBatch(graph, 16, "2026-08-20T20:19:00.000Z");
+    assert.ok(
+      selected.value.some((entry) => entry.id === context.id),
+      query,
+    );
+    assert.equal(
+      selected.value.some((entry) => entry.id === genericSite.id),
+      false,
+      query,
+    );
+  }
+
+  const mononym = seededGraph("Usher", ["search_web"]);
+  assert.equal(mononym.target.kind, "named_person");
+  assert.ok(mononym.graph.frontier.some((entry) => entry.queryHint === '"Usher"'));
+  assert.deepEqual(search.validateSearchGraph(mononym.graph), []);
 });
 
 test("frontier schedules every surviving compiler variant on its legal source lane", () => {
@@ -218,15 +249,20 @@ test("frontier schedules every surviving compiler variant on its legal source la
   assert.ok(
     compilerEntries.every((entry) => entry.allowedTools.length === 1 && entry.allowedTools[0] === "search_web"),
   );
-  const t2Fetch = candidateFrontier.value.find(
+  const t2Specialist = candidateFrontier.value.find(
     (entry) =>
-      entry.sourceLaneId === "t2.structured_professional" && entry.allowedTools.includes("fetch_public_source"),
+      entry.sourceLaneId === "t2.structured_professional" && entry.allowedTools.includes("keybase_identity_proofs"),
   );
   const t2Searches = compilerEntries.filter((entry) => entry.sourceLaneId === "t2.structured_professional");
-  assert.ok(t2Fetch);
+  assert.ok(t2Specialist);
   assert.ok(t2Searches.length > 0);
-  assert.equal(t2Fetch.candidateId, "candidate-denise");
-  assert.ok(t2Fetch.allowedTools.includes("fetch_public_source"));
+  assert.equal(t2Specialist.candidateId, "candidate-denise");
+  assert.deepEqual(t2Specialist.allowedTools, ["keybase_identity_proofs"]);
+  assert.equal(
+    candidateFrontier.value.some((entry) => entry.allowedTools.includes("fetch_public_source")),
+    false,
+    "candidate creation must not open an unbound generic fetch pivot",
+  );
   assert.ok(
     t2Searches.every(
       (entry) =>
@@ -239,7 +275,16 @@ test("frontier schedules every surviving compiler variant on its legal source la
   );
   assert.deepEqual(
     t2Searches.map((entry) => entry.queryHint.match(/site:([^ ]+)/)?.[1]),
-    ["github.com", "orcid.org", "scholar.google.com", "apps.apple.com"],
+    [
+      "github.com",
+      "linkedin.com",
+      "orcid.org",
+      "scholar.google.com",
+      "openreview.net",
+      "semanticscholar.org",
+      "openalex.org",
+      "apps.apple.com",
+    ],
   );
   assert.ok(
     compilerEntries.some(
@@ -285,7 +330,8 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
   const target = domain.parseTarget("Renée D'Angelo Smith, Example Labs");
   const plan = search.compileOsintQueries(target);
   assert.equal(plan.status, "compiled");
-  assert.equal(plan.queries.length, search.MAX_OSINT_QUERY_VARIANTS);
+  assert.equal(plan.queries.length, 14);
+  assert.ok(plan.queries.length <= search.MAX_OSINT_QUERY_VARIANTS);
 
   const ids = domain.createDeterministicIdFactory("compiler-zero-result");
   let tick = 0;
@@ -331,7 +377,16 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
   assert.deepEqual([...executedQueries].sort(), plan.queries.map((query) => query.query).sort());
   assert.deepEqual(
     plan.queries.filter((query) => query.site).map((query) => query.site),
-    ["github.com", "orcid.org", "scholar.google.com", "apps.apple.com"],
+    [
+      "github.com",
+      "linkedin.com",
+      "orcid.org",
+      "scholar.google.com",
+      "openreview.net",
+      "semanticscholar.org",
+      "openalex.org",
+      "apps.apple.com",
+    ],
   );
   for (const kind of [
     "exact_baseline",
@@ -355,12 +410,226 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
   assert.deepEqual(search.validateSearchGraph(graph), []);
 });
 
+test("candidate lead fetch frontiers bind exact capabilities and dedupe canonical URLs across queries", () => {
+  const { graph: seeded, target, ids } = seededGraph("Alex Kim", ["search_web", "fetch_public_source"]);
+  const parent = seeded.frontier.find((entry) => entry.sourceLaneId === "t1.first_party");
+  let graph = search.setFrontierStatus(seeded, [parent.id], "running", "2026-08-20T21:59:57.000Z");
+  const actionNode = search.admitGraphNode(
+    graph,
+    {
+      kind: "action",
+      label: "search_web",
+      status: "running",
+      sourceTier: parent.sourceTier,
+      sourceLaneId: parent.sourceLaneId,
+      frontierEntryId: parent.id,
+      actionId: parent.id,
+      data: { tool: "search_web" },
+    },
+    ids,
+    "2026-08-20T21:59:58.000Z",
+  );
+  const actionEdge = search.admitGraphEdge(
+    actionNode.graph,
+    {
+      fromNodeId: parent.nodeId,
+      toNodeId: actionNode.value.id,
+      kind: "expands",
+      status: "running",
+      frontierEntryId: parent.id,
+      actionId: parent.id,
+      edgeCost: 0.05,
+      pathCost: parent.pathCost + 0.05,
+    },
+    ids,
+    "2026-08-20T21:59:59.000Z",
+  );
+  const candidateNode = search.admitGraphNode(
+    actionEdge.graph,
+    {
+      kind: "candidate",
+      label: "Alex Kim",
+      status: "verified",
+      sourceTier: parent.sourceTier,
+      sourceLaneId: parent.sourceLaneId,
+      frontierEntryId: parent.id,
+      actionId: parent.id,
+      candidateId: "candidate_alex",
+      data: {},
+    },
+    ids,
+    "2026-08-20T22:00:00.000Z",
+  );
+  const candidateEdge = search.admitGraphEdge(
+    candidateNode.graph,
+    {
+      fromNodeId: actionNode.value.id,
+      toNodeId: candidateNode.value.id,
+      kind: "expands",
+      status: "verified",
+      frontierEntryId: parent.id,
+      actionId: parent.id,
+      edgeCost: 0.03,
+      pathCost: parent.pathCost + 0.08,
+    },
+    ids,
+    "2026-08-20T22:00:00.500Z",
+  );
+  graph = candidateEdge.graph;
+  const urls = ["https://github.com/alex-one", "https://github.com/alex-two", "https://github.com/alex-three"];
+  const admitted = [];
+  for (const [index, sourceUrl] of urls.entries()) {
+    const leadId = `lead_alex_${index + 1}`;
+    const evidenceId = `evidence_alex_${index + 1}`;
+    const sourceNode = search.admitGraphNode(
+      graph,
+      {
+        kind: "source",
+        label: `Alex Kim source ${index + 1}`,
+        status: "exhausted",
+        sourceTier: parent.sourceTier,
+        sourceLaneId: parent.sourceLaneId,
+        frontierEntryId: parent.id,
+        actionId: parent.id,
+        candidateId: "candidate_alex",
+        evidenceId,
+        data: {
+          sourceUrl,
+          sourceType: "search_result",
+          leadId,
+          classifiedSourceLaneId: "t2.structured_professional",
+        },
+      },
+      ids,
+      `2026-08-20T22:00:0${index + 1}.000Z`,
+    );
+    const sourceEdge = search.admitGraphEdge(
+      sourceNode.graph,
+      {
+        fromNodeId: actionNode.value.id,
+        toNodeId: sourceNode.value.id,
+        kind: "expands",
+        status: "exhausted",
+        frontierEntryId: parent.id,
+        actionId: parent.id,
+        edgeCost: 0.04,
+        pathCost: parent.pathCost + 0.09 + index / 1000,
+      },
+      ids,
+      `2026-08-20T22:00:0${index + 1}.500Z`,
+    );
+    graph = sourceEdge.graph;
+    const leadFrontier = search.enqueueCandidateLeadFetchFrontier(
+      graph,
+      target,
+      { id: "candidate_alex", displayName: "Alex Kim" },
+      {
+        leadId,
+        sourceUrl,
+        sourceEvidenceId: evidenceId,
+        classifiedSourceLaneId: "t2.structured_professional",
+        classifiedSourceTier: 2,
+        classifiedSourceType: "code_profile",
+      },
+      parent,
+      sourceNode.value.id,
+      ["search_web", "fetch_public_source"],
+      ids,
+      `2026-08-20T22:00:1${index}.000Z`,
+    );
+    graph = leadFrontier.graph;
+    admitted.push(leadFrontier.value);
+  }
+  assert.deepEqual(
+    admitted.map((entry) => entry.leadId),
+    ["lead_alex_1", "lead_alex_2", "lead_alex_3"],
+  );
+  assert.ok(
+    admitted.every(
+      (entry) =>
+        entry.queryHint === entry.leadId &&
+        entry.candidateId === "candidate_alex" &&
+        entry.sourceLaneId === "t2.structured_professional" &&
+        entry.allowedTools.length === 1 &&
+        entry.allowedTools[0] === "fetch_public_source",
+    ),
+  );
+
+  const duplicateSource = search.admitGraphNode(
+    graph,
+    {
+      kind: "source",
+      label: "Duplicate Alex Kim source",
+      status: "exhausted",
+      sourceTier: parent.sourceTier,
+      sourceLaneId: parent.sourceLaneId,
+      frontierEntryId: parent.id,
+      actionId: parent.id,
+      candidateId: "candidate_alex",
+      evidenceId: "evidence_alex_duplicate",
+      data: {
+        sourceUrl: `${urls[0]}#profile`,
+        sourceType: "search_result",
+        leadId: "lead_alex_duplicate",
+        classifiedSourceLaneId: "t2.structured_professional",
+      },
+    },
+    ids,
+    "2026-08-20T22:00:20.000Z",
+  );
+  const duplicate = search.enqueueCandidateLeadFetchFrontier(
+    search.admitGraphEdge(
+      duplicateSource.graph,
+      {
+        fromNodeId: actionNode.value.id,
+        toNodeId: duplicateSource.value.id,
+        kind: "expands",
+        status: "exhausted",
+        frontierEntryId: parent.id,
+        actionId: parent.id,
+        edgeCost: 0.04,
+        pathCost: parent.pathCost + 0.099,
+      },
+      ids,
+      "2026-08-20T22:00:20.500Z",
+    ).graph,
+    target,
+    { id: "candidate_alex", displayName: "Alex Kim" },
+    {
+      leadId: "lead_alex_duplicate",
+      sourceUrl: `${urls[0]}#profile`,
+      sourceEvidenceId: "evidence_alex_duplicate",
+      classifiedSourceLaneId: "t2.structured_professional",
+      classifiedSourceTier: 2,
+      classifiedSourceType: "code_profile",
+    },
+    parent,
+    duplicateSource.value.id,
+    ["search_web", "fetch_public_source"],
+    ids,
+    "2026-08-20T22:00:21.000Z",
+  );
+  assert.equal(duplicate.value, null, "the same candidate and canonical URL must not refetch under a new lead id");
+  assert.equal(
+    duplicate.graph.frontier.filter((entry) => entry.leadId).length,
+    3,
+    "distinct paths on the same host remain separate while a repeated URL is suppressed",
+  );
+  const selected = search.selectFrontierBatch(duplicate.graph, 4, "2026-08-20T22:00:22.000Z");
+  assert.deepEqual(
+    new Set(selected.value.map((entry) => entry.leadId)),
+    new Set(["lead_alex_1", "lead_alex_2", "lead_alex_3"]),
+  );
+  assert.deepEqual(search.validateSearchGraph(duplicate.graph), []);
+});
+
 test("the standard runner exhausts every canonical name query before terminating", async () => {
   const targetRaw = "Renée D'Angelo Smith, Example Labs";
   const target = domain.parseTarget(targetRaw);
   const plan = search.compileOsintQueries(target);
   assert.equal(plan.status, "compiled");
-  assert.equal(plan.queries.length, search.MAX_OSINT_QUERY_VARIANTS);
+  assert.equal(plan.queries.length, 14);
+  assert.ok(plan.queries.length <= search.MAX_OSINT_QUERY_VARIANTS);
 
   const executedQueries = [];
   const updates = [];
@@ -397,8 +666,12 @@ test("the standard runner exhausts every canonical name query before terminating
   assert.deepEqual([...executedQueries].sort(), plan.queries.map((query) => query.query).sort());
   assert.equal(new Set(executedQueries).size, plan.queries.length);
   assert.ok(executedQueries.some((query) => query.includes("site:github.com")));
+  assert.ok(executedQueries.some((query) => query.includes("site:linkedin.com")));
   assert.ok(executedQueries.some((query) => query.includes("site:orcid.org")));
   assert.ok(executedQueries.some((query) => query.includes("site:scholar.google.com")));
+  assert.ok(executedQueries.some((query) => query.includes("site:openreview.net")));
+  assert.ok(executedQueries.some((query) => query.includes("site:semanticscholar.org")));
+  assert.ok(executedQueries.some((query) => query.includes("site:openalex.org")));
   assert.ok(executedQueries.some((query) => query.includes("site:apps.apple.com")));
   assert.ok(executedQueries.some((query) => query.includes("filetype:pdf")));
   assert.ok(plan.queries.some((query) => query.kind === "exact_context"));
@@ -722,17 +995,25 @@ test("search graph validation rejects malformed shape and forged pivot, parent, 
     ids,
     "2026-08-19T17:00:05.000Z",
   );
-  const candidateFrontier = search.enqueueCandidateFrontier(
+  const candidateFrontier = search.enqueueCandidateLeadFetchFrontier(
     candidateNode.graph,
     target,
     { id: "candidate_a", displayName: "Alex Kim" },
+    {
+      leadId: "lead_graph_validation",
+      sourceUrl: "https://examplelabs.org/team/alex-kim",
+      sourceEvidenceId: "evidence_graph_validation_lead",
+      classifiedSourceLaneId: "t1.candidate_company_page",
+      classifiedSourceTier: 1,
+      classifiedSourceType: "company_page",
+    },
     parent,
     candidateNode.value.id,
     ["fetch_public_source"],
     ids,
     "2026-08-19T17:00:06.000Z",
   );
-  const candidateEntry = candidateFrontier.value[0];
+  const candidateEntry = candidateFrontier.value;
   const actionNode = search.admitGraphNode(
     candidateFrontier.graph,
     {
@@ -788,6 +1069,17 @@ test("source hierarchy is tiered and denies people-search, phonebook, property, 
   assert.equal(search.sourceTierForUrl("https://www.sec.gov/edgar/search/", "public_document"), 2);
   assert.equal(search.deterministicSourceTypeForUrl("https://www.linkedin.com/in/example"), "professional_profile");
   assert.equal(search.sourceTierForUrl("https://www.linkedin.com/in/example", "professional_profile"), 2);
+  for (const source of [
+    "https://openreview.net/profile?id=~Example_Person1",
+    "https://www.semanticscholar.org/author/Example-Person/123456",
+    "https://openalex.org/A123456789",
+  ]) {
+    const sourceType = search.deterministicSourceTypeForUrl(source);
+    const sourceTier = search.sourceTierForUrl(source, sourceType);
+    assert.equal(sourceType, "public_document", source);
+    assert.equal(sourceTier, 2, source);
+    assert.equal(search.classifiedFetchLaneId(sourceType, sourceTier, true), "t2.structured_professional", source);
+  }
   assert.equal(search.deterministicSourceTypeForUrl("https://profiles.example/person"), "other");
   assert.equal(search.sourceTierForUrl("https://profiles.example/person", "other"), 6);
   assert.equal(search.sourceTierForUrl("https://example.edu/person", "public_document"), 3);
@@ -1501,6 +1793,23 @@ test("candidate-bound actions cannot mutate a foreign candidate through any adap
               { ref: "one", displayName: "Alex Kim" },
               { ref: "two", displayName: "Alex Kim" },
             ],
+            evidence: [
+              {
+                candidateRef: "one",
+                claim: "Search surfaced an exact candidate-scoped organization-page lead.",
+                disposition: "discovery_only",
+                sourceUrl: "https://examplelabs.org/team/alex-kim",
+                sourceType: "search_result",
+                canonicalSubset: { providerAttestedUrl: true },
+                verificationMethod: "search_discovery",
+                attributes: {
+                  leadId: "lead_candidate_scope",
+                  classifiedSourceLaneId: "t1.candidate_company_page",
+                  classifiedSourceTier: 1,
+                  classifiedSourceType: "company_page",
+                },
+              },
+            ],
             meta: { requests: 0 },
           };
         }
@@ -1553,9 +1862,18 @@ test("candidate-bound actions cannot mutate a foreign candidate through any adap
   ))
     updates.push(update);
   const completed = updates.at(-1);
-  assert.equal(adapterCalls, 2);
+  assert.equal(
+    adapterCalls,
+    2,
+    JSON.stringify({
+      frontier: completed.report.searchGraph.frontier,
+      evidence: completed.report.evidence,
+      admissions: completed.trace.events.filter((event) => event.name === "evidence.admission"),
+    }),
+  );
   assert.equal(completed.type, "completed");
-  assert.equal(completed.report.evidence.length, 0);
+  assert.equal(completed.report.evidence.length, 1);
+  assert.equal(completed.report.evidence[0].disposition, "discovery_only");
   assert.equal(completed.report.findings.length, 0);
   assert.equal(completed.report.candidates.length, 2);
   assert.ok(boundCandidateId && foreignCandidateId && boundCandidateId !== foreignCandidateId);

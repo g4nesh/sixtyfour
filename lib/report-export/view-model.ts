@@ -54,7 +54,22 @@ function percentage(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, finiteScore(value))) * 100)}%`;
 }
 
-function candidateView(candidate: Candidate): ReportCandidateView {
+function candidateView(
+  candidate: Candidate,
+  evidence: readonly ReportEvidenceView[],
+  findingIds: readonly string[],
+): ReportCandidateView {
+  const candidateEvidence = evidence.filter((item) => item.candidateId === candidate.id);
+  const sourceDomains = candidateEvidence
+    .map((item) => {
+      if (!item.sourceUrl) return item.sourceFamily;
+      try {
+        return new URL(item.sourceUrl).hostname.replace(/^www\./, "");
+      } catch {
+        return item.sourceFamily;
+      }
+    })
+    .filter(Boolean);
   return {
     id: cleanInlineReportText(candidate.id),
     name: cleanInlineReportText(candidate.displayName),
@@ -63,6 +78,15 @@ function candidateView(candidate: Candidate): ReportCandidateView {
     matchedSignals: [...new Set(candidate.score.matchedSignals.map(cleanInlineReportText))].sort(),
     conflictingSignals: [...new Set(candidate.score.conflictingSignals.map(cleanInlineReportText))].sort(),
     independentSourceFamilies: [...new Set(candidate.score.independentFamilies.map(cleanInlineReportText))].sort(),
+    evidenceRefs: candidateEvidence.map((item) => item.ref),
+    findingIds: [...findingIds].map(cleanInlineReportText).sort(),
+    sourceDomains: [...new Set(sourceDomains.map(cleanInlineReportText))].sort(),
+    directSourceCount: candidateEvidence.filter(
+      (item) =>
+        item.disposition !== "discovery_only" &&
+        item.contentLabel !== "Passive page metadata observation" &&
+        item.contentLabel !== "Unverified discovery lead",
+    ).length,
   };
 }
 
@@ -268,7 +292,13 @@ function usageRows(usage: BudgetUsage): Array<{ label: string; value: string }> 
   ].map(([label, value]) => ({ label: String(label), value: String(value) }));
 }
 
-function executiveSummary(report: InvestigationReport, subject: string, findingCount: number): string {
+function executiveSummary(
+  report: InvestigationReport,
+  subject: string,
+  findingCount: number,
+  retainedCandidateCount: number,
+): string {
+  const retained = `Atlas retained ${retainedCandidateCount} distinct candidate branch${retainedCandidateCount === 1 ? "" : "es"}; name equality alone was never used to merge them.`;
   const identity =
     report.identity.status === "resolved"
       ? `Identity resolved to ${subject} with a ${percentage(report.identity.selectedScore)} candidate score and ${percentage(report.identity.runnerUpMargin)} margin over the retained runner-up.`
@@ -277,23 +307,22 @@ function executiveSummary(report: InvestigationReport, subject: string, findingC
         : "Identity remains unresolved; the available public-professional evidence did not clear the resolution threshold.";
   const findings = `${findingCount} finding${findingCount === 1 ? "" : "s"} cite${findingCount === 1 ? "s" : ""} admitted evidence across ${report.coverage.independentSourceFamilyCount} independent source famil${report.coverage.independentSourceFamilyCount === 1 ? "y" : "ies"}.`;
   const coverage = `Coverage reached ${percentage(report.coverage.score)} for the requested categories; the run stopped with ${report.stop.reason.replaceAll("_", " ")}.`;
-  return cleanReportText(`${identity} ${findings} ${coverage}`);
+  return cleanReportText(`${identity} ${retained} ${findings} ${coverage}`);
 }
 
 export function createReportViewModel(report: InvestigationReport): ReportViewModel {
   const evidence = evidenceViews(report.evidence, report.searchGraph);
   const selectedId = report.identity.selectedCandidateId;
-  const candidates = [...report.candidates]
-    .sort((left, right) => {
-      if (left.id === selectedId) return -1;
-      if (right.id === selectedId) return 1;
-      return right.score.total - left.score.total || left.id.localeCompare(right.id);
-    })
-    .map(candidateView);
-  const selected = candidates.find((candidate) => candidate.id === selectedId) ?? null;
-  const alternatives = candidates.filter((candidate) => candidate.id !== selectedId);
+  const orderedCandidates = [...report.candidates].sort((left, right) => {
+    if (left.id === selectedId) return -1;
+    if (right.id === selectedId) return 1;
+    return right.score.total - left.score.total || left.id.localeCompare(right.id);
+  });
+  const candidateNames = new Map(
+    orderedCandidates.map((candidate) => [candidate.id, cleanInlineReportText(candidate.displayName)]),
+  );
   const subject =
-    selected?.name ??
+    (selectedId ? candidateNames.get(selectedId) : null) ??
     (report.target.name ? cleanInlineReportText(report.target.name) : cleanInlineReportText(report.input.query));
   const evidenceViewById = new Map(evidence.items.map((item) => [item.id, item]));
   const citedSourcesFor = (ids: readonly string[]) =>
@@ -317,6 +346,8 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((finding) => ({
       id: cleanInlineReportText(finding.id),
+      candidateId: cleanInlineReportText(finding.candidateId),
+      candidateName: candidateNames.get(finding.candidateId) ?? "Unresolved candidate branch",
       title: cleanInlineReportText(finding.title),
       description: cleanReportText(finding.description),
       category: finding.category,
@@ -331,12 +362,27 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
       sources: citedSourcesFor(finding.evidenceIds),
       caveats: finding.caveats.map(cleanReportText).sort(),
     }));
+  const findingIdsByCandidate = new Map<string, string[]>();
+  for (const finding of findings) {
+    findingIdsByCandidate.set(finding.candidateId, [
+      ...(findingIdsByCandidate.get(finding.candidateId) ?? []),
+      finding.id,
+    ]);
+  }
+  const candidates = orderedCandidates.map((candidate) =>
+    candidateView(candidate, evidence.items, findingIdsByCandidate.get(candidate.id) ?? []),
+  );
+  const profiles = candidates.slice(0, 5);
+  const selected = profiles.find((candidate) => candidate.id === selectedId) ?? null;
+  const alternatives = profiles.filter((candidate) => candidate.id !== selectedId);
+  const retainedCandidateCount = candidates.length;
+  const candidateCountSentence = `Atlas retained ${retainedCandidateCount} distinct candidate branch${retainedCandidateCount === 1 ? "" : "es"}.`;
   const identityRationale =
     report.identity.status === "resolved"
-      ? `The selected candidate cleared the ${percentage(report.identity.resolutionThreshold)} resolution threshold and the ${percentage(report.identity.marginThreshold)} separation margin.`
+      ? `${candidateCountSentence} The selected candidate cleared the ${percentage(report.identity.resolutionThreshold)} resolution threshold and the ${percentage(report.identity.marginThreshold)} separation margin.`
       : report.identity.status === "ambiguous"
-        ? "Candidates were retained separately because the score margin did not justify a strong-identifier merge."
-        : "No candidate met both the resolution and candidate-separation requirements.";
+        ? `${candidateCountSentence} The five highest-ranked branches are profiled below; they remain separate because the score margin and strong identifiers did not justify a merge.`
+        : `${candidateCountSentence} No candidate met both the resolution and candidate-separation requirements; the five highest-ranked branches are profiled separately below.`;
   return {
     schemaVersion: 1,
     classification: "PUBLIC-SOURCE INTELLIGENCE",
@@ -362,11 +408,13 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
       stopReason: report.stop.reason,
       stopDetail: cleanReportText(report.stop.detail),
     },
-    executiveSummary: executiveSummary(report, subject, findings.length),
+    executiveSummary: executiveSummary(report, subject, findings.length, retainedCandidateCount),
     identity: {
       status: report.identity.status,
       selected,
+      profiles,
       alternatives,
+      retainedCandidateCount,
       runnerUpMargin: finiteScore(report.identity.runnerUpMargin),
       resolutionThreshold: finiteScore(report.identity.resolutionThreshold),
       marginThreshold: finiteScore(report.identity.marginThreshold),

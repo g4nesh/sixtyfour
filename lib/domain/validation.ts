@@ -671,6 +671,7 @@ function isSearchFrontierEntry(value: unknown): boolean {
     value.allowedTools.length > 0 &&
     isNonEmptyString(value.intent) &&
     isNonEmptyString(value.queryHint) &&
+    (value.leadId === undefined || isNonEmptyString(value.leadId)) &&
     isNullableNonEmptyString(value.candidateId) &&
     isNonNegativeInteger(value.depth) &&
     isNonNegativeInteger(value.ordinal) &&

@@ -1,6 +1,6 @@
 # Architecture
 
-Atlas is a best-first public-professional research agent with one canonical execution graph. `@langchain/langgraph` supplies the Worker-safe conditional scheduler; Atlas's deterministic TypeScript kernels remain the only authority for the frontier, safety, candidate separation, evidence, confidence, budgets, and stopping. A language model can propose a small batch of actions and a short user-visible decision summary, but it cannot create graph state or execute an unselected path.
+Atlas is a best-first public-professional research agent with one canonical execution graph. `@langchain/langgraph` supplies the Worker-safe conditional scheduler; Atlas's deterministic TypeScript kernels remain the only authority for the frontier, safety, candidate separation, evidence, confidence, budgets, and stopping. A language model can propose a small batch of actions and a short user-visible decision summary, but it cannot create graph state or execute an unselected path. The browser workbench submits live Deep runs only; deterministic zero-network replay remains an internal CLI/API surface for tests and audit.
 
 ```text
 START → classify → seed_frontier → select_frontier → plan_expansion
@@ -12,7 +12,7 @@ Every transition is explicit. The terminal event is emitted even for a refusal, 
 
 ## Frontier and traversal
 
-`lib/search/frontier.ts` owns the graph transition algebra. Each queued entry records the source lane/tier, target and candidate scope, allowed tools, immutable utility components, strictly positive edge cost, cumulative path cost, depth, stable ordinal, and one action/frontier ID. The comparison key is:
+`lib/search/frontier.ts` owns the graph transition algebra. Each queued entry records the source lane/tier, target and candidate scope, optional opaque discovery-lead binding, allowed tools, immutable utility components, strictly positive edge cost, cumulative path cost, depth, stable ordinal, and one action/frontier ID. The comparison key is:
 
 ```text
 (pathCost, sourceTier, depth, insertionOrdinal, frontierEntryId)
@@ -40,7 +40,7 @@ The source policy is monotone from exact input to broad discovery:
 
 A higher breadth tier stays queued until lower-tier legal work is exhausted. A newly opened exact-URL temporal dependency may run after the breadth cursor advances without regressing that cursor. The hierarchy never turns a source prior into claim confidence. People-search, phonebook, data-broker, residential/property/tax-assessor, family, credential, private-contact, cloud/account enumeration, invasive iOS binary/TestFlight, and traffic-interception surfaces are denied before graph admission.
 
-`lib/search/osint-query-compiler.ts` compiles a finite public-professional query program. The neutral quoted baseline is always first; negative noise exclusions exist only on visibly labeled refinements. Source lanes select their canonical query from that program, and `execute_expansion` replaces any model-suggested query with the frontier-owned string before transport. `site:` scopes are closed to GitHub, ORCID, Google Scholar, official App Store listings, and at most two caller-admitted academic domains. Operator results remain transport metadata until direct fetch admission.
+`lib/search/osint-query-compiler.ts` compiles at most 16 finite public-professional query variants from the parsed target. A named-person target may include bounded exact role, organization/company, coarse city/region, and adult education context; no phrase is truncated into malformed operator syntax. The neutral quoted baseline is always first, and negative noise exclusions exist only on visibly labeled refinements. Source lanes select their canonical query from that program, and `execute_expansion` replaces any model-suggested query with the frontier-owned string before transport. `site:` scopes are closed to GitHub, LinkedIn, ORCID, Google Scholar, OpenReview, Semantic Scholar, OpenAlex, official App Store listings, and at most two caller-admitted academic domains. Operator results remain transport metadata until direct fetch admission.
 
 ## Trust boundary
 
@@ -67,7 +67,7 @@ The code validates selected-frontier binding, tool names and schemas, charges ev
 
 The report's required `searchGraph` is runtime state, not a visualization assembled after the run. It contains seed, identifier, source, action, candidate, evidence, finding, and report nodes; explicit expansion, return, support, contradiction, quarantine, grounding, and mutation relationships; every frontier record; source tier/lane; costs; mutation metadata; and telemetry. Stable action/frontier IDs join the selected entry to its tool span, outcome, admitted graph entities, and cassette request. Replays reject dangling edges, forged costs or tiers, invalid Metropolis-Hastings math, illegal tier skips, cross-candidate edges, and mismatched action IDs.
 
-The UI consumes only this exact schema-v2 graph. It does not infer edges from report prose. Rejected same-name candidates, conflicts, unused branches, and exhausted mutations remain visible so the graph is an audit surface rather than a success-only diagram.
+The UI consumes only this exact schema-v2 graph. It does not infer edges from report prose. Rejected same-name candidates, conflicts, unused branches, and exhausted mutations remain visible so the graph is an audit surface rather than a success-only diagram. Report projection ranks the retained branches deterministically and consolidates up to five candidate profiles without collapsing the full candidate count.
 
 The durable graph has four principal nodes:
 
@@ -77,6 +77,8 @@ The durable graph has four principal nodes:
 - `SourceSummary`: a report-time view grouped by independent source family.
 
 Name equality is never a merge key. Merge-grade signals are strong identifiers such as a corroborated profile URL, personal domain, exact email edge, cryptographic proof, or direct cross-profile link. Name-only first pages become URL-scoped quarantined candidates instead of contaminating a shared-name candidate. Two independent source families that quote the same full name and organization can produce one kernel-derived cross-source resolution signal after ordered batch admission; adapters and the model cannot submit that signal directly. Hard conflicts keep candidates separate. Search snippets and provider annotations are discovery-only and carry zero final claim weight.
+
+For a contextual person query, an exact organization, role, or coarse-location phrase can bind a fetched page only when it appears in a bounded window around the extracted subject name. A footer, navigation label, or unrelated mention elsewhere on the page cannot satisfy the supplied context.
 
 Finding titles and descriptions are deterministic projections of exact admitted excerpts. The model may select a proposed grouping, category, and evidence IDs, but the kernel validates the category against quoted text/source semantics, prevents one evidence record from covering unrelated requested categories, and discards model-authored claim prose. This blocks metadata or fluent-summary injection; it cannot prove that the underlying public source itself is truthful.
 
@@ -94,9 +96,9 @@ Confidence uses transparent bands and a rationale-bearing set of caps. Multiple 
 - `lib/report-export`: pure report-to-view-model transformation and deterministic Markdown serialization.
 - `lib/api`: Worker-neutral API router used before Vinext's application handler.
 - `bin/atlas.ts`: Node CLI sharing the same replay/live orchestration.
-- `app`: graph-first client workbench; lazy React Flow/ELK rendering; and click-time React-PDF download rendering.
+- `app`: live-only Deep graph-first browser workbench; lazy React Flow/ELK rendering; and click-time React-PDF download rendering.
 
-Replay APIs remain credential-free and zero-network. Non-local live HTTP ingress requires explicit enablement, a configured server-side provider, and a 32-byte-or-longer bearer token; the only unauthenticated bypass is an explicit development binding on `localhost`, `127.0.0.1`, or `[::1]`. `/api/health` reports only whether a usable protected live boundary exists and never exposes the selected provider or model. The Node CLI uses the loopback path directly. `worker/index.ts` applies browser security headers to API, image, and Vinext responses.
+Replay APIs remain credential-free and zero-network for deterministic tests and audit, but the browser workbench does not expose replay or depth selection and always requests live Deep execution. Non-local live HTTP ingress requires explicit enablement, a configured server-side provider, and a 32-byte-or-longer bearer token; the only unauthenticated bypass is an explicit development binding on `localhost`, `127.0.0.1`, or `[::1]`. `/api/health` reports only whether a usable protected live boundary exists and never exposes the selected provider or model. The Node CLI uses the loopback path directly. `worker/index.ts` applies browser security headers to API, image, and Vinext responses.
 
 ## Live model protocol
 
@@ -106,7 +108,7 @@ A retryable provider-search failure or a successful response with zero valid HTT
 
 A retry-exhausted planner failure opens a run-local circuit breaker. Subsequent decisions may only select mechanically derivable actions already legal for the canonical frontier (bounded search, exact supplied URL, exact supplied email code graph, or authorized opaque-lead fetch). Provider synthesis failure may project at most one unused HTTP-200/SHA-256 direct quote into an explicitly diagnosed low-confidence finding for the selected non-ambiguous candidate; discovery-only, cross-candidate, non-exact, and moderate-confidence records are ineligible. Successful empty synthesis is never overridden.
 
-Search annotations are transport-observed leads with zero final claim weight. Before egress, Atlas classifies the exact authorized URL from its hostname and already-admitted first-party context; a lead that does not match the selected source lane returns `lead_lane_mismatch` with zero page requests. LinkedIn, for example, is a T2 professional profile rather than a T1 official biography. A final finding must cite an admitted direct-source or specialist-tool evidence record. General-purpose `fetch_public_source` additionally requires a trusted injected hostname resolver or controlled egress proxy and fails closed without one; candidate linkage alone is not presented as DNS-rebinding protection. Hardened transport failures retain a bounded code, HTTP status, attempt, and request count without logging the URL, body, or underlying exception.
+Search annotations are transport-observed leads with zero final claim weight. Each admitted candidate-bound lead can open exactly one opaque, lane-checked fetch frontier for its observed HTTPS URL; candidate-plus-canonical-URL deduplication prevents another query or lead ID from refetching the same page for that candidate. Before egress, Atlas classifies the exact authorized URL from its hostname and already-admitted first-party context; a lead that does not match the selected source lane returns `lead_lane_mismatch` with zero page requests. LinkedIn, for example, is a T2 professional profile rather than a T1 official biography. A final finding must cite an admitted direct-source or specialist-tool evidence record from the same candidate branch. General-purpose `fetch_public_source` additionally requires a trusted injected hostname resolver or controlled egress proxy and fails closed without one; candidate linkage alone is not presented as DNS-rebinding protection. Hardened transport failures retain a bounded code, HTTP status, attempt, and request count without logging the URL, body, or underlying exception.
 
 ## Trace contract
 
@@ -114,7 +116,9 @@ API streams, examples, the UI, and CLI use one append-only event schema. Each ev
 
 ## Report rendering
 
-One pure JSON-safe `ReportViewModel` feeds deterministic Markdown and PDF presentation. Evidence receives stable `E01...` references; exact fetched excerpts and canonical structured API claims remain visibly distinct. Markdown escapes hostile syntax and omits raw provider/tool payloads. The browser dynamically imports React-PDF only when the operator clicks PDF download; the Worker API always returns the canonical JSON/NDJSON report, never server-rendered PDF bytes. React Flow and ELK are likewise confined to the client graph chunk, and the accessible list view remains usable without canvas layout.
+One pure JSON-safe `ReportViewModel` feeds deterministic Markdown and PDF presentation. It retains the complete candidate-branch count, profiles up to the five highest-ranked candidates, and labels every finding and evidence reference with its candidate scope. Evidence receives stable `E01...` references; exact fetched excerpts and canonical structured API claims remain visibly distinct. Markdown escapes hostile syntax and omits raw provider/tool payloads. The browser dynamically imports React-PDF only when the operator clicks PDF download; the Worker API always returns the canonical JSON/NDJSON report, never server-rendered PDF bytes. React Flow and ELK are likewise confined to the client graph chunk, and the accessible list view remains usable without canvas layout.
+
+The Worker CSP keeps scripts and connections same-origin except for the client PDF engine's in-memory Yoga module: `connect-src` permits `data:` and `script-src` permits the narrow `wasm-unsafe-eval` capability. General `unsafe-eval`, external script origins, and external connection origins remain denied.
 
 ## Scaling path
 

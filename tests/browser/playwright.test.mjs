@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { chromium } from "playwright";
 import {
@@ -336,224 +337,257 @@ function assertLayout(layout, graph, viewport) {
   }
 }
 
-test("dense intercepted NDJSON has collision-free desktop and mobile graph geometry", { timeout: 90_000 }, async () => {
-  await assertServerReady();
-  const fixture = await denseReplayFixture();
-  const browser = await chromium.launch({ headless: true });
-  try {
-    for (const viewport of viewports) {
-      const page = await browser.newPage({ viewport });
-      const consoleIssues = [];
-      const pageErrors = [];
-      page.on("console", (message) => {
-        if (["warning", "error"].includes(message.type())) consoleIssues.push(`${message.type()}: ${message.text()}`);
-      });
-      page.on("pageerror", (error) => pageErrors.push(error.message));
-      await page.route("**/api/health", (route) =>
-        route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({ status: "ok", liveConfigured: true }),
-        }),
-      );
-      try {
-        const healthResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/health");
-        await page.goto(baseUrl.href, { waitUntil: "domcontentloaded" });
-        await healthResponse;
-        await page.evaluate(installStreamedResearchFixture, { events: fixture.events, delayMs: 50 });
-        await page.evaluate(startLiveGeometrySampler, chromeSelectors);
-        const searchbox = page.getByRole("searchbox", { name: "Public-professional research input" });
-        const depthSelect = page.getByRole("combobox", { name: "Research depth" });
-        assert.equal(
-          await depthSelect.inputValue(),
-          "deep",
-          "full bounded operator breadth is the interactive default",
+test(
+  "dense intercepted NDJSON has collision-free desktop and mobile graph geometry",
+  { timeout: 240_000 },
+  async () => {
+    await assertServerReady();
+    const fixture = await denseReplayFixture();
+    const browser = await chromium.launch({ headless: true });
+    try {
+      for (const viewport of viewports) {
+        const page = await browser.newPage({ viewport });
+        const consoleIssues = [];
+        const pageErrors = [];
+        page.on("console", (message) => {
+          if (["warning", "error"].includes(message.type())) consoleIssues.push(`${message.type()}: ${message.text()}`);
+        });
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.route("**/api/health", (route) =>
+          route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ status: "ok", liveConfigured: true }),
+          }),
         );
-        await searchbox.fill("Chris Anderson, TED");
-        assert.equal(await searchbox.inputValue(), "Chris Anderson, TED");
-        await page.getByRole("button", { name: "Research", exact: true }).click();
-        const checkpointGraphs = fixture.events.map(searchGraphFromEvent).filter(Boolean);
-        for (let index = 0; index < checkpointGraphs.length; index += 1) {
-          const checkpoint = checkpointGraphs[index];
-          await page.waitForFunction(
-            ({ emitted, count }) =>
-              window.__atlasFixtureEmitted === emitted &&
-              document.querySelectorAll(".react-flow__node").length === count,
-            { emitted: index + 1, count: checkpoint.nodes.length },
-            { timeout: 20_000 },
+        try {
+          const healthResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/health");
+          await page.goto(baseUrl.href, { waitUntil: "domcontentloaded" });
+          await healthResponse;
+          assert.equal(await page.locator(".atlas-wordmark").innerText(), "Atlas", "redundant letter-mark remained");
+          assert.equal(
+            await page.getByRole("combobox", { name: "Research depth" }).count(),
+            0,
+            "interactive depth chooser must stay removed",
           );
-          await page.waitForTimeout(350);
+          const bodyFont = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
+          assert.match(bodyFont, /Geist/i, `${viewport.name}: the intended UI font was not applied`);
+          assert.doesNotMatch(
+            bodyFont,
+            /(?:^|,\s*)(?:["']?Times(?: New Roman)?["']?|serif)(?:\s*,|$)/i,
+            `${viewport.name}: browser fell back to a serif font`,
+          );
+          await page.evaluate(installStreamedResearchFixture, { events: fixture.events, delayMs: 50 });
+          await page.evaluate(startLiveGeometrySampler, chromeSelectors);
+          const searchbox = page.getByRole("searchbox", { name: "Public-professional research input" });
+          await searchbox.fill("Chris Anderson, TED");
+          assert.equal(await searchbox.inputValue(), "Chris Anderson, TED");
+          await page.getByRole("button", { name: "Research", exact: true }).click();
+          const checkpointGraphs = fixture.events.map(searchGraphFromEvent).filter(Boolean);
+          for (let index = 0; index < checkpointGraphs.length; index += 1) {
+            const checkpoint = checkpointGraphs[index];
+            await page.waitForFunction(
+              ({ emitted, count }) =>
+                window.__atlasFixtureEmitted === emitted &&
+                document.querySelectorAll(".react-flow__node").length === count,
+              { emitted: index + 1, count: checkpoint.nodes.length },
+              { timeout: 20_000 },
+            );
+            await page.waitForTimeout(350);
+            await page.waitForFunction(
+              () => document.querySelector(".graph-canvas")?.getAttribute("data-layout-source") === "elk",
+              undefined,
+              { timeout: 5_000 },
+            );
+            await page.locator(".graph-fit-button").click();
+            await page.waitForTimeout(450);
+            assertLayout(await renderedLayout(page, checkpoint), checkpoint, viewport);
+            if (index < checkpointGraphs.length - 1) await page.evaluate(() => window.__atlasFixtureAdvance());
+          }
+          const researchRequest = await page.evaluate(() => window.__atlasFixtureRequest);
+          assert.equal(researchRequest?.query, "Chris Anderson, TED");
+          assert.equal(researchRequest?.mode, "live");
+          assert.equal(
+            researchRequest?.requestedDepth,
+            "deep",
+            "interactive research must execute the full bounded operator program",
+          );
+          if (viewport.name === "mobile") {
+            const ladder = page.locator(".source-ladder");
+            assert.equal(await ladder.locator(".source-ladder-toggle").getAttribute("aria-expanded"), "false");
+            assert.equal(
+              await ladder.locator("ol").evaluate((element) => getComputedStyle(element).display),
+              "none",
+              "mobile collapsed ladder content must remain hidden",
+            );
+          }
+          const streamedGeometry = await page.evaluate(stopLiveGeometrySampler);
+          assert.deepEqual(
+            streamedGeometry.positiveCounts,
+            checkpointGraphs.map((graph) => graph.nodes.length),
+            `${viewport.name}: every streamed topology must be observed`,
+          );
+          assert.deepEqual(
+            streamedGeometry.failures,
+            [],
+            `${viewport.name}: streamed geometry must remain collision-free and readable`,
+          );
+          if (viewport.name === "desktop") {
+            const zoomedViewport = { name: "desktop at 200% page zoom", width: 720, height: 450 };
+            await page.setViewportSize(zoomedViewport);
+            await page.locator(".graph-fit-button").click();
+            await page.waitForTimeout(500);
+            assertLayout(await renderedLayout(page, fixture.graph), fixture.graph, zoomedViewport);
+          }
+          await page.getByRole("button", { name: "Report", exact: true }).click();
+          const reportDialog = page.getByRole("dialog", { name: "Chris Anderson, TED" });
+          await reportDialog.waitFor({ state: "visible" });
+          const temporalCards = reportDialog.locator(".evidence-temporal");
+          assert.equal(
+            await temporalCards.count(),
+            2,
+            `${viewport.name}: temporal comparisons did not render exactly twice`,
+          );
+          const temporalText = await temporalCards.nth(0).innerText();
+          assert.match(temporalText, /Temporal diff\s+bounded comparison/i);
+          assert.match(
+            temporalText,
+            new RegExp(
+              `after ${reportEvidenceContextFixture.temporal.observedAfter}\\s+·\\s+on or before ${reportEvidenceContextFixture.temporal.observedOnOrBefore}`,
+            ),
+          );
+          assert.match(temporalText, /Archived response body bytes\s+Changed/i);
+          assert.match(temporalText, /Normalized static-HTML text\s+Changed/i);
+          assert.match(temporalText, /Page-declared metadata\s+Changed/i);
+          assert.match(temporalText, /Static-HTML structure\s+Unchanged/i);
+          assert.match(temporalText, /Static-HTML fragment counts\s+1 added\s+·\s+1 removed\s+·\s+3 unchanged/i);
+          assert.match(temporalText, /Changed metadata fields\s+Title, Description/i);
+          assert.ok(
+            temporalText.includes(reportEvidenceContextFixture.temporal.addedTextFragments[0]),
+            `${viewport.name}: normalized added fragment was omitted`,
+          );
+          assert.ok(
+            temporalText.includes(reportEvidenceContextFixture.temporal.removedTextFragments[0]),
+            `${viewport.name}: normalized removed fragment was omitted`,
+          );
+          assert.match(temporalText, /do not identify the editor or prove archive completeness/i);
+          assert.match(temporalText, /do not describe browser-rendered state/i);
+
+          const bodyOnlyTemporalText = await temporalCards.nth(1).innerText();
+          assert.match(bodyOnlyTemporalText, /Temporal diff\s+observed captures/i);
+          assert.match(bodyOnlyTemporalText, /Archived response body bytes\s+Changed/i);
+          assert.match(bodyOnlyTemporalText, /Normalized static-HTML text\s+Unchanged/i);
+          assert.match(bodyOnlyTemporalText, /Page-declared metadata\s+Unchanged/i);
+          assert.match(bodyOnlyTemporalText, /Static-HTML structure\s+Unchanged/i);
+          assert.match(
+            bodyOnlyTemporalText,
+            /Static-HTML fragment counts\s+0 added\s+·\s+0 removed\s+·\s+1 unchanged/i,
+          );
+
+          const footprint = reportDialog.locator(".evidence-footprint");
+          assert.equal(await footprint.count(), 1, `${viewport.name}: page footprint did not render exactly once`);
+          const footprintText = await footprint.innerText();
+          assert.match(footprintText, /Page-declared footprint\s+(?:projection not truncated|bounded projection)/i);
+          assert.ok(
+            footprintText.includes(`sha256:${"d".repeat(64)}`),
+            `${viewport.name}: footprint hash binding was omitted`,
+          );
+          assert.ok(
+            footprintText.includes("Chris Anderson - TED speaker profile"),
+            `${viewport.name}: page-authored title was omitted`,
+          );
+          assert.ok(
+            footprintText.includes(reportEvidenceContextFixture.footprint.description),
+            `${viewport.name}: page-authored description was omitted`,
+          );
+          assert.match(footprintText, /Canonical status\s+Accepted Same Page/i);
+          assert.ok(
+            footprintText.includes(reportEvidenceContextFixture.footprint.canonicalUrl),
+            `${viewport.name}: accepted canonical URL was omitted`,
+          );
+          assert.match(footprintText, /Language\s+en/i);
+          assert.match(footprintText, /Open Graph type\s+profile/i);
+          assert.match(footprintText, /Open Graph site\s+TED/i);
+          assert.match(footprintText, /Generators\s+Next\.js/i);
+          assert.match(footprintText, /Applications\s+TED/i);
+          assert.match(footprintText, /Observed providers\s+Jsdelivr, Cloudflare/i);
+          for (const host of reportEvidenceContextFixture.footprint.observedResourceHosts) {
+            assert.ok(footprintText.includes(host), `${viewport.name}: footprint omitted referenced host ${host}`);
+          }
+          for (const type of reportEvidenceContextFixture.footprint.jsonLdTypes) {
+            assert.ok(footprintText.includes(type), `${viewport.name}: footprint omitted JSON-LD type ${type}`);
+          }
+          assert.match(
+            footprintText,
+            /No referenced resource was followed.*no hosting ownership or control is inferred/is,
+          );
+          assert.equal(
+            (await reportDialog.innerText()).includes("ATLAS_CONTEXT_SENTINEL_SHOULD_NOT_RENDER"),
+            false,
+            `${viewport.name}: hostile or unbound context reached the HTML report`,
+          );
+
+          const reportOverflow = await reportDialog.evaluate((dialog) => ({
+            documentWidth: document.documentElement.scrollWidth,
+            bodyWidth: document.body.scrollWidth,
+            viewportWidth: window.innerWidth,
+            overflowing: [dialog, ...dialog.querySelectorAll(".report-sheet-body, .evidence-context")]
+              .filter((element) => element.scrollWidth > element.clientWidth + 1)
+              .map((element) => element.className),
+          }));
+          assert.equal(
+            reportOverflow.documentWidth,
+            reportOverflow.viewportWidth,
+            `${viewport.name}: report opened with document overflow`,
+          );
+          assert.equal(
+            reportOverflow.bodyWidth,
+            reportOverflow.viewportWidth,
+            `${viewport.name}: report opened with body overflow`,
+          );
+          assert.deepEqual(
+            reportOverflow.overflowing,
+            [],
+            `${viewport.name}: report context cards overflow horizontally`,
+          );
+          const pdfDownloadPromise = page.waitForEvent("download", { timeout: 120_000 });
+          await reportDialog.getByRole("button", { name: "PDF", exact: true }).click();
+          const pdfDownload = await pdfDownloadPromise;
+          assert.equal(await pdfDownload.failure(), null, `${viewport.name}: PDF browser download failed`);
+          assert.match(pdfDownload.suggestedFilename(), /\.pdf$/i);
+          const pdfPath = await pdfDownload.path();
+          assert.ok(pdfPath, `${viewport.name}: PDF download did not produce a local artifact`);
+          const pdfBytes = await readFile(pdfPath);
+          assert.equal(pdfBytes.subarray(0, 5).toString("ascii"), "%PDF-");
+          assert.ok(pdfBytes.byteLength > 1_000, `${viewport.name}: PDF download was unexpectedly small`);
+          const pdfSuccessMessage = "PDF intelligence report downloaded.";
           await page.waitForFunction(
-            () => document.querySelector(".graph-canvas")?.getAttribute("data-layout-source") === "elk",
-            undefined,
+            (expected) => document.querySelector(".workspace-message")?.textContent === expected,
+            pdfSuccessMessage,
             { timeout: 5_000 },
           );
-          await page.locator(".graph-fit-button").click();
-          await page.waitForTimeout(450);
-          assertLayout(await renderedLayout(page, checkpoint), checkpoint, viewport);
-          if (index < checkpointGraphs.length - 1) await page.evaluate(() => window.__atlasFixtureAdvance());
-        }
-        const researchRequest = await page.evaluate(() => window.__atlasFixtureRequest);
-        assert.equal(researchRequest?.query, "Chris Anderson, TED");
-        assert.equal(researchRequest?.mode, "live");
-        assert.equal(
-          researchRequest?.requestedDepth,
-          "deep",
-          "interactive research must execute the full bounded operator program",
-        );
-        if (viewport.name === "mobile") {
-          const ladder = page.locator(".source-ladder");
-          assert.equal(await ladder.locator(".source-ladder-toggle").getAttribute("aria-expanded"), "false");
-          assert.equal(
-            await ladder.locator("ol").evaluate((element) => getComputedStyle(element).display),
-            "none",
-            "mobile collapsed ladder content must remain hidden",
+          if (viewport.name === "desktop") {
+            await page.getByText(pdfSuccessMessage).waitFor({ state: "visible", timeout: 5_000 });
+          }
+          await page.getByRole("button", { name: "Close report" }).click();
+          assert.deepEqual(consoleIssues, [], `${viewport.name}: browser console warnings/errors`);
+          assert.deepEqual(pageErrors, [], `${viewport.name}: uncaught page errors`);
+        } catch (error) {
+          const screenshot = `/private/tmp/atlas-browser-${viewport.name}-failure.png`;
+          await page.screenshot({ path: screenshot, fullPage: true }).catch(() => undefined);
+          throw new Error(
+            `${viewport.name} deterministic browser QA failed; screenshot: ${screenshot}; console: ${JSON.stringify(consoleIssues)}; page errors: ${JSON.stringify(pageErrors)}`,
+            { cause: error },
           );
+        } finally {
+          await page.close();
         }
-        const streamedGeometry = await page.evaluate(stopLiveGeometrySampler);
-        assert.deepEqual(
-          streamedGeometry.positiveCounts,
-          checkpointGraphs.map((graph) => graph.nodes.length),
-          `${viewport.name}: every streamed topology must be observed`,
-        );
-        assert.deepEqual(
-          streamedGeometry.failures,
-          [],
-          `${viewport.name}: streamed geometry must remain collision-free and readable`,
-        );
-        if (viewport.name === "desktop") {
-          const zoomedViewport = { name: "desktop at 200% page zoom", width: 720, height: 450 };
-          await page.setViewportSize(zoomedViewport);
-          await page.locator(".graph-fit-button").click();
-          await page.waitForTimeout(500);
-          assertLayout(await renderedLayout(page, fixture.graph), fixture.graph, zoomedViewport);
-        }
-        await page.getByRole("button", { name: "Report", exact: true }).click();
-        const reportDialog = page.getByRole("dialog", { name: "Chris Anderson, TED" });
-        await reportDialog.waitFor({ state: "visible" });
-        const temporalCards = reportDialog.locator(".evidence-temporal");
-        assert.equal(
-          await temporalCards.count(),
-          2,
-          `${viewport.name}: temporal comparisons did not render exactly twice`,
-        );
-        const temporalText = await temporalCards.nth(0).innerText();
-        assert.match(temporalText, /Temporal diff\s+bounded comparison/i);
-        assert.match(
-          temporalText,
-          new RegExp(
-            `after ${reportEvidenceContextFixture.temporal.observedAfter}\\s+·\\s+on or before ${reportEvidenceContextFixture.temporal.observedOnOrBefore}`,
-          ),
-        );
-        assert.match(temporalText, /Archived response body bytes\s+Changed/i);
-        assert.match(temporalText, /Normalized static-HTML text\s+Changed/i);
-        assert.match(temporalText, /Page-declared metadata\s+Changed/i);
-        assert.match(temporalText, /Static-HTML structure\s+Unchanged/i);
-        assert.match(temporalText, /Static-HTML fragment counts\s+1 added\s+·\s+1 removed\s+·\s+3 unchanged/i);
-        assert.match(temporalText, /Changed metadata fields\s+Title, Description/i);
-        assert.ok(
-          temporalText.includes(reportEvidenceContextFixture.temporal.addedTextFragments[0]),
-          `${viewport.name}: normalized added fragment was omitted`,
-        );
-        assert.ok(
-          temporalText.includes(reportEvidenceContextFixture.temporal.removedTextFragments[0]),
-          `${viewport.name}: normalized removed fragment was omitted`,
-        );
-        assert.match(temporalText, /do not identify the editor or prove archive completeness/i);
-        assert.match(temporalText, /do not describe browser-rendered state/i);
-
-        const bodyOnlyTemporalText = await temporalCards.nth(1).innerText();
-        assert.match(bodyOnlyTemporalText, /Temporal diff\s+observed captures/i);
-        assert.match(bodyOnlyTemporalText, /Archived response body bytes\s+Changed/i);
-        assert.match(bodyOnlyTemporalText, /Normalized static-HTML text\s+Unchanged/i);
-        assert.match(bodyOnlyTemporalText, /Page-declared metadata\s+Unchanged/i);
-        assert.match(bodyOnlyTemporalText, /Static-HTML structure\s+Unchanged/i);
-        assert.match(bodyOnlyTemporalText, /Static-HTML fragment counts\s+0 added\s+·\s+0 removed\s+·\s+1 unchanged/i);
-
-        const footprint = reportDialog.locator(".evidence-footprint");
-        assert.equal(await footprint.count(), 1, `${viewport.name}: page footprint did not render exactly once`);
-        const footprintText = await footprint.innerText();
-        assert.match(footprintText, /Page-declared footprint\s+(?:projection not truncated|bounded projection)/i);
-        assert.ok(
-          footprintText.includes(`sha256:${"d".repeat(64)}`),
-          `${viewport.name}: footprint hash binding was omitted`,
-        );
-        assert.ok(
-          footprintText.includes("Chris Anderson - TED speaker profile"),
-          `${viewport.name}: page-authored title was omitted`,
-        );
-        assert.ok(
-          footprintText.includes(reportEvidenceContextFixture.footprint.description),
-          `${viewport.name}: page-authored description was omitted`,
-        );
-        assert.match(footprintText, /Canonical status\s+Accepted Same Page/i);
-        assert.ok(
-          footprintText.includes(reportEvidenceContextFixture.footprint.canonicalUrl),
-          `${viewport.name}: accepted canonical URL was omitted`,
-        );
-        assert.match(footprintText, /Language\s+en/i);
-        assert.match(footprintText, /Open Graph type\s+profile/i);
-        assert.match(footprintText, /Open Graph site\s+TED/i);
-        assert.match(footprintText, /Generators\s+Next\.js/i);
-        assert.match(footprintText, /Applications\s+TED/i);
-        assert.match(footprintText, /Observed providers\s+Jsdelivr, Cloudflare/i);
-        for (const host of reportEvidenceContextFixture.footprint.observedResourceHosts) {
-          assert.ok(footprintText.includes(host), `${viewport.name}: footprint omitted referenced host ${host}`);
-        }
-        for (const type of reportEvidenceContextFixture.footprint.jsonLdTypes) {
-          assert.ok(footprintText.includes(type), `${viewport.name}: footprint omitted JSON-LD type ${type}`);
-        }
-        assert.match(
-          footprintText,
-          /No referenced resource was followed.*no hosting ownership or control is inferred/is,
-        );
-        assert.equal(
-          (await reportDialog.innerText()).includes("ATLAS_CONTEXT_SENTINEL_SHOULD_NOT_RENDER"),
-          false,
-          `${viewport.name}: hostile or unbound context reached the HTML report`,
-        );
-
-        const reportOverflow = await reportDialog.evaluate((dialog) => ({
-          documentWidth: document.documentElement.scrollWidth,
-          bodyWidth: document.body.scrollWidth,
-          viewportWidth: window.innerWidth,
-          overflowing: [dialog, ...dialog.querySelectorAll(".report-sheet-body, .evidence-context")]
-            .filter((element) => element.scrollWidth > element.clientWidth + 1)
-            .map((element) => element.className),
-        }));
-        assert.equal(
-          reportOverflow.documentWidth,
-          reportOverflow.viewportWidth,
-          `${viewport.name}: report opened with document overflow`,
-        );
-        assert.equal(
-          reportOverflow.bodyWidth,
-          reportOverflow.viewportWidth,
-          `${viewport.name}: report opened with body overflow`,
-        );
-        assert.deepEqual(
-          reportOverflow.overflowing,
-          [],
-          `${viewport.name}: report context cards overflow horizontally`,
-        );
-        await page.getByRole("button", { name: "Close report" }).click();
-        assert.deepEqual(consoleIssues, [], `${viewport.name}: browser console warnings/errors`);
-        assert.deepEqual(pageErrors, [], `${viewport.name}: uncaught page errors`);
-      } catch (error) {
-        const screenshot = `/private/tmp/atlas-browser-${viewport.name}-failure.png`;
-        await page.screenshot({ path: screenshot, fullPage: true }).catch(() => undefined);
-        throw new Error(
-          `${viewport.name} deterministic browser QA failed; screenshot: ${screenshot}; console: ${JSON.stringify(consoleIssues)}; page errors: ${JSON.stringify(pageErrors)}`,
-          { cause: error },
-        );
-      } finally {
-        await page.close();
       }
+    } finally {
+      await browser.close();
     }
-  } finally {
-    await browser.close();
-  }
-});
+  },
+);
 
 test(
   "credentialed live browser streams genuine public-web discovery, fetched citations, and grounded findings",

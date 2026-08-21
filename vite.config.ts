@@ -62,6 +62,14 @@ export default defineConfig(async () => {
 
   return {
     server: isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : undefined,
+    environments: {
+      client: {
+        // These libraries live behind a client-only dynamic import, so Vite's
+        // initial scan cannot discover them. Pre-bundling prevents the first
+        // graph/PDF render from receiving an Outdated Optimize Dep response.
+        optimizeDeps: { include: ["@xyflow/react", "elkjs/lib/elk.bundled.js", "@react-pdf/renderer"] },
+      },
+    },
     plugins: [
       vinext(),
       browserHeavySsrStubs(),

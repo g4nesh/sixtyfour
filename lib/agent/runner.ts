@@ -19,6 +19,7 @@ import {
   type CandidateDraft,
   type EvidenceDraft,
   type EvidenceRecord,
+  type EvidenceSourceType,
   type FindingDraft,
   type IdentitySignal,
   type InvestigationInput,
@@ -40,6 +41,7 @@ import {
   admitGraphNode,
   assertSearchGraph,
   enqueueCandidateFrontier,
+  enqueueCandidateLeadFetchFrontier,
   enqueueCandidateUrlFrontier,
   frontierEntryById,
   isCanonicalCompilerSearchEntry,
@@ -255,6 +257,22 @@ function actionBudgetClass(
   if (/(?:search|github|keybase|wayback|archive)/i.test(action.tool)) return "search";
   if (/(?:compute|model|transform|score)/i.test(action.tool)) return "compute";
   return "fetch";
+}
+
+function canonicalActionArguments(proposal: ProposedResearchAction, entry: SearchFrontierEntry): JsonObject {
+  if (proposal.tool.trim() === "search_web") return { query: entry.queryHint };
+  if (proposal.tool.trim() === "wayback_profile_history") return { url: entry.queryHint };
+  const argumentsValue = cloneJson(proposal.arguments);
+  if (proposal.tool.trim() === "fetch_public_source" && entry.leadId) {
+    // The selected frontier owns the capability. Planner-supplied URL or lead
+    // aliases cannot redirect this action away from that exact discovery lead.
+    delete argumentsValue.leadId;
+    delete argumentsValue.opaqueLeadId;
+    delete argumentsValue.url;
+    delete argumentsValue.allowedUrl;
+    argumentsValue.leadId = entry.leadId;
+  }
+  return argumentsValue;
 }
 
 function containsProhibitedArgument(value: JsonValue): boolean {
@@ -809,12 +827,7 @@ async function executeActions(
       frontierEntryId: entry.id,
       tool: proposal.tool.trim(),
       purpose: proposal.purpose.trim(),
-      arguments:
-        proposal.tool.trim() === "search_web"
-          ? { query: entry.queryHint }
-          : proposal.tool.trim() === "wayback_profile_history"
-            ? { url: entry.queryHint }
-            : cloneJson(proposal.arguments),
+      arguments: canonicalActionArguments(proposal, entry),
       ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
       budgetClass: actionBudgetClass(proposal),
       sourceTier: entry.sourceTier,
@@ -1280,6 +1293,9 @@ async function executeActions(
             : ("verified" as const);
         const classifiedLeadData: JsonObject = discoveryOnly
           ? {
+              ...(typeof admission.evidence.attributes.leadId === "string"
+                ? { leadId: admission.evidence.attributes.leadId }
+                : {}),
               ...(typeof admission.evidence.attributes.classifiedSourceTier === "number"
                 ? { classifiedSourceTier: admission.evidence.attributes.classifiedSourceTier }
                 : {}),
@@ -1399,6 +1415,43 @@ async function executeActions(
           );
           graph = evidenceCandidateEdge.graph;
           recordSearchEvents(engine, evidenceCandidateEdge.events, spanId);
+        }
+        if (discoveryOnly && admission.evidence.candidateId && availableTools.includes("fetch_public_source")) {
+          const leadId = admission.evidence.attributes.leadId;
+          const classifiedSourceLaneId = admission.evidence.attributes.classifiedSourceLaneId;
+          const classifiedSourceTier = admission.evidence.attributes.classifiedSourceTier;
+          const classifiedSourceType = admission.evidence.attributes.classifiedSourceType;
+          const leadCandidate = engine
+            .snapshot()
+            .candidates.find((candidate) => candidate.id === admission.evidence?.candidateId);
+          if (
+            leadCandidate &&
+            typeof leadId === "string" &&
+            typeof classifiedSourceLaneId === "string" &&
+            typeof classifiedSourceTier === "number" &&
+            typeof classifiedSourceType === "string"
+          ) {
+            const leadFrontier = enqueueCandidateLeadFetchFrontier(
+              graph,
+              state.target,
+              leadCandidate,
+              {
+                leadId,
+                sourceUrl: admission.evidence.sourceUrl,
+                sourceEvidenceId: admission.evidence.id,
+                classifiedSourceLaneId,
+                classifiedSourceTier: classifiedSourceTier as SourceTier,
+                classifiedSourceType: classifiedSourceType as EvidenceSourceType,
+              },
+              entry,
+              sourceNodeAdmission.value.id,
+              availableTools,
+              engine.ids,
+              engine.clock.now(),
+            );
+            graph = leadFrontier.graph;
+            recordSearchEvents(engine, leadFrontier.events, spanId);
+          }
         }
         if (
           !discoveryOnly &&

@@ -28,6 +28,7 @@ test("CLI help documents every supported live provider", () => {
 test("configured live CLI uses the loopback-only ingress bypass", async () => {
   const vite = await createServer({
     configFile: false,
+    cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
     appType: "custom",
     logLevel: "silent",
     server: { middlewareMode: true },

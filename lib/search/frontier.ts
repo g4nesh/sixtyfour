@@ -4,6 +4,7 @@ import type { IdFactory } from "../domain/runtime";
 import { parseTarget } from "../domain/target";
 import {
   SEARCH_GRAPH_SCHEMA_VERSION,
+  type EvidenceSourceType,
   type FrontierMutationMetadata,
   type JsonObject,
   type ParsedTarget,
@@ -64,6 +65,7 @@ export interface FrontierEnqueueOptions {
   candidateLabel?: string | null;
   intent?: string;
   queryHint?: string;
+  leadId?: string | null;
   status?: Extract<SearchGraphStatus, "queued" | "mutated" | "rejected">;
   mutation?: FrontierMutationMetadata | null;
   utility?: Partial<SearchUtilityComponents>;
@@ -109,6 +111,12 @@ function canonicalDedupe(value: string): string {
 /** Preserve deliberate accents/punctuation that distinguish compiler variants. */
 function canonicalQueryDedupe(value: string): string {
   return normalizeWhitespace(value).normalize("NFC").toLocaleLowerCase("en-US").replaceAll("|", "%7c").slice(0, 360);
+}
+
+function canonicalOpaqueLeadId(value: string | null | undefined): string | null {
+  if (!value || value !== value.trim() || value.length > 180 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value))
+    return null;
+  return value;
 }
 
 function graphTimestamp(graph: SearchGraph, timestamp: string): SearchGraph {
@@ -320,14 +328,18 @@ export function enqueueFrontier(
     320,
   );
   const candidateId = options.candidateId ?? null;
-  const dedupeKey = [
+  const leadId = canonicalOpaqueLeadId(options.leadId);
+  if (options.leadId !== undefined && options.leadId !== null && !leadId) {
+    throw new TypeError("frontier leadId must be one bounded opaque discovery capability");
+  }
+  const dedupeParts = [
     canonicalDedupe(options.lane.id),
     canonicalDedupe(candidateId ?? "unbound"),
     canonicalQueryDedupe(queryHint),
-    canonicalDedupe(options.mutation?.strategy ?? "base"),
-  ]
-    .join("|")
-    .slice(0, 500);
+  ];
+  if (leadId) dedupeParts.push(canonicalDedupe(leadId));
+  dedupeParts.push(canonicalDedupe(options.mutation?.strategy ?? "base"));
+  const dedupeKey = dedupeParts.join("|").slice(0, 500);
   const dominant = graph.frontier.find(
     (entry) =>
       entry.dedupeKey === dedupeKey &&
@@ -370,6 +382,7 @@ export function enqueueFrontier(
       data: {
         intent: normalizeWhitespace(options.intent ?? options.lane.description).slice(0, 320),
         queryHint,
+        ...(leadId ? { leadId } : {}),
         admission: options.lane.admission,
       },
     },
@@ -392,6 +405,7 @@ export function enqueueFrontier(
     allowedTools: [...options.lane.allowedTools].sort(),
     intent: normalizeWhitespace(options.intent ?? options.lane.description).slice(0, 320),
     queryHint,
+    ...(leadId ? { leadId } : {}),
     candidateId,
     depth,
     ordinal: graph.nextOrdinal,
@@ -433,6 +447,7 @@ export function enqueueFrontier(
         nodeId: entry.nodeId,
         sourceTier: entry.sourceTier,
         sourceLaneId: entry.sourceLaneId,
+        leadId: entry.leadId ?? null,
         edgeCost: entry.edgeCost,
         pathCost: entry.pathCost,
         depth: entry.depth,
@@ -554,10 +569,13 @@ export function enqueueCandidateFrontier(
     const compilerQueries = compiledQueriesForLane(target, lane);
     if (compilerQueries.length > 0) {
       // Canonical compiler searches are seeded once, before any candidate is
-      // known. Candidate admission may open only the lane's remaining direct
-      // tools; re-enqueuing an exhausted compiler query here would rerun the
+      // known. Candidate admission may open only non-fetch specialist tools;
+      // every hardened fetch is opened later by one admitted opaque discovery
+      // lead. Re-enqueuing an exhausted compiler query here would rerun the
       // same candidate-independent search after a late candidate discovery.
-      const remainingTools = lane.allowedTools.filter((tool) => tool !== "search_web");
+      const remainingTools = lane.allowedTools.filter(
+        (tool) => tool !== "search_web" && tool !== "fetch_public_source",
+      );
       if (remainingTools.length > 0) {
         const enqueued = enqueueFrontier(
           graph,
@@ -579,10 +597,12 @@ export function enqueueCandidateFrontier(
       }
       continue;
     }
+    const remainingTools = lane.allowedTools.filter((tool) => tool !== "search_web" && tool !== "fetch_public_source");
+    if (remainingTools.length === 0) continue;
     const enqueued = enqueueFrontier(
       graph,
       {
-        lane,
+        lane: laneWithTools(lane, remainingTools),
         target,
         parentNodeId,
         parentFrontierEntry: parentEntry,
@@ -598,6 +618,90 @@ export function enqueueCandidateFrontier(
     if (enqueued.value) entries.push(enqueued.value);
   }
   return { graph, value: entries, events };
+}
+
+export interface CandidateLeadFetchBinding {
+  leadId: string;
+  sourceUrl: string;
+  sourceEvidenceId: string;
+  classifiedSourceLaneId: string;
+  classifiedSourceTier: SourceTier;
+  classifiedSourceType: EvidenceSourceType;
+}
+
+/**
+ * Open exactly one candidate-scoped hardened-fetch pivot for one admitted
+ * opaque discovery lead. The classified lane is kernel-checked here so a
+ * generic candidate pivot can never consume a lead from another source tier.
+ */
+export function enqueueCandidateLeadFetchFrontier(
+  graphValue: SearchGraph,
+  target: ParsedTarget,
+  candidate: { id: string; displayName: string },
+  binding: CandidateLeadFetchBinding,
+  parentEntry: SearchFrontierEntry,
+  parentNodeId: string,
+  availableTools: readonly string[],
+  ids: IdFactory,
+  timestamp: string,
+): SearchKernelResult<SearchFrontierEntry | null> {
+  const leadId = canonicalOpaqueLeadId(binding.leadId);
+  const sourceUrl = exactCandidateLinkedUrl(binding.sourceUrl);
+  const lane = sourceLaneById(binding.classifiedSourceLaneId);
+  const legalLane = sourceLanesForTarget(target, availableTools, { candidateId: candidate.id }).find(
+    (candidateLane) => candidateLane.id === binding.classifiedSourceLaneId,
+  );
+  if (
+    !leadId ||
+    !sourceUrl ||
+    !binding.sourceEvidenceId ||
+    !lane ||
+    !legalLane ||
+    lane.tier !== binding.classifiedSourceTier ||
+    !lane.requiresCandidate ||
+    lane.requiresExactCandidateUrl ||
+    !lane.allowedTools.includes("fetch_public_source") ||
+    !lane.sourceTypes.includes(binding.classifiedSourceType) ||
+    !availableTools.includes("fetch_public_source")
+  ) {
+    return { graph: cloneJson(graphValue), value: null, events: [] };
+  }
+  const priorLeadIdsForSource = new Set(
+    graphValue.nodes
+      .filter(
+        (node) =>
+          node.kind === "source" &&
+          node.candidateId === candidate.id &&
+          node.evidenceId !== binding.sourceEvidenceId &&
+          typeof node.data.sourceUrl === "string" &&
+          exactCandidateLinkedUrl(node.data.sourceUrl) === sourceUrl &&
+          typeof node.data.leadId === "string",
+      )
+      .map((node) => node.data.leadId as string),
+  );
+  if (
+    graphValue.frontier.some(
+      (entry) => entry.candidateId === candidate.id && entry.leadId && priorLeadIdsForSource.has(entry.leadId),
+    )
+  ) {
+    return { graph: cloneJson(graphValue), value: null, events: [] };
+  }
+  return enqueueFrontier(
+    graphValue,
+    {
+      lane: laneWithTools(lane, ["fetch_public_source"]),
+      target,
+      parentNodeId,
+      parentFrontierEntry: parentEntry,
+      candidateId: candidate.id,
+      candidateLabel: candidate.displayName,
+      leadId,
+      queryHint: leadId,
+      intent: `Fetch only opaque discovery lead ${leadId} in its classified ${lane.id} lane.`,
+    },
+    ids,
+    timestamp,
+  );
 }
 
 function exactCandidateLinkedUrl(value: string): string | null {
@@ -696,8 +800,11 @@ export function isCanonicalCompilerSearchEntry(entry: SearchFrontierEntry): bool
 function isCandidateLeadFetchEntry(entry: SearchFrontierEntry): boolean {
   return (
     entry.candidateId !== null &&
+    canonicalOpaqueLeadId(entry.leadId) !== null &&
+    entry.queryHint === entry.leadId &&
     entry.mutation === null &&
-    entry.allowedTools.includes("fetch_public_source") &&
+    entry.allowedTools.length === 1 &&
+    entry.allowedTools[0] === "fetch_public_source" &&
     !isCanonicalCompilerSearchEntry(entry)
   );
 }
@@ -710,7 +817,8 @@ function isClassifiedLeadDependency(graph: SearchGraph, entry: SearchFrontierEnt
       node.candidateId === entry.candidateId &&
       node.evidenceId !== null &&
       node.data.sourceType === "search_result" &&
-      node.data.classifiedSourceLaneId === entry.sourceLaneId,
+      node.data.classifiedSourceLaneId === entry.sourceLaneId &&
+      node.data.leadId === entry.leadId,
   );
 }
 
@@ -808,6 +916,7 @@ export function selectFrontierBatch(
       actionId: entry.actionId,
       sourceTier: entry.sourceTier,
       sourceLaneId: entry.sourceLaneId,
+      leadId: entry.leadId ?? null,
       edgeCost: entry.edgeCost,
       pathCost: entry.pathCost,
       depth: entry.depth,
@@ -1498,6 +1607,7 @@ function canonicalFrontierEntryShape(value: unknown): boolean {
     value.allowedTools.every(graphNonEmptyString) &&
     graphNonEmptyString(value.intent) &&
     graphNonEmptyString(value.queryHint) &&
+    (value.leadId === undefined || graphNonEmptyString(value.leadId)) &&
     graphNullableString(value.candidateId) &&
     graphNonNegativeInteger(value.depth) &&
     graphNonNegativeInteger(value.ordinal) &&
@@ -1756,6 +1866,23 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       }
     }
     if (
+      entry.leadId !== undefined &&
+      (canonicalOpaqueLeadId(entry.leadId) === null ||
+        entry.queryHint !== entry.leadId ||
+        entry.candidateId === null ||
+        entry.mutation !== null ||
+        entry.allowedTools.length !== 1 ||
+        entry.allowedTools[0] !== "fetch_public_source" ||
+        resolvedLane?.requiresCandidate !== true ||
+        resolvedLane.requiresExactCandidateUrl)
+    ) {
+      issues.push({
+        code: "lead_frontier_binding_mismatch",
+        path: `frontier[${index}].leadId`,
+        message: `${entry.id} is not one canonical candidate-scoped lead fetch`,
+      });
+    }
+    if (
       entry.mutation !== null &&
       (typeof entry.mutation !== "object" ||
         !FRONTIER_MUTATION_STRATEGIES.includes(entry.mutation.strategy) ||
@@ -1855,7 +1982,8 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       pivotNode.candidateId !== entry.candidateId ||
       pivotNode.status !== entry.status ||
       pivotNode.data.intent !== entry.intent ||
-      pivotNode.data.queryHint !== entry.queryHint
+      pivotNode.data.queryHint !== entry.queryHint ||
+      (pivotNode.data.leadId ?? null) !== (entry.leadId ?? null)
     ) {
       issues.push({
         code: "frontier_pivot_mismatch",
@@ -2354,6 +2482,7 @@ function immutableFrontierFingerprint(entry: SearchFrontierEntry): string {
     allowedTools: entry.allowedTools,
     intent: entry.intent,
     queryHint: entry.queryHint,
+    leadId: entry.leadId ?? null,
     candidateId: entry.candidateId,
     depth: entry.depth,
     ordinal: entry.ordinal,

@@ -55,12 +55,19 @@ export interface ReportCandidateView {
   matchedSignals: string[];
   conflictingSignals: string[];
   independentSourceFamilies: string[];
+  evidenceRefs: string[];
+  findingIds: string[];
+  sourceDomains: string[];
+  directSourceCount: number;
 }
 
 export interface ReportIdentityView {
   status: "resolved" | "ambiguous" | "unresolved";
   selected: ReportCandidateView | null;
+  /** At most five highest-ranked, separately retained candidate dossiers. */
+  profiles: ReportCandidateView[];
   alternatives: ReportCandidateView[];
+  retainedCandidateCount: number;
   runnerUpMargin: number;
   resolutionThreshold: number;
   marginThreshold: number;
@@ -76,6 +83,8 @@ export interface ReportCitedSource {
 
 export interface ReportFindingView {
   id: string;
+  candidateId: string;
+  candidateName: string;
   title: string;
   description: string;
   category: FindingCategory;

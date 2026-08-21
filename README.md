@@ -2,7 +2,7 @@
 
 Atlas is an auditable public-source research agent for resolving professional identities. Its live scheduler performs a visible best-first search over a canonical execution graph: it expands the lowest-cost legal source frontier first, keeps rejected and ambiguous branches, and reserves a small deterministic Metropolis-Hastings mutation lane for useful adjacent exploration. It separates same-name candidates, attaches every finding to direct evidence, exposes the full execution trace, and stops honestly when identity or coverage is insufficient.
 
-The browser workbench runs live research when a server-side OpenAI, Gemini, or OpenRouter provider is configured. Three deterministic zero-network replays remain available through the CLI and API, so the evidence model and visualization can be evaluated without a provider key.
+The browser workbench is intentionally a live-only Deep research surface when a server-side OpenAI, Gemini, or OpenRouter provider is configured. Three deterministic zero-network replays remain available through the CLI and API for tests, audit, and credential-free evaluation; replay is not presented as a browser-workbench mode.
 
 ![Atlas People Intelligence workbench](public/og.png)
 
@@ -15,9 +15,9 @@ npm ci --ignore-scripts
 npm run dev
 ```
 
-Open `http://localhost:3000`. With live bindings configured, enter a public-professional target, choose Quick, Standard, or Deep, and run it. Deep is the browser default so the complete bounded operator program remains reachable; lower depths intentionally trade breadth for smaller request, token, and time budgets. The black graph workspace streams queued, selected, verified, exhausted, mutated, and rejected paths; the source ladder groups frontier state and admitted evidence by website tier; the trace remains append-only; and the final report can be downloaded as deterministic Markdown or a polished client-rendered PDF.
+Open `http://localhost:3000`. With live bindings configured, enter a person plus any bounded public-professional context you know, such as role, company or organization, coarse city/region, adult education institution, exact public URL, or public handle. Every browser submission requests Deep research so the complete finite operator program and candidate-bound fetch frontier remain reachable; the browser exposes no depth or replay chooser. The black graph workspace streams queued, selected, verified, exhausted, mutated, and rejected paths; the source ladder groups frontier state and admitted evidence by website tier; the trace remains append-only; and the final report can be downloaded as deterministic Markdown or a polished client-rendered PDF.
 
-For a credential-free, zero-network evaluation, use one of the checked-in replays below. Replay execution never performs an outbound request.
+For a credential-free, zero-network evaluation or internal audit, use one of the checked-in CLI/API replays below. Replay execution never performs an outbound request.
 
 The same artifacts are available from the CLI:
 
@@ -66,6 +66,8 @@ OPENROUTER_APP_NAME=Atlas People Intelligence
 ```
 
 Never use a `NEXT_PUBLIC_*` variable for a key. `.env` and `.dev.vars` are ignored, excluded from the Docker build context, and represented only by empty-value templates. `npm run dev` enables unauthenticated live calls only for loopback URLs; it does not weaken a production start or deployment. The CLI's explicit `--mode live` choice supplies the same loopback-only local enablement and does not require an HTTP bearer token.
+
+The browser always posts `mode: "live"` with `requestedDepth: "deep"`. CLI and API callers retain explicit replay and lower-depth controls for deterministic tests, audits, and bounded operational probes; those controls do not create a browser replay/depth selector.
 
 For non-local HTTP live research, configure `ATLAS_API_TOKEN` with at least 32 random bytes and send it only as a bearer token. The API refuses non-local live execution unless explicit enablement, a provider key, and protected ingress are all configured:
 
@@ -127,7 +129,7 @@ The kernel searches the strongest legal public-professional tier before broader 
 
 People-search sites, reverse-phone services, data brokers, residential/property/tax-assessor surfaces, family mapping, credentials, and private contact enrichment are denied before frontier creation. Official organization filings are allowed only for public-professional organization context.
 
-The schema-v2 report includes the entire canonical `searchGraph` alongside the run/query/status, every identity candidate, selected candidate and runner-up margin, candidate-scoped findings, applicable coverage, sources/evidence, limitations, telemetry, usage, and stop reason. Graph nodes and edges use stable frontier/action IDs that also appear in tool spans and evidence. Every finding names its `candidateId`, supporting `evidenceIds`, and `counterEvidenceIds`; evidence cannot cross candidates. The UI consumes this graph directly and deliberately shows an empty state instead of inventing a network from dossier prose.
+The schema-v2 report includes the entire canonical `searchGraph` alongside the run/query/status, every retained identity candidate, selected candidate and runner-up margin, candidate-scoped findings and evidence, applicable coverage, sources, limitations, telemetry, usage, and stop reason. The report view consolidates up to the five highest-ranked candidate profiles while preserving the full retained-candidate count and keeping same-name branches separate. Graph nodes and edges use stable frontier/action IDs that also appear in tool spans and evidence. Every finding names its `candidateId`, supporting `evidenceIds`, and `counterEvidenceIds`; evidence cannot cross candidates. The UI consumes this graph directly and deliberately shows an empty state instead of inventing a network from dossier prose.
 
 See [docs/architecture.md](docs/architecture.md) for the trust boundary and scaling design, [docs/safety.md](docs/safety.md) for the threat model, and [docs/evaluation.md](docs/evaluation.md) for replay provenance and the test matrix.
 
@@ -135,7 +137,9 @@ See [docs/architecture.md](docs/architecture.md) for the trust boundary and scal
 
 ### Deterministic operator-query program
 
-For a public-professional name, role, or organization, `compileOsintQueries` creates at most ten auditable query instructions. The first is an untouched quoted exact-match baseline. Later variants may add a separately labeled noise-exclusion refinement, exact organization/role context, mechanically derived initials or punctuation folding, `site:` scopes for GitHub, ORCID, Google Scholar, an official App Store listing, up to two explicitly admitted academic domains, and a bounded `filetype:pdf`/`intitle:` document pivot. A selected frontier entry—not model prose—owns the query that actually reaches the search transport, and every returned URL remains discovery-only until an exact hardened fetch succeeds.
+For a public-professional name, role, or organization, `compileOsintQueries` creates at most 16 auditable query instructions. The first is an untouched quoted exact-match baseline. Later variants may add a separately labeled noise-exclusion refinement; exact organization, role, and coarse-location context; mechanically derived initials or punctuation folding; closed `site:` scopes for GitHub, LinkedIn, ORCID, Google Scholar, OpenReview, Semantic Scholar, OpenAlex, and official App Store listings; up to two explicitly admitted academic domains; and a bounded `filetype:pdf`/`intitle:` document pivot. A selected frontier entry—not model prose—owns the query that actually reaches the search transport, and every returned URL remains discovery-only until an exact hardened fetch succeeds.
+
+Each admitted candidate-bound discovery lead opens one opaque, lane-checked `fetch_public_source` frontier entry. The kernel binds it to the exact observed HTTPS URL and deduplicates by candidate plus canonical URL, so the same page cannot be refetched under another query variant or rewritten lead ID.
 
 Atlas never generates email variants. An email enters the stack only when the user supplied that exact value, and the existing GitHub codegraph boundary remains its only specialist lookup. Exclusion variants always follow the neutral baseline, so they cannot erase the trace of an unmodified search. Search operators improve discovery precision; a zero-result operator query is never treated as proof of absence.
 
@@ -163,7 +167,7 @@ Every started span has exactly one terminal span. Payload sanitation removes sec
 
 ## Safety boundary
 
-Atlas is for public professional research only. Its deterministic, tested policy grammar refuses requests for home addresses, phone numbers, family mapping, minors, credentials, medical/financial/protected traits, stalking, contact automation, or precise/live location before any model or network call. The same policy gates action arguments, admitted evidence, open questions, reports, and traces. It is a deliberately bounded fail-closed policy surface rather than a claim to understand every possible euphemism. Atlas never generates or enumerates emails, logs in, uses cookies, bypasses paywalls/CAPTCHAs, queries brokers or breach data, or sends outreach.
+Atlas is for public professional research only. Its deterministic, tested policy grammar refuses requests for home addresses, personal phone numbers, data-broker records, family mapping, minors, credentials, medical/financial/protected traits, stalking, contact automation, or precise/live location before any model or network call. Coarse city/region and adult education context are allowed only as public-professional disambiguators; school context that identifies or targets a minor is refused. The same policy gates action arguments, admitted evidence, open questions, reports, and traces. It is a deliberately bounded fail-closed policy surface rather than a claim to understand every possible euphemism. Atlas never generates or enumerates emails, logs in, uses cookies, bypasses paywalls/CAPTCHAs, queries brokers or breach data, or sends outreach.
 
 Fetched pages are treated as inert hostile data. Direct fetching is HTTPS-only and candidate-scoped, authorizes the exact URL rather than a tracking-stripped lookalike, manually revalidates redirects, blocks localhost/private/link-local/metadata/reserved destinations and suspicious ports, and enforces DNS, MIME, byte, time, redirect, retry, and total-subrequest limits. Arbitrary-host fetching requires an injected trusted resolver or controlled egress proxy and otherwise fails closed.
 

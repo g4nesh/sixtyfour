@@ -12,6 +12,7 @@ const example = JSON.parse(
 const vite = await createServer({
   root: projectRoot,
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -293,6 +294,8 @@ test("report view model and Markdown are deterministic and citation-complete", (
   const references = new Set(first.evidence.map((item) => item.ref));
   assert.deepEqual([...references], ["E01", "E02", "E03", "E04"]);
   for (const finding of first.findings) {
+    assert.ok(finding.candidateId);
+    assert.ok(finding.candidateName);
     for (const ref of [...finding.citations, ...finding.counterCitations]) {
       assert.equal(references.has(ref), true, `${finding.id} cites unknown ${ref}`);
       assert.match(firstMarkdown, new RegExp(`<a id="${ref.toLocaleLowerCase("en-US")}"></a>`));
@@ -302,6 +305,18 @@ test("report view model and Markdown are deterministic and citation-complete", (
   assert.match(firstMarkdown, /Mutations rejected\s*\| 1/);
   assert.match(firstMarkdown, /Mutation Rejected/);
   assert.match(firstMarkdown, /Frontier entry states/);
+  assert.equal(first.identity.retainedCandidateCount, report.candidates.length);
+  assert.ok(first.identity.profiles.length > 0 && first.identity.profiles.length <= 5);
+  assert.match(first.identity.rationale, new RegExp(`${report.candidates.length} distinct candidate branch`));
+  assert.match(firstMarkdown, /Distinct candidate branches retained/);
+  assert.match(firstMarkdown, /Top retained candidate profiles/);
+  assert.match(firstMarkdown, /\*\*Candidate:\*\*/);
+  for (const profile of first.identity.profiles) {
+    assert.ok(Array.isArray(profile.evidenceRefs));
+    assert.ok(Array.isArray(profile.findingIds));
+    assert.ok(Array.isArray(profile.sourceDomains));
+    assert.equal(Number.isInteger(profile.directSourceCount), true);
+  }
 });
 
 test("discovery leads export as unverified metadata and never as exact excerpts", () => {
@@ -615,7 +630,10 @@ test("React-PDF and Yoga stay behind one click-time browser-only module boundary
       assert.doesNotMatch(content, /from\s+["'](?:@react-pdf\/renderer|yoga-layout)/);
     }
   }
-  assert.deepEqual(importers, ["app/report/pdf-download.client.tsx", "tests/report-export.test.mjs"]);
+  assert.deepEqual(importers, ["app/report/pdf-download.client.tsx", "tests/report-export.test.mjs", "vite.config.ts"]);
+  const viteSource = await readFile(path.join(projectRoot, "vite.config.ts"), "utf8");
+  assert.match(viteSource, /optimizeDeps:\s*\{\s*include:[^}]*@react-pdf\/renderer/);
+  assert.doesNotMatch(viteSource, /from\s+["']@react-pdf\/renderer/);
   const pdfSource = await readFile(path.join(projectRoot, "app/report/pdf-download.client.tsx"), "utf8");
   const downloadSource = await readFile(path.join(projectRoot, "app/report/downloads.client.ts"), "utf8");
   assert.match(pdfSource, /^"use client";/);

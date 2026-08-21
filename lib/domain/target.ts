@@ -1,3 +1,4 @@
+import { containsRestrictedPublicContent } from "./content-policy";
 import { normalizeComparable, normalizeWhitespace } from "./runtime";
 import {
   SCHEMA_VERSION,
@@ -17,7 +18,22 @@ const PACKAGE_PATTERN = /\b(?:npm|pypi|package)\s*[:=]\s*(@?[A-Z0-9_.-]+(?:\/[A-
 const PLATFORM_HANDLE_PATTERN = /\b(github|gitlab|keybase|linkedin|twitter|x)\s*[:=]\s*@?([A-Z0-9_.-]{2,64})\b/gi;
 const DOMAIN_PATTERN = /\b(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,63}\b/gi;
 const ORGANIZATION_MARKER =
-  /\b(?:ai|labs?|inc\.?|llc|ltd\.?|corp(?:oration)?|company|foundation|university|institute|studio|systems?|technologies|ventures?)\b/i;
+  /\b(?:ai|labs?|inc\.?|llc|ltd\.?|corp(?:oration)?|compan(?:y|ies)|organizations?|business(?:es)?|nonprofits?|foundations?|universit(?:y|ies)|institutes?|schools?|colleges?|studio|systems?|technologies|ventures?)\b/i;
+const EXPLICIT_ORGANIZATION_PREFIX =
+  /^(?:organization|company|business|nonprofit)(?:\s+(?:named|called))?\s*(?::|=|-)?\s+(.+)$/i;
+const NON_PERSON_MONONYMS = new Set([
+  "a",
+  "an",
+  "company",
+  "find",
+  "investigate",
+  "lookup",
+  "organization",
+  "person",
+  "research",
+  "someone",
+  "the",
+]);
 
 const ROLE_PATTERNS: Array<{ canonical: string; pattern: RegExp }> = [
   { canonical: "Chief Technology Officer", pattern: /\b(?:cto|chief technology officer)\b/i },
@@ -29,6 +45,10 @@ const ROLE_PATTERNS: Array<{ canonical: string; pattern: RegExp }> = [
   { canonical: "Product Designer", pattern: /\bproduct designer\b/i },
   { canonical: "Designer", pattern: /\bdesigner\b/i },
   { canonical: "Researcher", pattern: /\b(?:research scientist|researcher)\b/i },
+  {
+    canonical: "Professor",
+    pattern: /\b(?:(?:assistant|associate|adjunct|visiting|emeritus)\s+)?professor\b/i,
+  },
   { canonical: "Investor", pattern: /\b(?:investor|partner)\b/i },
 ];
 
@@ -49,9 +69,41 @@ function titleCaseName(value: string): string {
 
 function looksLikePersonName(value: string): boolean {
   const words = normalizeWhitespace(value).split(" ");
-  if (words.length < 2 || words.length > 5) return false;
+  if (words.length < 1 || words.length > 5) return false;
   if (ROLE_PATTERNS.some(({ pattern }) => pattern.test(value))) return false;
+  if (words.length === 1 && NON_PERSON_MONONYMS.has(normalizeComparable(words[0]))) return false;
   return words.every((word) => /^[\p{L}][\p{L}'’.-]*$/u.test(word));
+}
+
+function leadingPersonLocation(value: string): { person: string; location: string } | null {
+  const match = normalizeWhitespace(value).match(/^(.+?)\s+(?:based\s+in|from|in)\s+(.+)$/i);
+  const person = normalizeWhitespace(match?.[1] ?? "");
+  const location = normalizeWhitespace(match?.[2] ?? "");
+  if (!person || !location || ORGANIZATION_MARKER.test(person) || !looksLikePersonName(person)) return null;
+  return { person, location };
+}
+
+function leadingPersonOrganization(value: string): { person: string; organization: string } | null {
+  const match = normalizeWhitespace(value).match(/^(.+?)\s+(?:at|with)\s+(.+)$/i);
+  const person = normalizeWhitespace(match?.[1] ?? "");
+  const organization = normalizeWhitespace(match?.[2] ?? "");
+  if (!person || !organization || ORGANIZATION_MARKER.test(person) || !looksLikePersonName(person)) return null;
+  return { person, organization };
+}
+
+function addLocation(locations: string[], rawLocation: string): void {
+  const location = normalizeWhitespace(rawLocation.replace(/^["']|["']$/g, ""));
+  if (
+    !location ||
+    location.length > 160 ||
+    location.split(" ").length > 12 ||
+    containsRestrictedPublicContent(location) ||
+    /(?:^|\s)\+?\d[\d(). -]{7,}\d(?:\s|$)/.test(location)
+  )
+    return;
+  const normalizedLocation = normalizeComparable(location);
+  if (locations.some((item) => normalizeComparable(item) === normalizedLocation)) return;
+  locations.push(location);
 }
 
 function addOrganization(
@@ -95,7 +147,7 @@ function addIdentifier(
 
 function organizationFromRoleQuery(value: string): string | undefined {
   const match = value.match(
-    /\b(?:cto|ceo|cpo|chief\s+[a-z ]+\s+officer|founder|creator|author|inventor|engineer|designer|researcher|investor|partner)\s+(?:at|of|for)\s+(.+?)(?:[?.!]|$)/i,
+    /\b(?:cto|ceo|cpo|chief\s+[a-z ]+\s+officer|founder|creator|author|inventor|engineer|designer|researcher|professor|investor|partner)\s+(?:at|of|for)\s+(.+?)(?:[?.!]|$)/i,
   );
   return match?.[1] ? normalizeWhitespace(match[1]) : undefined;
 }
@@ -203,17 +255,26 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
 
   let name: string | undefined;
   const firstPart = commaParts[0];
-  const firstPartLooksOrganizational = Boolean(firstPart && ORGANIZATION_MARKER.test(firstPart));
-  if (firstPart && !firstPartLooksOrganizational && looksLikePersonName(firstPart)) {
-    name = titleCaseName(firstPart);
+  const explicitOrganization = firstPart?.match(EXPLICIT_ORGANIZATION_PREFIX);
+  const freeformLocation = firstPart ? leadingPersonLocation(firstPart) : null;
+  const freeformOrganization = firstPart && !freeformLocation ? leadingPersonOrganization(firstPart) : null;
+  const leadingPersonContext = freeformLocation ?? freeformOrganization;
+  const firstPartLooksOrganizational = Boolean(
+    firstPart && !leadingPersonContext && ORGANIZATION_MARKER.test(firstPart),
+  );
+  const personPart = leadingPersonContext?.person ?? firstPart;
+  if (personPart && !firstPartLooksOrganizational && looksLikePersonName(personPart)) {
+    name = titleCaseName(personPart);
   }
+  if (freeformLocation) addLocation(locationHints, freeformLocation.location);
+  if (freeformOrganization) addOrganization(organizationHints, freeformOrganization.organization, "current");
 
   const roleOrganization = organizationFromRoleQuery(withoutEmails);
   if (roleOrganization) {
     addOrganization(organizationHints, roleOrganization, "current");
   }
 
-  for (const part of commaParts.slice(name ? 1 : 0)) {
+  for (const part of commaParts.slice(name || explicitOrganization ? 1 : 0)) {
     addRole(roleHints, part);
 
     const former = part.match(/^(?:ex[- ]|former(?:ly)?(?:\s+at)?\s+)(.+)$/i);
@@ -228,10 +289,9 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
       continue;
     }
 
-    const location = part.match(/^(?:in|based\s+in)\s+(.+)$/i);
+    const location = part.match(/^(?:in|based\s+in|from)\s+(.+)$/i);
     if (location?.[1]) {
-      const normalizedLocation = normalizeWhitespace(location[1]);
-      if (!locationHints.includes(normalizedLocation)) locationHints.push(normalizedLocation);
+      addLocation(locationHints, location[1]);
       continue;
     }
 
@@ -261,7 +321,7 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
     kind = "role_query";
   } else if (firstPartLooksOrganizational && firstPart) {
     kind = "organization";
-    addOrganization(organizationHints, firstPart, "unspecified");
+    addOrganization(organizationHints, explicitOrganization?.[1] ?? firstPart, "unspecified");
   }
 
   return {

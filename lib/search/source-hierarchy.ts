@@ -575,6 +575,7 @@ export function deterministicSourceTypeForUrl(
   if (host === "github.com" || host.endsWith(".github.io")) return "code_profile";
   if (isCanonicalAppStoreListingUrl(value)) return "public_document";
   if (isCanonicalGoogleScholarProfileUrl(value)) return "public_document";
+  if (host === "openreview.net" || host === "semanticscholar.org" || host === "openalex.org") return "public_document";
   if (hostMatches(host, REPUTABLE_MEDIA_HOSTS)) return "news";
   if (hostMatchesFirstPartyContext(host, context)) return preferredFirstPartyType;
   if (
@@ -586,6 +587,8 @@ export function deterministicSourceTypeForUrl(
     host === "orcid.org" ||
     host === "doi.org" ||
     host === "openalex.org" ||
+    host === "openreview.net" ||
+    host === "semanticscholar.org" ||
     host === "crossref.org" ||
     host === "patentsview.org" ||
     host === "npmjs.com"
@@ -624,6 +627,8 @@ export function sourceTierForUrl(
     host === "orcid.org" ||
     host === "doi.org" ||
     host === "openalex.org" ||
+    host === "openreview.net" ||
+    host === "semanticscholar.org" ||
     host === "crossref.org" ||
     host === "patentsview.org" ||
     host === "npmjs.com" ||
@@ -703,9 +708,11 @@ export function sourceLaneQueryHint(target: ParsedTarget, lane: SourceLane): str
 
 /**
  * Project the finite compiler plan into legal source lanes. Each surviving
- * compiler query is assigned exactly once: baseline to T1, structured sites
- * to T2, institution/document operators to T3, supplied context to T4, and
- * bounded general/name refinements to discovery-only T6.
+ * compiler query is assigned exactly once: baseline and supplied context to
+ * T1, structured sites to T2, institution/document operators to T3, and
+ * bounded general/name refinements to discovery-only T6. Context stays ahead
+ * of generic site scopes so disambiguating user input is not stranded behind
+ * broad provider work.
  */
 export function compiledQueriesForLane(
   target: ParsedTarget,
@@ -722,7 +729,7 @@ export function compiledQueriesForLane(
   const plan = compileOsintQueries(target, { institutionDomains });
   if (plan.status !== "compiled") return [];
   if (lane.id === "t1.first_party") {
-    return plan.queries.filter((query) => query.kind === "exact_baseline");
+    return plan.queries.filter((query) => query.kind === "exact_baseline" || query.kind === "exact_context");
   }
   if (lane.id === "t2.structured_professional") {
     return plan.queries.filter((query) => query.kind === "professional_site" || query.kind === "public_metadata_site");
@@ -731,7 +738,7 @@ export function compiledQueriesForLane(
     return plan.queries.filter((query) => query.kind === "institution_site" || query.kind === "public_document");
   }
   if (lane.id === "t4.reputable_media") {
-    return plan.queries.filter((query) => query.kind === "exact_context");
+    return [];
   }
   if (lane.id === "t6.general_discovery") {
     return plan.queries.filter(

@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { FindingCategory, InvestigationReport, ResearchDepth } from "../lib/domain/types";
+import type { FindingCategory, InvestigationReport } from "../lib/domain/types";
 import type { Report, RunStatus, TraceEvent } from "./atlas-types";
 import {
   eventType,
@@ -138,13 +138,12 @@ function compactViewportSnapshot(): boolean {
 
 export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkbenchProps = {}) {
   const [query, setQuery] = useState<string>("");
-  const [researchDepth, setResearchDepth] = useState<ResearchDepth>("deep");
   const [categories, setCategories] = useState<ReadonlySet<FindingCategory>>(() => new Set(DEFAULT_MODALITIES));
   const [report, setReport] = useState<Report | null>(null);
   const [trace, setTrace] = useState<TraceEvent[]>([]);
   const [graph, setGraph] = useState<CanonicalSearchGraph | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
-  const [message, setMessage] = useState("Enter a name, email, organization, or public identifier to research.");
+  const [message, setMessage] = useState("Describe the person with any public-professional context you have.");
   const [liveConfigured, setLiveConfigured] = useState<boolean | null>(null);
   const [graphView, setGraphView] = useState<GraphView>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -220,7 +219,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     event.preventDefault();
     const trimmed = query.trim();
     if (!trimmed) {
-      setMessage("Enter a name, role, organization, work email, public URL, handle, or publication.");
+      setMessage("Describe the person with a name or other public-professional context.");
       queryRef.current?.focus();
       return;
     }
@@ -240,7 +239,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         body: JSON.stringify({
           query: trimmed,
           mode: "live",
-          requestedDepth: researchDepth,
+          requestedDepth: "deep",
           requestedCategories: [...categories],
         }),
         signal: controller.signal,
@@ -381,7 +380,6 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       </a>
       <header className="command-header">
         <a className="atlas-wordmark" href="#graph-workspace" aria-label="Atlas home">
-          <span aria-hidden="true">A</span>
           <strong>Atlas</strong>
         </a>
         <form className="command-search" onSubmit={startResearch} role="search">
@@ -396,26 +394,11 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Name, role, organization, work email, URL, handle, or publication"
+            placeholder="Any public context: name, role, company, city/region, adult school, URL, or handle"
             autoComplete="off"
             spellCheck="false"
             aria-describedby="research-scope-note"
           />
-          <label className="sr-only" htmlFor="atlas-research-depth">
-            Research depth
-          </label>
-          <select
-            id="atlas-research-depth"
-            className="research-depth-select"
-            value={researchDepth}
-            onChange={(event) => setResearchDepth(event.target.value as ResearchDepth)}
-            disabled={runStatus === "running"}
-            title="Research depth"
-          >
-            <option value="quick">Quick</option>
-            <option value="standard">Standard</option>
-            <option value="deep">Deep</option>
-          </select>
           <kbd>/</kbd>
         </form>
         {runStatus === "running" ? (
@@ -478,8 +461,8 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
             })}
           </fieldset>
           <p id="research-scope-note" className="scope-note">
-            <span aria-hidden="true">●</span> Public-professional sources only. Home address, personal phone, and
-            data-broker records are out of scope.
+            <span aria-hidden="true">●</span> Free-form public context is welcome: role, company, city/region, and adult
+            school. Home addresses, personal phones, data-broker records, and research about minors are refused.
           </p>
         </div>
 

@@ -4,6 +4,7 @@ import { createServer } from "vite";
 
 const vite = await createServer({
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -223,11 +224,18 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
   assert.equal(direct.evidence[0].candidateId, candidate.id);
   assert.equal(direct.evidence[0].verificationMethod, "direct_fetch");
   assert.equal(direct.evidence[0].claim, "Suzie Bishop is the Chief Technology Officer at Ariglad.");
+  assert.equal(direct.evidence[0].attributes.matchedTargetOrganization, "Ariglad");
+  assert.equal(direct.evidence[0].attributes.matchedTargetRole, "Chief Technology Officer");
   assert.equal(direct.candidateSignals.length, 1);
   assert.equal(direct.candidateSignals[0].candidateId, candidate.id);
   assert.ok(
     direct.candidateSignals[0].signals.some(
       (signal) => signal.kind === "organization" && signal.normalizedValue === "ariglad",
+    ),
+  );
+  assert.ok(
+    direct.candidateSignals[0].signals.some(
+      (signal) => signal.kind === "role" && signal.normalizedValue === "chief technology officer",
     ),
   );
 

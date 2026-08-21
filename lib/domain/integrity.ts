@@ -511,6 +511,7 @@ export function validateReferentialIntegrity(
           "contentHash",
           "disposition",
           "entityKey",
+          "leadId",
           "sourceFamily",
           "sourceType",
           "sourceUrl",
@@ -528,6 +529,7 @@ export function validateReferentialIntegrity(
           node.data.classifiedSourceTier !== evidence.attributes.classifiedSourceTier ||
           node.data.classifiedSourceType !== evidence.attributes.classifiedSourceType ||
           node.data.classifiedSourceLaneId !== evidence.attributes.classifiedSourceLaneId ||
+          node.data.leadId !== evidence.attributes.leadId ||
           node.data.entityKey !== `evidence:${evidence.id}` ||
           (node.data.verificationMethod !== undefined &&
             node.data.verificationMethod !== evidence.verificationMethod) ||
@@ -555,6 +557,7 @@ export function validateReferentialIntegrity(
             "classifiedSourceTier",
             "classifiedSourceType",
             "entityKey",
+            "leadId",
             "sourceFamily",
             "sourceType",
             "sourceUrl",
@@ -572,6 +575,7 @@ export function validateReferentialIntegrity(
             sourceNode.data.classifiedSourceTier !== evidence.attributes.classifiedSourceTier ||
             sourceNode.data.classifiedSourceType !== evidence.attributes.classifiedSourceType ||
             sourceNode.data.classifiedSourceLaneId !== evidence.attributes.classifiedSourceLaneId ||
+            sourceNode.data.leadId !== evidence.attributes.leadId ||
             sourceNode.data.entityKey !== `source:${evidence.id}` ||
             Object.keys(sourceNode.data).some((key) => !allowedSourceData.has(key))
           ) {

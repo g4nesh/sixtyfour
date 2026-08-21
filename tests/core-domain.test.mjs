@@ -7,6 +7,7 @@ const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const vite = await createServer({
   root: projectRoot,
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -56,9 +57,60 @@ test("target parsing distinguishes names, exact user identifiers, and role-only 
   assert.equal(domain.parseTarget("Chris Public").name, "Chris Public");
 });
 
+test("target parsing retains bounded public-professional context for mononyms, roles, affiliations, and locations", () => {
+  const mononym = domain.parseTarget("Usher");
+  assert.equal(mononym.kind, "named_person");
+  assert.equal(mononym.name, "Usher");
+  assert.deepEqual(mononym.organizationHints, []);
+
+  const explicitOrganization = domain.parseTarget("organization Microsoft");
+  assert.equal(explicitOrganization.kind, "organization");
+  assert.equal(explicitOrganization.name, undefined);
+  assert.equal(explicitOrganization.organizationHints[0].name, "Microsoft");
+  assert.equal(domain.parseTarget("Example Labs").kind, "organization");
+
+  const professor = domain.parseTarget("Michael Jordan, professor at UC Berkeley");
+  assert.equal(professor.kind, "named_person");
+  assert.equal(professor.name, "Michael Jordan");
+  assert.deepEqual(professor.roleHints, ["Professor"]);
+  assert.deepEqual(professor.organizationHints, [
+    { name: "UC Berkeley", normalizedName: "uc berkeley", relationship: "current" },
+  ]);
+
+  for (const [query, location] of [
+    ["Ganesh Talluri based in Peoria", "Peoria"],
+    ["Ganesh Talluri from Phoenix", "Phoenix"],
+    ["Ganesh Talluri in Tempe", "Tempe"],
+  ]) {
+    const target = domain.parseTarget(query);
+    assert.equal(target.kind, "named_person", query);
+    assert.equal(target.name, "Ganesh Talluri", query);
+    assert.deepEqual(target.locationHints, [location], query);
+  }
+
+  for (const [query, organization] of [
+    ["Ganesh Talluri at Arizona State University", "Arizona State University"],
+    ["Ganesh Talluri with Example Labs", "Example Labs"],
+  ]) {
+    const target = domain.parseTarget(query);
+    assert.equal(target.kind, "named_person", query);
+    assert.equal(target.name, "Ganesh Talluri", query);
+    assert.deepEqual(target.organizationHints, [
+      { name: organization, normalizedName: organization.toLocaleLowerCase("en-US"), relationship: "current" },
+    ]);
+  }
+
+  for (const query of ["Ada Lovelace based in 123 Main Street", "Ada Lovelace based in 6025550199"]) {
+    const target = domain.parseTarget(query);
+    assert.equal(target.name, "Ada Lovelace", query);
+    assert.deepEqual(target.locationHints, [], query);
+  }
+});
+
 test("safety policy permits public professional research and blocks dangerous scope expansions", () => {
   assert.equal(domain.classifySafety("Henry Wang, Sixtyfour AI").level, "allow");
   assert.equal(domain.classifySafety("andrew.goering@ramp.com").level, "caution");
+  assert.equal(domain.classifySafety("Ganesh Talluri based in Peoria").level, "allow");
 
   const blocked = [
     ["Henry's phone number", "precise_location_or_contact"],
