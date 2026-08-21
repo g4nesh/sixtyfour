@@ -80,6 +80,127 @@ test("InvestigationEngine rejects removal or mutation of admitted frontier costs
   assert.throws(() => engine.replaceSearchGraph(removed), /cannot be removed/);
 });
 
+test("long exact evidence stays intact while graph labels use the canonical bounded projection", () => {
+  const clock = domain.createSequenceClock("2026-08-20T22:10:00.000Z", 1);
+  const ids = domain.createDeterministicIdFactory("long-graph-label");
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Michael Jordan, professor at UC Berkeley",
+    requestedDepth: "deep",
+  });
+  const engine = new agent.InvestigationEngine(input, { clock, ids });
+  const candidate = engine.addCandidate({ displayName: "Michael Jordan" }).candidate;
+  const seeded = search.seedFrontier(
+    engine.snapshot().searchGraph,
+    engine.snapshot().target,
+    ["search_web"],
+    ids,
+    clock.now(),
+  );
+  const entry = seeded.value.find((item) => item.sourceLaneId === "t3.institutional");
+  assert.ok(entry);
+
+  const exactClaim = `Michael Jordan is a Professor at UC Berkeley. ${"Public research record ".repeat(19)}`.trim();
+  const longTitle = `Michael Jordan — UC Berkeley — ${"Public research profile ".repeat(16)}`.trim();
+  assert.ok(exactClaim.length > domain.SEARCH_GRAPH_NODE_LABEL_MAX_LENGTH);
+  assert.ok(longTitle.length > domain.SEARCH_GRAPH_NODE_LABEL_MAX_LENGTH);
+  const admitted = engine.admitEvidence({
+    candidateId: candidate.id,
+    claim: exactClaim,
+    excerpt: exactClaim,
+    title: longTitle,
+    sourceUrl: "https://profiles.berkeley.edu/michael-jordan",
+    sourceType: "public_document",
+    httpStatus: 200,
+    verificationMethod: "direct_fetch",
+    reliability: 0.72,
+    spoofable: false,
+    toolCallId: entry.actionId,
+  });
+  assert.equal(admitted.admitted, true);
+  const evidence = admitted.evidence;
+  assert.ok(evidence);
+  assert.equal(evidence.claim, exactClaim);
+
+  let graph = seeded.graph;
+  const candidateNode = search.admitGraphNode(
+    graph,
+    {
+      kind: "candidate",
+      label: candidate.displayName,
+      status: "selected",
+      candidateId: candidate.id,
+      data: {},
+      dedupeEntityKey: `candidate:${candidate.id}`,
+    },
+    ids,
+    clock.now(),
+  );
+  graph = candidateNode.graph;
+  const sourceNode = search.admitGraphNode(
+    graph,
+    {
+      kind: "source",
+      label: evidence.title,
+      status: "verified",
+      sourceTier: entry.sourceTier,
+      sourceLaneId: entry.sourceLaneId,
+      frontierEntryId: entry.id,
+      actionId: entry.actionId,
+      candidateId: candidate.id,
+      evidenceId: evidence.id,
+      data: {
+        sourceUrl: evidence.sourceUrl,
+        sourceFamily: evidence.sourceFamily,
+        sourceType: evidence.sourceType,
+      },
+      dedupeEntityKey: `source:${evidence.id}`,
+    },
+    ids,
+    clock.now(),
+  );
+  graph = sourceNode.graph;
+  const evidenceNode = search.admitGraphNode(
+    graph,
+    {
+      kind: "evidence",
+      label: evidence.claim,
+      status: "verified",
+      sourceTier: entry.sourceTier,
+      sourceLaneId: entry.sourceLaneId,
+      frontierEntryId: entry.id,
+      actionId: entry.actionId,
+      candidateId: candidate.id,
+      evidenceId: evidence.id,
+      data: {
+        disposition: evidence.disposition,
+        sourceUrl: evidence.sourceUrl,
+        sourceFamily: evidence.sourceFamily,
+        sourceType: evidence.sourceType,
+        contentHash: evidence.contentHash,
+        verificationMethod: evidence.verificationMethod,
+      },
+      dedupeEntityKey: `evidence:${evidence.id}`,
+    },
+    ids,
+    clock.now(),
+  );
+  graph = evidenceNode.graph;
+
+  assert.equal(sourceNode.value.label, domain.projectSearchGraphNodeLabel(longTitle));
+  assert.equal(evidenceNode.value.label, domain.projectSearchGraphNodeLabel(exactClaim));
+  assert.equal(evidenceNode.value.label.length, domain.SEARCH_GRAPH_NODE_LABEL_MAX_LENGTH);
+  const state = engine.snapshot();
+  state.searchGraph = graph;
+  assert.deepEqual(domain.validateReferentialIntegrity(state), []);
+
+  const tampered = structuredClone(state);
+  tampered.searchGraph.nodes.find((node) => node.id === evidenceNode.value.id).label = "Wrong bounded projection";
+  assert.ok(
+    domain.validateReferentialIntegrity(tampered).some((issue) => issue.code === "graph_entity_projection_mismatch"),
+  );
+});
+
 test("frontier batches stay on the minimum executable tier until lower tiers exhaust", () => {
   const { graph } = seededGraph("Ada Lovelace", ["search_web"]);
   const queuedTiers = [...new Set(graph.frontier.map((entry) => entry.sourceTier))];
@@ -143,7 +264,7 @@ test("Ashwin Rokkam and Chinmay Bhat receive the complete canonical hierarchy wi
 
     assert.equal(target.kind, "named_person", name);
     assert.equal(plan.status, "compiled", name);
-    assert.equal(plan.queries.length, 12, name);
+    assert.equal(plan.queries.length, 14, name);
     assert.deepEqual(
       new Set(compilerEntries.map((entry) => entry.queryHint)),
       new Set(plan.queries.map((query) => query.query)),
@@ -302,10 +423,13 @@ test("frontier schedules every surviving compiler variant on its legal source la
       "scholar.google.com",
       "openreview.net",
       "semanticscholar.org",
-      "openalex.org",
+      "crossref.org",
       "apps.apple.com",
+      "openalex.org",
     ],
   );
+  const publicAcademicSearch = t2Searches.find((entry) => entry.queryHint.includes("site:openalex.org"));
+  assert.ok(publicAcademicSearch?.queryHint.includes("site:researchgate.net"));
   assert.ok(
     compilerEntries.some(
       (entry) => entry.sourceLaneId === "t3.institutional" && entry.queryHint.includes("site:asu.edu"),
@@ -466,7 +590,7 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
   const target = domain.parseTarget("Renée D'Angelo Smith, Example Labs");
   const plan = search.compileOsintQueries(target);
   assert.equal(plan.status, "compiled");
-  assert.equal(plan.queries.length, 14);
+  assert.equal(plan.queries.length, 16);
   assert.ok(plan.queries.length <= search.MAX_OSINT_QUERY_VARIANTS);
 
   const ids = domain.createDeterministicIdFactory("compiler-zero-result");
@@ -520,7 +644,7 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
       "scholar.google.com",
       "openreview.net",
       "semanticscholar.org",
-      "openalex.org",
+      "crossref.org",
       "apps.apple.com",
     ],
   );
@@ -530,6 +654,7 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
     "exact_context",
     "orthographic_name",
     "initial_name",
+    "public_academic_site",
     "public_document",
   ]) {
     assert.ok(
@@ -538,6 +663,14 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
     );
   }
   assert.ok(executedQueries.some((query) => query.includes("filetype:pdf")));
+  assert.ok(executedQueries.some((query) => query.includes("site:instagram.com")));
+  assert.ok(
+    executedQueries.some((query) => query.includes("site:openalex.org") && query.includes("site:researchgate.net")),
+  );
+  assert.equal(
+    plan.diagnostics.some((item) => item.code === "query_limit_applied"),
+    false,
+  );
   assert.equal(
     graph.frontier.every((entry) => entry.status === "exhausted"),
     true,
@@ -827,7 +960,7 @@ test("the standard runner exhausts every canonical name query before terminating
   const target = domain.parseTarget(targetRaw);
   const plan = search.compileOsintQueries(target);
   assert.equal(plan.status, "compiled");
-  assert.equal(plan.queries.length, 14);
+  assert.equal(plan.queries.length, 16);
   assert.ok(plan.queries.length <= search.MAX_OSINT_QUERY_VARIANTS);
 
   const executedQueries = [];
@@ -871,17 +1004,217 @@ test("the standard runner exhausts every canonical name query before terminating
   assert.ok(executedQueries.some((query) => query.includes("site:openreview.net")));
   assert.ok(executedQueries.some((query) => query.includes("site:semanticscholar.org")));
   assert.ok(executedQueries.some((query) => query.includes("site:openalex.org")));
+  assert.ok(executedQueries.some((query) => query.includes("site:researchgate.net")));
+  assert.ok(executedQueries.some((query) => query.includes("site:crossref.org")));
   assert.ok(executedQueries.some((query) => query.includes("site:apps.apple.com")));
+  assert.ok(executedQueries.some((query) => query.includes("site:instagram.com")));
   assert.ok(executedQueries.some((query) => query.includes("filetype:pdf")));
   assert.ok(plan.queries.some((query) => query.kind === "exact_context"));
   assert.ok(plan.queries.some((query) => query.kind === "orthographic_name"));
+  assert.equal(
+    plan.diagnostics.some((item) => item.code === "query_limit_applied"),
+    false,
+  );
   assert.ok(plan.queries.some((query) => query.kind === "initial_name"));
   assert.notEqual(completed.report.stop.reason, "diminishing_returns");
-  assert.equal(completed.report.stop.reason, "no_legal_actions");
+  assert.equal(
+    completed.report.stop.reason,
+    "budget_exhausted",
+    "executing all sixteen canonical queries exactly consumes the standard search-call budget",
+  );
   assert.equal(
     completed.report.searchGraph.frontier.every((entry) => entry.status === "exhausted"),
     true,
   );
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+});
+
+test("deep provider fanout reserves every canonical search before candidate fetch extraction", async () => {
+  const targetRaw = "Taylor Morgan, Example University";
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: targetRaw,
+    requestedDepth: "deep",
+  });
+  const plan = search.compileOsintQueries(domain.parseTarget(input));
+  assert.equal(plan.status, "compiled");
+  assert.ok(plan.queries.length > 4, "the regression needs more searches than one outbound batch");
+
+  let searchOrdinal = 0;
+  let successfulProviderSearches = 0;
+  let successfulExtractionAttempts = 0;
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-20T20:27:15.000Z", 1),
+      ids: domain.createDeterministicIdFactory("deep-provider-fanout-reservation"),
+      planner: async ({ selectedFrontierEntries, modelAccounting }) => {
+        assert.equal(modelAccounting.reserve(), true);
+        modelAccounting.settle({ networkRequests: 1 });
+        return {
+          kind: "actions",
+          decisionSummary: "Execute every selected canonical capability.",
+          actions: selectedFrontierEntries.map((entry) => ({
+            frontierEntryId: entry.id,
+            tool: entry.allowedTools[0],
+            purpose: entry.allowedTools[0] === "search_web" ? "Run canonical discovery." : "Fetch one opaque lead.",
+            arguments: entry.allowedTools[0] === "search_web" ? { query: entry.queryHint } : { leadId: entry.leadId },
+            ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
+          })),
+        };
+      },
+      executeAction: async (action, context) => {
+        if (action.tool === "search_web") {
+          assert.equal(context.modelAccounting.reserve(), true, "canonical provider search must remain budgeted");
+          context.modelAccounting.settle({ networkRequests: 1 });
+          successfulProviderSearches += 1;
+          searchOrdinal += 1;
+          const candidateRef = `provider_candidate_${searchOrdinal}`;
+          return {
+            status: "succeeded",
+            candidates: [{ ref: candidateRef, displayName: targetRaw }],
+            evidence: [1, 2].map((leadOrdinal) => ({
+              candidateRef,
+              claim: "The configured provider surfaced one bounded public code-profile lead.",
+              disposition: "discovery_only",
+              sourceUrl: `https://github.com/taylor-morgan-${searchOrdinal}-${leadOrdinal}`,
+              sourceType: "search_result",
+              canonicalSubset: { providerAttestedUrl: true },
+              verificationMethod: "search_discovery",
+              attributes: {
+                leadId: `lead_provider_${searchOrdinal}_${leadOrdinal}`,
+                classifiedSourceLaneId: "t2.structured_professional",
+                classifiedSourceTier: 2,
+                classifiedSourceType: "code_profile",
+              },
+            })),
+            meta: { requests: 0, bytesRead: 0, incomplete: false },
+          };
+        }
+        if (action.tool === "fetch_public_source") {
+          if (context.modelAccounting.reserve()) {
+            context.modelAccounting.settle({ networkRequests: 1 });
+            successfulExtractionAttempts += 1;
+          }
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 0, bytesRead: 0, incomplete: false },
+          };
+        }
+        return { status: "not_found", evidence: [], meta: { requests: 0, bytesRead: 0 } };
+      },
+    },
+    { availableTools: ["search_web", "fetch_public_source"] },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(successfulProviderSearches, plan.queries.length);
+  assert.ok(successfulExtractionAttempts > 0, "candidate fetches may use only the budget left after breadth");
+
+  const toolStarts = completed.trace.events.filter(
+    (event) => event.kind === "span_start" && event.name.startsWith("tool."),
+  );
+  const searchStarts = toolStarts.filter((event) => event.name === "tool.search_web");
+  const fetchStarts = toolStarts.filter((event) => event.name === "tool.fetch_public_source");
+  assert.equal(searchStarts.length, plan.queries.length);
+  assert.ok(fetchStarts.length > 0);
+  assert.ok(
+    Math.max(...searchStarts.map((event) => event.seq)) < Math.min(...fetchStarts.map((event) => event.seq)),
+    "optional candidate fanout must begin only after canonical breadth",
+  );
+
+  const compilerEntries = completed.report.searchGraph.frontier.filter((entry) =>
+    search.isCanonicalCompilerSearchEntry(entry),
+  );
+  const startsByFrontier = new Map();
+  for (const event of toolStarts) {
+    const frontierEntryId = event.payload.frontierEntryId;
+    startsByFrontier.set(frontierEntryId, (startsByFrontier.get(frontierEntryId) ?? 0) + 1);
+  }
+  assert.equal(compilerEntries.length, plan.queries.length);
+  assert.ok(compilerEntries.every((entry) => startsByFrontier.get(entry.id) === 1));
+  assert.deepEqual(
+    searchStarts.map((event) => event.payload.arguments.query).sort(),
+    plan.queries.map((query) => query.query).sort(),
+  );
+
+  const neverExecuted = completed.report.searchGraph.frontier.filter((entry) => !startsByFrontier.has(entry.id));
+  assert.ok(neverExecuted.length > 0, "the bounded run should leave some optional fanout unexecuted");
+  assert.ok(
+    neverExecuted.every(
+      (entry) =>
+        !completed.trace.events.some(
+          (event) =>
+            event.kind === "span_end" && event.name.startsWith("tool.") && event.payload.frontierEntryId === entry.id,
+        ),
+    ),
+    "terminal exhaustion must never be represented as a tool execution",
+  );
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
+test("terminal exhaustion never claims an unexecuted compiler query ran", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Taylor Morgan, Example University",
+    requestedDepth: "deep",
+  });
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-20T20:27:25.000Z", 1),
+      ids: domain.createDeterministicIdFactory("unexecuted-compiler-honesty"),
+      planner: async ({ selectedFrontierEntries }) => ({
+        kind: "actions",
+        decisionSummary: "Execute only the bounded selected queries.",
+        actions: selectedFrontierEntries.map((entry) => ({
+          frontierEntryId: entry.id,
+          tool: "search_web",
+          purpose: "Run one canonical query.",
+          arguments: { query: entry.queryHint },
+        })),
+      }),
+      executeAction: async () => ({
+        status: "not_found",
+        evidence: [],
+        meta: { requests: 1, bytesRead: 0, llmCalls: 0 },
+      }),
+    },
+    {
+      availableTools: ["search_web"],
+      budget: { maxToolCalls: 2, maxSearchCalls: 2 },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  const compilerEntries = completed.report.searchGraph.frontier.filter((entry) =>
+    search.isCanonicalCompilerSearchEntry(entry),
+  );
+  const searchSpans = completed.trace.events.filter(
+    (event) => event.kind === "span_start" && event.name === "tool.search_web",
+  );
+  const executedIds = new Set(searchSpans.map((event) => event.payload.frontierEntryId));
+  const unexecutedCompilerEntries = compilerEntries.filter((entry) => !executedIds.has(entry.id));
+  assert.equal(searchSpans.length, 2);
+  assert.ok(unexecutedCompilerEntries.length > 0);
+  assert.ok(
+    unexecutedCompilerEntries.every(
+      (entry) =>
+        !completed.trace.events.some(
+          (event) =>
+            event.kind === "span_end" && event.name === "tool.search_web" && event.payload.frontierEntryId === entry.id,
+        ),
+    ),
+  );
+  assert.equal(completed.report.stop.reason, "budget_exhausted");
   assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
 });
 
@@ -978,10 +1311,10 @@ test("a synthesis outage continues canonical frontier work in unused calibrate c
     queryPlan.queries.map((query) => query.query).sort(),
   );
   const t6CompilerEntries = compilerEntries.filter((entry) => entry.sourceTier === 6);
-  assert.equal(t6CompilerEntries.length, 2);
+  assert.equal(t6CompilerEntries.length, 3);
   assert.ok(
     t6CompilerEntries.every((entry) => executedFrontierIds.has(entry.id)),
-    "the two formerly stranded T6 queries must execute exactly once",
+    "all three broad/name/social T6 queries must execute exactly once",
   );
 
   const synthesisEnds = completed.trace.events.filter(
@@ -1332,7 +1665,9 @@ test("candidate-linked exact URLs open a validated T5 dependency even after the 
 
   const advanced = structuredClone(opened.graph);
   advanced.currentSourceTier = 6;
-  const selected = search.selectFrontierBatch(advanced, 1, "2026-08-20T20:00:03.000Z");
+  const selected = search.selectFrontierBatch(advanced, 1, "2026-08-20T20:00:03.000Z", {
+    reserveCanonicalCompilerBreadth: true,
+  });
   assert.equal(selected.value[0].sourceLaneId, "t5.candidate_wayback");
   assert.equal(selected.graph.currentSourceTier, 6, "the breadth cursor must not regress");
   assert.deepEqual(
@@ -1564,10 +1899,19 @@ test("source hierarchy is tiered and denies people-search, phonebook, property, 
   assert.equal(search.sourceTierForUrl("https://www.sec.gov/edgar/search/", "public_document"), 2);
   assert.equal(search.deterministicSourceTypeForUrl("https://www.linkedin.com/in/example"), "professional_profile");
   assert.equal(search.sourceTierForUrl("https://www.linkedin.com/in/example", "professional_profile"), 2);
+  assert.equal(
+    search.deterministicSourceTypeForUrl("https://www.researchgate.net/profile/Example-Person"),
+    "professional_profile",
+  );
+  assert.equal(
+    search.sourceTierForUrl("https://www.researchgate.net/profile/Example-Person", "professional_profile"),
+    2,
+  );
   for (const source of [
     "https://openreview.net/profile?id=~Example_Person1",
     "https://www.semanticscholar.org/author/Example-Person/123456",
     "https://openalex.org/A123456789",
+    "https://api.crossref.org/works/10.5555%2Fexample",
   ]) {
     const sourceType = search.deterministicSourceTypeForUrl(source);
     const sourceTier = search.sourceTierForUrl(source, sourceType);

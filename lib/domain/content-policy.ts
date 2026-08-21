@@ -271,6 +271,8 @@ const RESTRICTED_TEXT_PATTERNS = [
   /\b(?:takes?|uses?|prescribed|on)\b.{0,20}\b(?:antidepressants?|psychiatric medication)\b/i,
   /\b(?:has|have|had|diagnosed with|suffers? from)\b.{0,12}\b(?:ms|multiple sclerosis)\b/i,
   /\b(?:high[- ]school|middle[- ]school|elementary[- ]school)\s+(?:student|freshman|sophomore|junior|senior)\b/i,
+  /\b(?:attends?|goes\s+to|stud(?:y|ies|ied|ying)\s+at|student\s+at|enrolled\s+(?:at|in))\b.{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
+  /\bschool\s*(?::|=|-)\s*[^,;]{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
   /\b(?:9th|10th|11th|12th)[ -]grader\b/i,
   /\bteen(?:age|ager)?\s+(?:person|founder|developer|student|researcher|engineer|executive)\b/i,
   /\bstudent\s+(?:aged?|age)\s+(?:[0-9]|1[0-7])\b/i,
@@ -417,6 +419,8 @@ const RESTRICTED_CONCEPT_PATTERNS = [
   // grammar because the student/person noun is mandatory.
   /\b(?:secondary[- ]school|year\s+(?:[1-9]|1[0-2]))\s+student\b/i,
   /\b(?:junior[- ]high\s+student|(?:[1-9]|1[0-2]|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)[- ]grade\s+(?:student|pupil)|school[- ]aged\s+child)\b/i,
+  /\b(?:attends?|goes\s+to|stud(?:y|ies|ied|ying)\s+at|student\s+at|enrolled\s+(?:at|in))\b.{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
+  /\bschool\s*(?::|=|-)\s*[^,;]{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
   // Private contact and residence intents.
   /\bwhat\s+street\b.{0,36}\blive(?:s|d)?\s+on\b/i,
   /\bwhere\b.{0,16}\b(?:send|mail)\b.{0,48}\b(?:letter|something)\b/i,

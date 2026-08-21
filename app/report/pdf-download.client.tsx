@@ -542,7 +542,7 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
   return (
     <Document
       title={viewModel.title}
-      author="Atlas People Intelligence"
+      author="Atlas"
       subject={`Public-source professional intelligence for ${viewModel.subject}`}
       creator="Atlas"
       producer="Atlas / @react-pdf/renderer"

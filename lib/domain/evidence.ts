@@ -231,6 +231,8 @@ export function admitEvidence(draft: EvidenceDraft, context: EvidenceAdmissionCo
     canonicalUrl = canonicalizeSourceUrl(draft.sourceUrl);
     queryUrl = draft.queryUrl ? canonicalizeSourceUrl(draft.queryUrl) : null;
     if (
+      containsRestrictedPublicContent(canonicalUrl, { allowedEmails: context.allowedEmails }) ||
+      (queryUrl !== null && containsRestrictedPublicContent(queryUrl, { allowedEmails: context.allowedEmails })) ||
       decodedUrlContainsRestrictedContent(draft.sourceUrl, context.allowedEmails) ||
       (draft.queryUrl && decodedUrlContainsRestrictedContent(draft.queryUrl, context.allowedEmails))
     ) {

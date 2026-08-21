@@ -8,11 +8,14 @@ import type { Report, TraceEvent } from "../atlas-types";
 import {
   candidateName,
   humanize,
+  isStructuredSearchTransport,
   limitationText,
   reportCandidates,
   reportEvidence,
   reportQuery,
   traceDiagnostics,
+  traceSearchQueries,
+  traceSearchTransportAttempts,
 } from "../atlas-types";
 import { CloseIcon, DownloadIcon, ExternalIcon } from "./atlas-icons";
 
@@ -247,12 +250,24 @@ export function ReportSheet({
     allCandidates.map((candidate) => [candidate.id ?? candidate.candidateId, candidateName(candidate)]),
   );
   const reportId = report?.runId ?? report?.run?.id ?? "atlas-report";
+  const searchQueries = traceSearchQueries(trace);
+  const searchTransports = traceSearchTransportAttempts(trace);
+  const webSearchTransports = searchTransports.filter((transport) => !isStructuredSearchTransport(transport));
+  const structuredSearchTransports = searchTransports.filter(isStructuredSearchTransport);
   const coverageDiagnostics = [
     ...new Map(
       trace
         .flatMap(traceDiagnostics)
         .filter(
-          (diagnostic) => diagnostic.code.startsWith("search_provider_") || diagnostic.code.endsWith("fallback_used"),
+          (diagnostic) =>
+            diagnostic.code.startsWith("search_provider_") ||
+            diagnostic.code.startsWith("google_") ||
+            diagnostic.code.startsWith("duckduckgo_") ||
+            diagnostic.code.startsWith("github_public_user_") ||
+            diagnostic.code.startsWith("github_exact_name_") ||
+            diagnostic.code.startsWith("semantic_scholar_") ||
+            diagnostic.code.startsWith("crossref_") ||
+            diagnostic.code === "public_web_fallback_used",
         )
         .map((diagnostic) => [diagnostic.code, diagnostic]),
     ).values(),
@@ -347,17 +362,66 @@ export function ReportSheet({
                   "Auditable public-professional intelligence assembled from admitted evidence."}
               </p>
             </section>
-            {coverageDiagnostics.length > 0 ? (
+            {coverageDiagnostics.length > 0 || searchQueries.length > 0 || searchTransports.length > 0 ? (
               <section className="report-coverage-note" aria-labelledby="report-coverage-heading">
                 <h3 id="report-coverage-heading">Search coverage</h3>
-                <ul>
-                  {coverageDiagnostics.map((diagnostic) => (
-                    <li key={diagnostic.code}>
-                      <strong>{humanize(diagnostic.code)}</strong>
-                      <span>{diagnostic.message}</span>
-                    </li>
-                  ))}
-                </ul>
+                {searchTransports.length > 0 ? (
+                  <div className="report-search-transports" aria-label="Search transport attempts">
+                    <strong>Transport attempts</strong>
+                    {webSearchTransports.length > 0 ? (
+                      <section>
+                        <small>Web discovery path</small>
+                        <ul>
+                          {webSearchTransports.map((transport) => (
+                            <li key={transport.id}>
+                              <span>{transport.label}</span>
+                              <small>{humanize(transport.outcome)}</small>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    ) : null}
+                    {structuredSearchTransports.length > 0 ? (
+                      <section>
+                        <small>Structured indexes</small>
+                        <ul>
+                          {structuredSearchTransports.map((transport) => (
+                            <li key={transport.id}>
+                              <span>{transport.label}</span>
+                              <small>{humanize(transport.outcome)}</small>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    ) : null}
+                    <p>Attempts and returned discovery leads are not cited sources until hardened fetch succeeds.</p>
+                  </div>
+                ) : null}
+                {searchQueries.length > 0 ? (
+                  <div className="report-query-program">
+                    <header>
+                      <strong>Queries attempted</strong>
+                      <span>{searchQueries.length}</span>
+                    </header>
+                    <ol>
+                      {searchQueries.map((query) => (
+                        <li key={query}>
+                          <code>{query}</code>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : null}
+                {coverageDiagnostics.length > 0 ? (
+                  <ul className="report-coverage-diagnostics">
+                    {coverageDiagnostics.map((diagnostic) => (
+                      <li key={diagnostic.code}>
+                        <strong>{humanize(diagnostic.code)}</strong>
+                        <span>{diagnostic.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </section>
             ) : null}
             <section className="report-section" aria-labelledby="report-candidates-heading">

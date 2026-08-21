@@ -224,6 +224,183 @@ test("Gemini web discovery uses native Google Search and preserves server citati
   ]);
 });
 
+test("Anthropic uses the native Messages API and round-trips structured tool calls", async () => {
+  const requests = [];
+  const responses = [
+    {
+      type: "message",
+      id: "msg-1",
+      model: "claude-test-model",
+      stop_reason: "tool_use",
+      content: [
+        { type: "text", text: "" },
+        {
+          type: "tool_use",
+          id: "toolu-1",
+          name: "submit_result",
+          input: { accepted: true },
+        },
+      ],
+      usage: { input_tokens: 14, output_tokens: 6, cache_read_input_tokens: 3 },
+    },
+    {
+      type: "message",
+      id: "msg-2",
+      model: "claude-test-model",
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: "Done." }],
+      usage: { input_tokens: 20, output_tokens: 2 },
+    },
+  ];
+  const client = createOpenRouterClient({
+    provider: "anthropic",
+    apiKey: "anthropic-test-key-not-real",
+    model: "claude-test-model",
+    fetch: async (url, init) => {
+      requests.push({
+        url: String(url),
+        headers: new Headers(init.headers),
+        body: JSON.parse(new TextDecoder().decode(init.body)),
+      });
+      return new Response(JSON.stringify(responses[requests.length - 1]), {
+        headers: { "content-type": "application/json", "request-id": `anthropic-request-${requests.length}` },
+      });
+    },
+  });
+  const tool = functionTool({
+    name: "submit_result",
+    description: "Submit the bounded result.",
+    parameters: {
+      type: "object",
+      properties: { accepted: { type: "boolean" } },
+      required: ["accepted"],
+      additionalProperties: false,
+    },
+    strict: true,
+  });
+  const initialMessages = [
+    { role: "system", content: "Use the provided function." },
+    { role: "user", content: "Submit one result." },
+  ];
+  const first = await client.complete({
+    messages: initialMessages,
+    tools: [tool],
+    maxCompletionTokens: 700,
+    temperature: 0,
+    parallelToolCalls: false,
+    reasoning: { effort: "medium" },
+  });
+
+  assert.equal(requests[0].url, "https://api.anthropic.com/v1/messages");
+  assert.equal(requests[0].headers.get("x-api-key"), "anthropic-test-key-not-real");
+  assert.equal(requests[0].headers.get("anthropic-version"), "2023-06-01");
+  assert.equal(requests[0].headers.has("authorization"), false);
+  assert.equal(requests[0].body.system, "Use the provided function.");
+  assert.equal(requests[0].body.max_tokens, 700);
+  assert.deepEqual(requests[0].body.tools, [
+    {
+      name: "submit_result",
+      description: "Submit the bounded result.",
+      input_schema: tool.function.parameters,
+    },
+  ]);
+  assert.deepEqual(requests[0].body.tool_choice, { type: "auto" });
+  assert.equal("parallel_tool_calls" in requests[0].body, false);
+  assert.equal("reasoning" in requests[0].body, false);
+  assert.deepEqual(first.message.tool_calls, [
+    {
+      id: "toolu-1",
+      type: "function",
+      function: { name: "submit_result", arguments: '{"accepted":true}' },
+    },
+  ]);
+  assert.equal(first.usage.inputTokens, 17);
+  assert.equal(first.usage.totalTokens, 23);
+  assert.equal(first.usage.cachedInputTokens, 3);
+  assert.equal(first.requestId, "anthropic-request-1");
+
+  const nextMessages = appendAssistantTurn(initialMessages, first);
+  nextMessages.push(toolResultMessage("toolu-1", { accepted: true }));
+  const second = await client.complete({ messages: nextMessages, tools: [tool], temperature: 0 });
+  assert.equal(second.message.content, "Done.");
+  assert.deepEqual(requests[1].body.messages[1], {
+    role: "assistant",
+    content: [{ type: "tool_use", id: "toolu-1", name: "submit_result", input: { accepted: true } }],
+  });
+  assert.deepEqual(requests[1].body.messages[2], {
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: "toolu-1", content: '{"accepted":true}' }],
+  });
+});
+
+test("Anthropic native web search is single-use and normalizes only server citation URLs", async () => {
+  const requests = [];
+  const client = createOpenRouterClient({
+    provider: "anthropic",
+    apiKey: "anthropic-test-key-not-real",
+    model: "claude-test-model",
+    fetch: async (url, init) => {
+      requests.push({ url: String(url), body: JSON.parse(new TextDecoder().decode(init.body)) });
+      return new Response(
+        JSON.stringify({
+          type: "message",
+          id: "msg-search",
+          model: "claude-test-model",
+          stop_reason: "end_turn",
+          content: [
+            {
+              type: "web_search_tool_result",
+              tool_use_id: "srvtoolu-1",
+              content: [
+                {
+                  type: "web_search_result",
+                  url: "https://example.edu/profile?utm_source=search",
+                  title: "Example University profile",
+                  encrypted_content: "opaque-and-discarded",
+                },
+              ],
+            },
+            {
+              type: "text",
+              text: "A grounded result.",
+              citations: [
+                {
+                  type: "web_search_result_location",
+                  url: "https://example.edu/profile?utm_source=search",
+                  title: "Example University profile",
+                  cited_text: "discarded source prose",
+                },
+              ],
+            },
+          ],
+          usage: { input_tokens: 9, output_tokens: 4 },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+
+  const completion = await client.complete({
+    messages: [{ role: "user", content: "Find a public profile." }],
+    webSearch: { max_results: 8, max_total_results: 12 },
+    maxCompletionTokens: 900,
+    temperature: 0,
+  });
+
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].body.tools, [{ type: "web_search_20250305", name: "web_search", max_uses: 1 }]);
+  assert.equal(completion.provider, "anthropic:web_search");
+  assert.equal(completion.usage.totalTokens, 13);
+  assert.deepEqual(completion.message.annotations, [
+    {
+      type: "url_citation",
+      url_citation: { url: "https://example.edu/profile", title: "Example University profile" },
+    },
+  ]);
+  assert.equal(JSON.stringify(completion).includes("opaque-and-discarded"), false);
+  assert.equal(JSON.stringify(completion).includes("discarded source prose"), false);
+});
+
 test("usage normalization rejects negative and non-finite counters", () => {
   assert.deepEqual(
     normalizeOpenRouterUsage({

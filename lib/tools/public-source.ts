@@ -9,12 +9,15 @@ import {
 import { asHardenedFetchError, createHardenedFetch } from "./hardened-fetch";
 import { extractPublicPageFootprint, type PublicPageFootprint } from "./page-footprint";
 import { decodeHtmlTextForPolicy, projectInertHtml } from "./inert-html";
+import { extractSameOriginProfessionalLinks, type SameOriginProfessionalLink } from "./professional-links";
 import { containsRestrictedPublicContent } from "../domain/content-policy";
 
 export interface FetchPublicSourceInput {
   url: string;
   /** Must be copied from a provider citation or a URL already linked to the candidate. */
   allowedUrl: string;
+  /** Optional public subject label used only for same-origin path matching. */
+  subjectName?: string;
 }
 
 export interface FetchPublicSourceOptions {
@@ -37,6 +40,8 @@ export interface PublicSourceData {
   pageFootprint: PublicPageFootprint | null;
   /** SHA-256 of the deterministic JSON-safe footprint projection, when present. */
   pageFootprintHash: string | null;
+  /** Inertly observed links only; each still requires a new candidate-bound authorization and fetch. */
+  professionalLinks: SameOriginProfessionalLink[];
   truncated: boolean;
   observedAt: string;
 }
@@ -283,6 +288,15 @@ export async function fetchPublicSource(
   const observedAt = new Date(now()).toISOString();
   const pageFootprint =
     contentType === "text/html" ? extractPublicPageFootprint({ html: body, finalUrl: fetched.finalUrl }) : null;
+  const professionalLinks =
+    contentType === "text/html"
+      ? extractSameOriginProfessionalLinks({
+          html: body,
+          finalUrl: fetched.finalUrl,
+          subjectName: input.subjectName,
+          maxLinks: 3,
+        })
+      : [];
   const data: PublicSourceData = {
     sourceUrl: requested.href,
     finalUrl: fetched.finalUrl,
@@ -293,6 +307,7 @@ export async function fetchPublicSource(
     normalizedText: safeTextPrefix(normalized, maxCharacters),
     pageFootprint,
     pageFootprintHash: pageFootprint ? await sha256(JSON.stringify(pageFootprint)) : null,
+    professionalLinks,
     truncated,
     observedAt,
   };

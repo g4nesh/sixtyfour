@@ -247,6 +247,11 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
           headers: { "content-type": "text/html" },
         });
       }
+      if (url.hostname === "www.google.com") {
+        return new Response("<html><body>No safe result links.</body></html>", {
+          headers: { "content-type": "text/html" },
+        });
+      }
       if (url.hostname === "api.github.com" && url.pathname === "/search/users") {
         return jsonResponse({ total_count: 0, incomplete_results: false, items: [] });
       }
@@ -386,9 +391,11 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.equal(contentOnly.status, "not_found", JSON.stringify(contentOnly));
   assert.equal(contentOnly.data.citationCount, 0);
   assert.deepEqual(contentOnly.evidence, []);
-  assert.equal(contentOnly.meta.requests, 1);
+  assert.equal(contentOnly.meta.requests, 2);
+  assert.equal(contentOnly.data.provider, "google:html_search");
   assert.ok(contentOnly.diagnostics.some((item) => item.code === "search_provider_sources_not_observed"));
   assert.ok(contentOnly.diagnostics.some((item) => item.code === "duckduckgo_results_not_observed"));
+  assert.ok(contentOnly.diagnostics.some((item) => item.code === "google_results_not_observed"));
   assert.equal(
     contentOnly.diagnostics.some((item) => item.code === "github_exact_name_not_observed"),
     false,
@@ -1326,6 +1333,8 @@ test("shared safety concepts block ordinary paraphrases at intake, action, outpu
     "Research an under-18 founder",
     "Research a grade-schooler",
     "Research a secondary school pupil",
+    "Alex Kim attends Central High School",
+    "Alex Kim student at Central Middle School",
     "Find Alex Kim mailing address",
     "Where does Alex Kim stay at night?",
     "Get Alex Kim mobile",

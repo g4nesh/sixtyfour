@@ -56,7 +56,11 @@ function installStreamedResearchFixture({ events, delayMs }) {
     return Promise.resolve(
       new Response(stream, {
         status: 200,
-        headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" },
+        headers: {
+          "content-type": "application/x-ndjson; charset=utf-8",
+          "cache-control": "no-store",
+          "x-atlas-execution-mode": "live",
+        },
       }),
     );
   };
@@ -383,6 +387,25 @@ test(
           await searchbox.fill("Chris Anderson, TED");
           assert.equal(await searchbox.inputValue(), "Chris Anderson, TED");
           await page.getByRole("button", { name: "Research", exact: true }).click();
+          const workspaceStatus = page.locator(".workspace-status");
+          await workspaceStatus.waitFor({ state: "visible" });
+          const executionMode = workspaceStatus.locator(".execution-mode", { hasText: "Live" });
+          await executionMode.waitFor({ state: "attached" });
+          assert.equal(
+            (await executionMode.innerText()).trim(),
+            "Live",
+            `${viewport.name}: execution mode was not live`,
+          );
+          assert.equal(
+            await workspaceStatus.locator("strong").innerText(),
+            "Running",
+            `${viewport.name}: compact run status was not truthful`,
+          );
+          assert.equal(
+            await executionMode.isVisible(),
+            viewport.name === "desktop",
+            `${viewport.name}: execution-mode visibility diverged from the responsive status contract`,
+          );
           const checkpointGraphs = fixture.events.map(searchGraphFromEvent).filter(Boolean);
           for (let index = 0; index < checkpointGraphs.length; index += 1) {
             const checkpoint = checkpointGraphs[index];
@@ -433,6 +456,63 @@ test(
             `${viewport.name}: streamed geometry must remain collision-free and readable`,
           );
           if (viewport.name === "desktop") {
+            const searchFrontier = fixture.graph.frontier.find(
+              (entry) => entry.allowedTools.includes("search_web") && /(?:^|\s)site:/i.test(entry.queryHint),
+            );
+            assert.ok(searchFrontier, "browser fixture omitted its site-scoped search frontier");
+            const ladderText = await page.locator(".source-ladder").innerText();
+            assert.match(ladderText, /Sites:\s+ted\.com/i, "source ladder hid the actual site scope");
+            assert.match(ladderText, /Web discovery path/i);
+            assert.match(ladderText, /Structured indexes/i);
+            assert.match(ladderText, /Configured web-search provider\s+Unavailable/i);
+            assert.match(ladderText, /Google HTML fallback\s+No Safe Leads/i);
+            assert.match(ladderText, /DuckDuckGo HTML fallback\s+No Safe Leads/i);
+            assert.match(ladderText, /GitHub exact-name fallback\s+No Safe Leads/i);
+            assert.match(ladderText, /Semantic Scholar author API\s+No Match/i);
+            assert.match(ladderText, /Crossref works API\s+No Match/i);
+            assert.match(ladderText, /Returned leads remain unverified/i);
+            const configuredIndex = ladderText.indexOf("Configured web-search provider");
+            const duckDuckGoIndex = ladderText.indexOf("DuckDuckGo HTML fallback");
+            const googleIndex = ladderText.indexOf("Google HTML fallback");
+            const githubIndex = ladderText.indexOf("GitHub exact-name fallback");
+            assert.ok(
+              configuredIndex >= 0 &&
+                configuredIndex < duckDuckGoIndex &&
+                duckDuckGoIndex < googleIndex &&
+                googleIndex < githubIndex,
+              "source ladder did not preserve configured → DuckDuckGo → Google → GitHub fallback order",
+            );
+
+            await page.locator(`.react-flow__node[data-id="${searchFrontier.nodeId}"] button`).click({ force: true });
+            const inspectorText = await page.locator(".node-inspector").innerText();
+            assert.match(inspectorText, /Search execution/i);
+            assert.ok(inspectorText.includes(searchFrontier.queryHint), "inspector hid the exact search query");
+            assert.match(inspectorText, /Site scope\s+ted\.com/i);
+            assert.match(inspectorText, /Allowed tools[\s\S]*Search Web/i);
+            assert.match(inspectorText, /Web discovery path/i);
+            assert.match(inspectorText, /Structured indexes/i);
+            assert.match(inspectorText, /Scheduler path cost/i);
+            assert.match(inspectorText, /ranking metadata, not an API charge, error, or rejection reason/i);
+            assert.match(inspectorText, /Exhausted means this frontier is closed for the run/i);
+            assert.match(inspectorText, /check Transport attempts or the trace to see whether a request actually ran/i);
+            assert.match(inspectorText, /the score did not reject it/i);
+            assert.match(inspectorText, /Attempts and discovery leads are not cited sources/i);
+            await page.getByRole("button", { name: "Close node inspector" }).click();
+
+            await page.locator(".trace-rail-handle").click();
+            const traceText = await page.locator(".trace-event-list").innerText();
+            assert.ok(traceText.includes(searchFrontier.queryHint), "trace hid the exact search query");
+            assert.match(traceText, /configured web-search provider exhausted its retryable quota/i);
+            assert.match(traceText, /Web path/i);
+            assert.match(traceText, /Structured indexes/i);
+            assert.match(traceText, /Configured web-search provider: unavailable/i);
+            assert.match(traceText, /Google HTML fallback: no safe leads/i);
+            assert.match(traceText, /DuckDuckGo HTML fallback: no safe leads/i);
+            assert.match(traceText, /GitHub exact-name fallback: no safe leads/i);
+            assert.match(traceText, /Semantic Scholar author API: no exact match/i);
+            assert.match(traceText, /Crossref works API: no exact match/i);
+            await page.locator(".trace-rail-handle").click();
+
             const zoomedViewport = { name: "desktop at 200% page zoom", width: 720, height: 450 };
             await page.setViewportSize(zoomedViewport);
             await page.locator(".graph-fit-button").click();
@@ -442,6 +522,22 @@ test(
           await page.getByRole("button", { name: "Report", exact: true }).click();
           const reportDialog = page.getByRole("dialog", { name: "Chris Anderson, TED" });
           await reportDialog.waitFor({ state: "visible" });
+          const coverageText = await reportDialog.locator(".report-coverage-note").innerText();
+          const fixtureSearchQuery = fixture.graph.frontier.find(
+            (entry) => entry.allowedTools.includes("search_web") && /(?:^|\s)site:/i.test(entry.queryHint),
+          )?.queryHint;
+          assert.ok(fixtureSearchQuery && coverageText.includes(fixtureSearchQuery));
+          assert.match(coverageText, /Transport attempts/i);
+          assert.match(coverageText, /Web discovery path/i);
+          assert.match(coverageText, /Structured indexes/i);
+          assert.match(coverageText, /Configured web-search provider\s+Unavailable/i);
+          assert.match(coverageText, /Google HTML fallback\s+No Safe Leads/i);
+          assert.match(coverageText, /DuckDuckGo HTML fallback\s+No Safe Leads/i);
+          assert.match(coverageText, /GitHub exact-name fallback\s+No Safe Leads/i);
+          assert.match(coverageText, /Semantic Scholar author API\s+No Match/i);
+          assert.match(coverageText, /Crossref works API\s+No Match/i);
+          assert.match(coverageText, /Queries attempted\s+1/i);
+          assert.match(coverageText, /not cited sources until hardened fetch succeeds/i);
           const temporalCards = reportDialog.locator(".evidence-temporal");
           assert.equal(
             await temporalCards.count(),

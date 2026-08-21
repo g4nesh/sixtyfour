@@ -995,6 +995,44 @@ test("health and example APIs expose replay readiness without leaking configurat
     OPENROUTER_API_KEY: "server-secret",
   });
   assert.equal((await localHealth.json()).liveConfigured, true);
+  const missingDelegatedSearchKey = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    LIVE_PROVIDER: "gemini",
+    LIVE_SEARCH_PROVIDER: "openai",
+    GEMINI_API_KEY: "reasoning-secret",
+  });
+  assert.equal((await missingDelegatedSearchKey.json()).liveConfigured, false);
+  const configuredDelegatedSearch = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    LIVE_PROVIDER: "gemini",
+    LIVE_SEARCH_PROVIDER: "openai",
+    GEMINI_API_KEY: "reasoning-secret",
+    OPENAI_API_KEY: "search-secret",
+  });
+  assert.equal((await configuredDelegatedSearch.json()).liveConfigured, true);
+  for (const provider of ["anthropic", "claude"]) {
+    const anthropicHealth = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+      ATLAS_LIVE_ENABLED: "true",
+      ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+      LIVE_PROVIDER: provider,
+      ANTHROPIC_API_KEY: "claude-secret",
+      ANTHROPIC_MODEL: "claude-test-model",
+    });
+    const anthropicPayload = await anthropicHealth.json();
+    assert.equal(anthropicPayload.liveConfigured, true);
+    assert.equal("provider" in anthropicPayload, false);
+    assert.equal("model" in anthropicPayload, false);
+  }
+  const anthropicMissingDelegatedSearch = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    LIVE_PROVIDER: "anthropic",
+    LIVE_SEARCH_PROVIDER: "openai",
+    ANTHROPIC_API_KEY: "claude-secret",
+  });
+  assert.equal((await anthropicMissingDelegatedSearch.json()).liveConfigured, false);
   const response = await api.handleApiRequest(new Request("https://atlas.test/api/examples/python-creator"), {});
   const payload = await response.json();
   assert.equal(payload.id, "python-creator");
@@ -1012,12 +1050,55 @@ test("POST replay streams byte-stable NDJSON ending in one terminal report", asy
   const first = await api.handleApiRequest(request(), {});
   const second = await api.handleApiRequest(request(), {});
   assert.match(first.headers.get("content-type"), /^application\/x-ndjson/);
+  assert.equal(first.headers.get("x-atlas-execution-mode"), "replay");
   const [firstText, secondText] = await Promise.all([first.text(), second.text()]);
   assert.equal(firstText, secondText);
   const events = parseNdjson(firstText);
   assert.equal(events.at(-1).name, "result.terminal");
   assert.equal(events.filter((event) => event.name === "result.terminal").length, 1);
   assert.equal(terminalReport(events).status, "completed");
+});
+
+test("local demo fixtures can intercept only the explicit loopback development bypass", async () => {
+  const example = replay.getReplayExample("python-creator");
+  const input = structuredClone(example.input);
+  const trace = api.immediateTerminalTrace(input, "configuration_error", "Synthetic local demo terminal.");
+  const globalKey = "__ATLAS_LOCAL_DEMO_FIXTURES__";
+  const previous = globalThis[globalKey];
+  globalThis[globalKey] = [{ query: input.query, input, trace }];
+  const body = JSON.stringify({
+    query: input.query,
+    objective: input.objective,
+    requestedDepth: input.requestedDepth,
+    requestedCategories: input.requestedCategories,
+    locale: input.locale,
+    mode: "live",
+  });
+  const request = (url) =>
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+
+  try {
+    const local = await api.handleApiRequest(request("http://localhost/api/research"), {
+      ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    });
+    assert.equal(local.headers.get("x-atlas-execution-mode"), "local_demo");
+    assert.equal(terminalReport(parseNdjson(await local.text())).input.query, input.query);
+
+    const localWithoutBypass = await api.handleApiRequest(request("http://localhost/api/research"), {});
+    assert.equal(localWithoutBypass.headers.get("x-atlas-execution-mode"), "live");
+
+    const publicIngress = await api.handleApiRequest(request("https://atlas.test/api/research"), {
+      ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    });
+    assert.equal(publicIngress.headers.get("x-atlas-execution-mode"), "live");
+  } finally {
+    if (previous === undefined) delete globalThis[globalKey];
+    else globalThis[globalKey] = previous;
+  }
 });
 
 test("NDJSON wrapper closes open spans and emits a consumable failed report after source failure", async () => {
@@ -1119,6 +1200,7 @@ test("safety refusal precedes replay lookup and missing live key is an honest co
     {},
   );
   const unsafeEvents = parseNdjson(await unsafe.text());
+  assert.equal(unsafe.headers.get("x-atlas-execution-mode"), "replay");
   assert.equal(terminalReport(unsafeEvents).status, "blocked");
   assert.equal(terminalReport(unsafeEvents).stop.reason, "unsafe_request");
 
@@ -1131,6 +1213,7 @@ test("safety refusal precedes replay lookup and missing live key is an honest co
     {},
   );
   const unconfiguredEvents = parseNdjson(await unconfigured.text());
+  assert.equal(unconfigured.headers.get("x-atlas-execution-mode"), "live");
   assert.equal(terminalReport(unconfiguredEvents).status, "configuration_error");
   assert.equal(terminalReport(unconfiguredEvents).stop.reason, "configuration_error");
   assert.match(terminalReport(unconfiguredEvents).stop.detail, /server-side model key/);

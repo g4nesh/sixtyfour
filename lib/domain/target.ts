@@ -92,6 +92,60 @@ function leadingPersonOrganization(value: string): { person: string; organizatio
   return { person, organization };
 }
 
+const NON_ADULT_EDUCATION_MARKER = /\b(?:elementary|middle|high|secondary|junior[- ]high|k[- ]?12|grade)\b/i;
+const NON_ADULT_EDUCATION_ACRONYMS = new Set(["ES", "HS", "JHS", "K12", "MS"]);
+const ADULT_EDUCATION_MARKER =
+  /\b(?:universit(?:y|ies)|college|institute|polytechnic|business\s+school|law\s+school|medical\s+school|school\s+of)\b/i;
+const EDUCATION_CONTEXT_PREFIX =
+  /^(?:school|college|university|education|stud(?:y|ies|ied|ying)|attends?|student)(?:\s+(?:at|with))?\s*(?::|=|-)?\s+(.+)$/i;
+const LEADING_EDUCATION_CONTEXT =
+  /^(.+?)\s+(stud(?:y|ies|ied|ying)\s+at|student\s+at|attends?|goes\s+to|went\s+to|graduated\s+from|alumn(?:us|a|i)\s+of|(?:school|college|university)\s*(?::|=|-)?)[ ]*(.+)$/i;
+
+function looksLikeAdultEducationInstitution(value: string): boolean {
+  const institution = normalizeWhitespace(value.replace(/^["']|["']$/g, ""));
+  if (
+    !institution ||
+    institution.length > 160 ||
+    institution.split(" ").length > 12 ||
+    containsRestrictedPublicContent(institution) ||
+    NON_ADULT_EDUCATION_MARKER.test(institution)
+  )
+    return false;
+  return (
+    ADULT_EDUCATION_MARKER.test(institution) ||
+    (/^[A-Z][A-Z&.-]{1,15}$/.test(institution) && !NON_ADULT_EDUCATION_ACRONYMS.has(institution))
+  );
+}
+
+/**
+ * Parse common, explicit adult-education disambiguators without treating the
+ * entire sentence as either a person's name or an organization. Ambiguous
+ * bare text stays outside this grammar; school-age labels fail closed.
+ */
+function leadingPersonEducation(value: string): {
+  person: string;
+  institution: string;
+  relationship: OrganizationHint["relationship"];
+} | null {
+  const match = normalizeWhitespace(value).match(LEADING_EDUCATION_CONTEXT);
+  const person = normalizeWhitespace(match?.[1] ?? "");
+  const connector = normalizeWhitespace(match?.[2] ?? "");
+  const institution = normalizeWhitespace(match?.[3] ?? "");
+  if (
+    !person ||
+    !institution ||
+    ORGANIZATION_MARKER.test(person) ||
+    !looksLikePersonName(person) ||
+    !looksLikeAdultEducationInstitution(institution)
+  )
+    return null;
+  return {
+    person,
+    institution,
+    relationship: /^(?:went\s+to|graduated\s+from|alumn)/i.test(connector) ? "former" : "current",
+  };
+}
+
 function addLocation(locations: string[], rawLocation: string): void {
   const location = normalizeWhitespace(rawLocation.replace(/^["']|["']$/g, ""));
   if (
@@ -258,16 +312,25 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
   const firstPart = commaParts[0];
   const explicitOrganization = firstPart?.match(EXPLICIT_ORGANIZATION_PREFIX);
   const freeformLocation = firstPart ? leadingPersonLocation(firstPart) : null;
-  const freeformOrganization = firstPart && !freeformLocation ? leadingPersonOrganization(firstPart) : null;
-  const leadingPersonContext = freeformLocation ?? freeformOrganization;
-  const firstPartLooksOrganizational = Boolean(
-    firstPart && !leadingPersonContext && ORGANIZATION_MARKER.test(firstPart),
+  const freeformEducation = firstPart && !freeformLocation ? leadingPersonEducation(firstPart) : null;
+  const rejectedFreeformEducation = Boolean(
+    firstPart && !freeformEducation && looksLikePersonName(firstPart.match(LEADING_EDUCATION_CONTEXT)?.[1] ?? ""),
   );
-  const personPart = leadingPersonContext?.person ?? firstPart;
+  const freeformOrganization =
+    firstPart && !freeformLocation && !freeformEducation && !rejectedFreeformEducation
+      ? leadingPersonOrganization(firstPart)
+      : null;
+  const leadingPersonContext = freeformLocation ?? freeformEducation ?? freeformOrganization;
+  const firstPartLooksOrganizational = Boolean(
+    firstPart && !leadingPersonContext && !rejectedFreeformEducation && ORGANIZATION_MARKER.test(firstPart),
+  );
+  const personPart = rejectedFreeformEducation ? undefined : (leadingPersonContext?.person ?? firstPart);
   if (personPart && !firstPartLooksOrganizational && looksLikePersonName(personPart)) {
     name = titleCaseName(personPart);
   }
   if (freeformLocation) addLocation(locationHints, freeformLocation.location);
+  if (freeformEducation)
+    addOrganization(organizationHints, freeformEducation.institution, freeformEducation.relationship);
   if (freeformOrganization) addOrganization(organizationHints, freeformOrganization.organization, "current");
 
   const roleOrganization = organizationFromRoleQuery(withoutEmails);
@@ -277,6 +340,10 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
 
   for (const part of commaParts.slice(name || explicitOrganization ? 1 : 0)) {
     addRole(roleHints, part);
+
+    if (rejectedFreeformEducation && part === firstPart) {
+      continue;
+    }
 
     const former = part.match(/^(?:ex[- ]|former(?:ly)?(?:\s+at)?\s+)(.+)$/i);
     if (former?.[1]) {
@@ -293,6 +360,14 @@ export function parseTarget(inputValue: InvestigationInput | string): ParsedTarg
     const location = part.match(/^(?:in|based\s+in|from)\s+(.+)$/i);
     if (location?.[1]) {
       addLocation(locationHints, location[1]);
+      continue;
+    }
+
+    const education = part.match(EDUCATION_CONTEXT_PREFIX);
+    if (education?.[1]) {
+      if (looksLikeAdultEducationInstitution(education[1])) {
+        addOrganization(organizationHints, education[1], "current");
+      }
       continue;
     }
 

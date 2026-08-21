@@ -13,7 +13,10 @@ const vite = await createServer({
   logLevel: "silent",
   server: { middlewareMode: true },
 });
-const graphUi = await vite.ssrLoadModule("/app/graph-model.ts");
+const [graphUi, atlasTypes] = await Promise.all([
+  vite.ssrLoadModule("/app/graph-model.ts"),
+  vite.ssrLoadModule("/app/atlas-types.ts"),
+]);
 
 after(async () => {
   await vite.close();
@@ -457,6 +460,161 @@ test("one stable frontier/action identifier links trace focus to its canonical n
   };
   assert.equal(graphUi.eventStableId(event), stableId);
   assert.equal(graphUi.stableNodeForEvent(graph, stableId), "candidate-decoy");
+});
+
+test("search visibility retains exact site queries and distinguishes transport attempts from sources", () => {
+  const query = '"Chris Anderson" site:scholar.google.com -jobs';
+  assert.deepEqual(graphUi.querySiteScopes(query), ["scholar.google.com"]);
+  assert.deepEqual(graphUi.querySiteScopes('"Chris Anderson" (site:openalex.org OR site:researchgate.net)'), [
+    "openalex.org",
+    "researchgate.net",
+  ]);
+  assert.deepEqual(graphUi.querySiteScopes('"Chris Anderson" professional'), []);
+
+  const trace = [
+    {
+      name: "tool.search_web",
+      payload: {
+        frontierEntryId: "frontier_search_visibility",
+        arguments: { query },
+      },
+    },
+    {
+      name: "tool.search_web",
+      payload: {
+        frontierEntryId: "frontier_search_visibility",
+        diagnostics: [
+          {
+            code: "search_provider_quota_exhausted",
+            severity: "warning",
+            message: "Provider quota exhausted.",
+            retryable: true,
+          },
+          {
+            code: "google_results_not_observed",
+            severity: "info",
+            message: "No safe Google leads.",
+            retryable: false,
+          },
+          {
+            code: "duckduckgo_results_not_observed",
+            severity: "info",
+            message: "No safe public-web leads.",
+            retryable: false,
+          },
+          {
+            code: "github_public_user_fallback_used",
+            severity: "info",
+            message: "Exact-name GitHub discovery returned a lead.",
+            retryable: false,
+          },
+          {
+            code: "semantic_scholar_author_api_used",
+            severity: "info",
+            message: "Semantic Scholar returned an exact-name author lead.",
+            retryable: false,
+          },
+          {
+            code: "crossref_exact_author_not_observed",
+            severity: "info",
+            message: "Crossref returned no exact-author work lead.",
+            retryable: false,
+          },
+        ],
+      },
+    },
+  ];
+  assert.deepEqual(atlasTypes.traceSearchQueries(trace), [query]);
+  assert.deepEqual(atlasTypes.traceSearchTransportAttempts(trace), [
+    { id: "configured_provider", label: "Configured web-search provider", outcome: "unavailable" },
+    { id: "duckduckgo_html", label: "DuckDuckGo HTML fallback", outcome: "no_safe_leads" },
+    { id: "google_html", label: "Google HTML fallback", outcome: "no_safe_leads" },
+    { id: "github_exact_name", label: "GitHub exact-name fallback", outcome: "returned_leads" },
+    {
+      id: "semantic_scholar_author_api",
+      label: "Semantic Scholar author API",
+      outcome: "returned_leads",
+    },
+    { id: "crossref_author_works_api", label: "Crossref works API", outcome: "no_match" },
+  ]);
+});
+
+test("transport errors outrank earlier no-result diagnostics unless the same transport returned leads", () => {
+  const trace = [
+    { name: "tool.search_web", payload: { arguments: { query: '"Grace Hopper"' } } },
+    {
+      name: "tool.search_web",
+      payload: {
+        diagnostics: [
+          {
+            code: "duckduckgo_results_not_observed",
+            severity: "info",
+            message: "No safe DuckDuckGo leads were observed.",
+            retryable: false,
+          },
+          {
+            code: "duckduckgo_html_rate_limited",
+            severity: "warning",
+            message: "DuckDuckGo later rate-limited a bounded request.",
+            retryable: true,
+          },
+        ],
+      },
+    },
+  ];
+  assert.deepEqual(atlasTypes.traceSearchTransportAttempts(trace), [
+    { id: "configured_provider", label: "Configured web-search provider", outcome: "attempted" },
+    { id: "duckduckgo_html", label: "DuckDuckGo HTML fallback", outcome: "unavailable" },
+  ]);
+});
+
+test("successful search span metadata marks the configured provider as returning unverified leads", () => {
+  const trace = [
+    {
+      name: "tool.search_web",
+      status: "running",
+      payload: { arguments: { query: '"Grace Hopper" site:navy.mil' } },
+    },
+    {
+      name: "tool.search_web",
+      status: "succeeded",
+      payload: {
+        resultStatus: "succeeded",
+        data: { citationCount: 2, observedCitationCount: 3, provider: "openai:web_search" },
+      },
+    },
+  ];
+  assert.deepEqual(atlasTypes.traceSearchTransportAttempts(trace), [
+    { id: "configured_provider", label: "Configured web-search provider", outcome: "returned_leads" },
+  ]);
+});
+
+test("structured academic site queries remain visible when DNS failure emits only a generic diagnostic", () => {
+  const trace = [
+    {
+      name: "tool.search_web",
+      payload: { arguments: { query: '"Grace Hopper" site:semanticscholar.org' } },
+    },
+    {
+      name: "tool.search_web",
+      status: "partial",
+      payload: {
+        resultStatus: "skipped",
+        diagnostics: [
+          {
+            code: "dns_validation_unavailable",
+            severity: "warning",
+            message: "DNS answers could not be validated.",
+            retryable: false,
+          },
+        ],
+      },
+    },
+  ];
+  assert.deepEqual(atlasTypes.traceSearchTransportAttempts(trace), [
+    { id: "configured_provider", label: "Configured web-search provider", outcome: "attempted" },
+    { id: "semantic_scholar_author_api", label: "Semantic Scholar author API", outcome: "unavailable" },
+  ]);
 });
 
 test("streamed graph snapshots advance monotonically and reject destructive fallbacks", () => {

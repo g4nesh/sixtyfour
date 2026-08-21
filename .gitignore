@@ -43,3 +43,7 @@ yarn-error.log*
 /tmp/
 /work/
 *.tsbuildinfo
+
+# Local-only demo fixtures (hardcoded example runs). Never committed: the
+# tracked wiring treats an absent folder as "no fixtures" and stays inert.
+/local-demo/

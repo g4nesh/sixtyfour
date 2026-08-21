@@ -534,7 +534,7 @@ function hostMatchesFirstPartyContext(host: string, context: SourceTierContext):
   });
 }
 
-const PROFESSIONAL_PROFILE_HOSTS = ["linkedin.com", "crunchbase.com"] as const;
+const PROFESSIONAL_PROFILE_HOSTS = ["linkedin.com", "crunchbase.com", "researchgate.net"] as const;
 const REPUTABLE_MEDIA_HOSTS = [
   "apnews.com",
   "bbc.com",
@@ -610,7 +610,15 @@ export function deterministicSourceTypeForUrl(
   if (host === "github.com" || host.endsWith(".github.io")) return "code_profile";
   if (isCanonicalAppStoreListingUrl(value)) return "public_document";
   if (isCanonicalGoogleScholarProfileUrl(value)) return "public_document";
-  if (host === "openreview.net" || host === "semanticscholar.org" || host === "openalex.org") return "public_document";
+  if (
+    host === "openreview.net" ||
+    host.endsWith(".openreview.net") ||
+    host === "semanticscholar.org" ||
+    host.endsWith(".semanticscholar.org") ||
+    host === "openalex.org" ||
+    host.endsWith(".openalex.org")
+  )
+    return "public_document";
   if (hostMatches(host, REPUTABLE_MEDIA_HOSTS)) return "news";
   if (hostMatchesFirstPartyContext(host, context)) return preferredFirstPartyType;
   if (
@@ -625,6 +633,7 @@ export function deterministicSourceTypeForUrl(
     host === "openreview.net" ||
     host === "semanticscholar.org" ||
     host === "crossref.org" ||
+    host.endsWith(".crossref.org") ||
     host === "patentsview.org" ||
     host === "npmjs.com"
   )
@@ -662,9 +671,13 @@ export function sourceTierForUrl(
     host === "orcid.org" ||
     host === "doi.org" ||
     host === "openalex.org" ||
+    host.endsWith(".openalex.org") ||
     host === "openreview.net" ||
+    host.endsWith(".openreview.net") ||
     host === "semanticscholar.org" ||
+    host.endsWith(".semanticscholar.org") ||
     host === "crossref.org" ||
+    host.endsWith(".crossref.org") ||
     host === "patentsview.org" ||
     host === "npmjs.com" ||
     isCanonicalAppStoreListingUrl(value) ||
@@ -767,7 +780,12 @@ export function compiledQueriesForLane(
     return plan.queries.filter((query) => query.kind === "exact_baseline" || query.kind === "exact_context");
   }
   if (lane.id === "t2.structured_professional") {
-    return plan.queries.filter((query) => query.kind === "professional_site" || query.kind === "public_metadata_site");
+    return plan.queries.filter(
+      (query) =>
+        query.kind === "professional_site" ||
+        query.kind === "public_academic_site" ||
+        query.kind === "public_metadata_site",
+    );
   }
   if (lane.id === "t3.institutional") {
     return plan.queries.filter((query) => query.kind === "institution_site" || query.kind === "public_document");
@@ -778,7 +796,10 @@ export function compiledQueriesForLane(
   if (lane.id === "t6.general_discovery") {
     return plan.queries.filter(
       (query) =>
-        query.kind === "exact_refinement" || query.kind === "orthographic_name" || query.kind === "initial_name",
+        query.kind === "exact_refinement" ||
+        query.kind === "orthographic_name" ||
+        query.kind === "initial_name" ||
+        query.kind === "public_social_site",
     );
   }
   return [];

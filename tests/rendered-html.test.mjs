@@ -57,6 +57,15 @@ test("config-less SSR loaders cannot overwrite the live Vite dependency cache", 
   assert.ok(loaders.length > 0, "expected at least one config-less SSR loader");
 });
 
+test("production builds and Docker contexts exclude ignored local demo fixtures", async () => {
+  const [viteConfig, dockerIgnore] = await Promise.all([
+    readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
+    readFile(new URL("../.dockerignore", import.meta.url), "utf8"),
+  ]);
+  assert.match(viteConfig, /localDemoFixturesPlugin\(command === ["']serve["']\)/);
+  assert.match(dockerIgnore, /(?:^|\n)local-demo(?:\n|$)/);
+});
+
 test("server-renders the black graph-first Atlas workspace", async () => {
   const response = await render();
   assert.equal(response.status, 200);
@@ -86,7 +95,8 @@ test("server-renders the black graph-first Atlas workspace", async () => {
   assert.equal(response.headers.get("x-frame-options"), "DENY");
 
   const html = await response.text();
-  assert.match(html, /<title>Atlas — People Intelligence<\/title>/i);
+  assert.match(html, /<title>Atlas<\/title>/i);
+  assert.doesNotMatch(html, /Atlas\s*(?:—|-)\s*People Intelligence/i);
   assert.match(html, /class="atlas-shell"/);
   assert.match(html, /Public-professional research input/);
   assert.match(html, /Any public context: name, role, company, city\/region, adult school, URL, or handle/);
@@ -140,20 +150,35 @@ test("built Worker image route fails closed when local bindings are absent", asy
 });
 
 test("graph components preserve canonical state, accessible fallbacks, and client-only heavy libraries", async () => {
-  const [page, workbench, graphModel, workspace, canvas, inspector, report, layout, css, packageJson, viteConfig] =
-    await Promise.all([
-      readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-      readFile(new URL("../app/workbench.tsx", import.meta.url), "utf8"),
-      readFile(new URL("../app/graph-model.ts", import.meta.url), "utf8"),
-      readFile(new URL("../app/components/graph-workspace.tsx", import.meta.url), "utf8"),
-      readFile(new URL("../app/components/graph-canvas.tsx", import.meta.url), "utf8"),
-      readFile(new URL("../app/components/node-inspector.tsx", import.meta.url), "utf8"),
-      readFile(new URL("../app/components/report-sheet.tsx", import.meta.url), "utf8"),
-      readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
-      readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
-      readFile(new URL("../package.json", import.meta.url), "utf8"),
-      readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
-    ]);
+  const [
+    page,
+    workbench,
+    graphModel,
+    workspace,
+    canvas,
+    inspector,
+    sourceLadder,
+    traceRail,
+    report,
+    layout,
+    css,
+    packageJson,
+    viteConfig,
+  ] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/workbench.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/graph-model.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/graph-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/graph-canvas.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/node-inspector.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/source-ladder.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/trace-rail.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/report-sheet.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
+  ]);
 
   await assert.rejects(access(new URL("app/_sites-preview", projectRoot)));
   assert.doesNotMatch(page, /SkeletonPreview|<svg|dangerouslySetInnerHTML/);
@@ -203,7 +228,29 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(canvas, /nodesDraggable=\{false\}/);
   assert.match(canvas, /nodesFocusable=\{false\}/);
   assert.match(inspector, /nodeRelationships/);
+  assert.match(inspector, /Exact query/);
+  assert.match(inspector, /Site scope/);
+  assert.match(inspector, /Scheduler path cost/);
+  assert.match(inspector, /ranking metadata, not an API charge, error, or rejection reason/);
+  assert.match(inspector, /check Transport attempts or the trace to see whether a request actually ran/);
+  assert.match(inspector, /The\s+score did not reject it/);
+  assert.match(inspector, /Attempts and discovery leads are not cited sources/);
+  assert.match(inspector, /Web discovery path/);
+  assert.match(inspector, /Structured indexes/);
+  assert.match(sourceLadder, /Sites:/);
+  assert.match(sourceLadder, /Transports attempted/);
+  assert.match(sourceLadder, /Web discovery path/);
+  assert.match(sourceLadder, /Structured indexes/);
+  assert.match(sourceLadder, /Returned leads remain unverified/);
+  assert.match(traceRail, /traceSearchQuery/);
+  assert.match(traceRail, /returned unverified leads/);
+  assert.match(traceRail, /no exact match/);
+  assert.match(traceRail, /Structured indexes/);
   assert.match(report, /candidates\.map/);
+  assert.match(report, /Queries attempted/);
+  assert.match(report, /Web discovery path/);
+  assert.match(report, /Structured indexes/);
+  assert.match(report, /not cited sources until hardened fetch succeeds/);
   assert.doesNotMatch(report, /selectedCandidate.*filter|candidateId.*filter/);
 
   assert.match(css, /--atlas-bg:\s*#030604/);

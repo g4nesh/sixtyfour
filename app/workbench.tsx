@@ -52,6 +52,19 @@ interface AtlasWorkbenchProps {
   onDownloadPdf?: (report: Report) => void | Promise<void>;
 }
 
+type ResearchExecutionMode = "live" | "replay" | "local_demo";
+
+function executionModeFromResponse(response: Response): ResearchExecutionMode | null {
+  const value = response.headers.get("x-atlas-execution-mode")?.trim().toLocaleLowerCase("en-US");
+  if (value === "live" || value === "replay" || value === "local_demo") return value;
+  return null;
+}
+
+function executionModeLabel(mode: ResearchExecutionMode): string {
+  if (mode === "local_demo") return "Local demo replay";
+  return mode === "replay" ? "Replay" : "Live";
+}
+
 function terminalReport(event: TraceEvent): Report | null {
   return (
     event.report ??
@@ -77,17 +90,26 @@ function runMessage(
   if (status === "failed") return "The run ended early. Inspect the terminal trace for the recorded boundary.";
   if (status === "canceled") return "The run was canceled. Its partial graph and trace remain inspectable.";
   const providerUnavailable =
-    diagnosticCodes.has("search_provider_quota_exhausted") || diagnosticCodes.has("search_provider_unavailable");
+    diagnosticCodes.has("search_provider_quota_exhausted") ||
+    diagnosticCodes.has("search_provider_unavailable") ||
+    diagnosticCodes.has("search_provider_circuit_open");
   const providerUngrounded = diagnosticCodes.has("search_provider_sources_not_observed");
+  const googleAttempted = [...diagnosticCodes].some((code) => code.startsWith("google_"));
+  const duckDuckGoAttempted = [...diagnosticCodes].some((code) => code.startsWith("duckduckgo_"));
+  const githubAttempted = [...diagnosticCodes].some(
+    (code) => code.startsWith("github_public_user_") || code.startsWith("github_exact_name_"),
+  );
   const retainedSourceMessage = hasDirectEvidence
     ? "A directly fetched citation is in the report."
     : "No directly fetched citation was admitted before the run stopped.";
   const providerBoundary = providerUnavailable ? "was unavailable" : "returned no usable source annotations";
-  if ((providerUnavailable || providerUngrounded) && diagnosticCodes.has("public_web_fallback_used")) {
-    return `${status === "partial" ? "Partial coverage" : "Run complete"} — provider search ${providerBoundary}, so Atlas used its bounded public-web fallback. ${retainedSourceMessage}`;
-  }
-  if ((providerUnavailable || providerUngrounded) && diagnosticCodes.has("github_public_user_fallback_used")) {
-    return `${status === "partial" ? "Partial coverage" : "Run complete"} — provider search ${providerBoundary}, so Atlas used its exact-name GitHub fallback. ${retainedSourceMessage}`;
+  const fallbackAttempts = [
+    duckDuckGoAttempted ? "DuckDuckGo HTML" : null,
+    googleAttempted ? "Google HTML" : null,
+    githubAttempted ? "GitHub exact-name" : null,
+  ].filter((label): label is string => Boolean(label));
+  if ((providerUnavailable || providerUngrounded) && fallbackAttempts.length > 0) {
+    return `${status === "partial" ? "Partial coverage" : "Run complete"} — provider search ${providerBoundary}. Atlas then attempted ${fallbackAttempts.join(" and ")} fallback discovery. ${retainedSourceMessage}`;
   }
   if (providerUnavailable || providerUngrounded) {
     return `Partial coverage — the configured web-search provider ${providerBoundary} and no fallback source was verified. Inspect the trace for the recorded boundary.`;
@@ -144,6 +166,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
   const [graph, setGraph] = useState<CanonicalSearchGraph | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
   const [message, setMessage] = useState("Describe the person with any public-professional context you have.");
+  const [executionMode, setExecutionMode] = useState<ResearchExecutionMode | null>(null);
   const [liveConfigured, setLiveConfigured] = useState<boolean | null>(null);
   const [graphView, setGraphView] = useState<GraphView>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -165,6 +188,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     setSelectedNodeId(null);
     setFocusedStableId(null);
     setReportOpen(false);
+    setExecutionMode(null);
   }, []);
 
   const applyReport = useCallback((nextReport: Report | null) => {
@@ -249,6 +273,11 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         const detail = await response.text();
         throw new Error(detail || `Research failed (${response.status})`);
       }
+      const responseExecutionMode = executionModeFromResponse(response);
+      setExecutionMode(responseExecutionMode);
+      if (responseExecutionMode === "local_demo") {
+        setMessage("Local demo replay — streaming a captured, zero-network investigation.");
+      }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";
@@ -277,7 +306,10 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       setRunStatus((current) => (current === "running" ? "complete" : current));
       const hasDirectEvidence =
         completedReport?.evidence?.some((evidence) => evidence.verificationMethod === "direct_fetch") ?? false;
-      setMessage(runMessage(terminalStatus, diagnosticCodes, hasDirectEvidence));
+      const completionMessage = runMessage(terminalStatus, diagnosticCodes, hasDirectEvidence);
+      setMessage(
+        responseExecutionMode === "local_demo" ? `Local demo replay — ${completionMessage}` : completionMessage,
+      );
     } catch (error) {
       if (abortRef.current !== controller) return;
       if (controller.signal.aborted) {
@@ -436,6 +468,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
           <strong>{humanize(reportStatus)}</strong>
           <span className="workspace-message">{message}</span>
           <div className="workspace-metrics">
+            {executionMode ? <span className="execution-mode">{executionModeLabel(executionMode)}</span> : null}
             <span>{graphStatusLabel(graph, runStatus)}</span>
             <span>{formatDuration(elapsed)}</span>
             <span>{formatUsage(usage)}</span>
@@ -504,11 +537,14 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         {graph ? (
           <SourceLadder
             graph={graph}
+            trace={trace}
             collapsed={sourceLadderCollapsed}
             onToggle={() => setSourceLadderPreference(!sourceLadderCollapsed)}
           />
         ) : null}
-        {graph ? <NodeInspector graph={graph} node={activeNode} onClose={() => setSelectedNodeId(null)} /> : null}
+        {graph ? (
+          <NodeInspector graph={graph} node={activeNode} trace={trace} onClose={() => setSelectedNodeId(null)} />
+        ) : null}
         <TraceRail
           trace={trace}
           expanded={traceExpanded}

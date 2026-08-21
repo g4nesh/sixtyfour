@@ -129,9 +129,11 @@ export interface OpenRouterClientConfig {
    * annotations in the same shape) instead of the OpenRouter web_search tool,
    * and OpenRouter-only fields are omitted. "gemini" targets Google's
    * OpenAI-compatibility endpoint for chat/tool-calling and its native
-   * Interactions API for Google Search grounding.
+   * Interactions API for Google Search grounding. "anthropic" targets the
+   * native Claude Messages API and normalizes its tool-use and citation blocks
+   * into this client's provider-neutral completion contract.
    */
-  provider?: "openrouter" | "openai" | "gemini";
+  provider?: "openrouter" | "openai" | "gemini" | "anthropic";
   /** Search-preview model used only for the web-discovery turn (OpenAI). */
   searchModel?: string;
   /**
@@ -396,6 +398,13 @@ function validateTools(tools: readonly OpenRouterTool[]): void {
 function normalizeTemperature(value: number): number {
   if (!Number.isFinite(value) || value < 0 || value > 2) {
     throw new OpenRouterConfigurationError("Temperature must be a finite number between 0 and 2.");
+  }
+  return value;
+}
+
+function normalizeAnthropicTemperature(value: number): number {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new OpenRouterConfigurationError("Anthropic temperature must be a finite number between 0 and 1.");
   }
   return value;
 }
@@ -737,6 +746,294 @@ async function completeOpenAiWebSearch(args: OpenAiWebSearchArgs): Promise<OpenR
   };
 }
 
+type AnthropicInputBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool_use_id: string; content: string };
+
+interface AnthropicInputMessage {
+  role: "user" | "assistant";
+  content: AnthropicInputBlock[];
+}
+
+function anthropicInput(messages: readonly OpenRouterMessage[]): {
+  system?: string;
+  messages: AnthropicInputMessage[];
+} {
+  const system: string[] = [];
+  const converted: AnthropicInputMessage[] = [];
+  const append = (role: AnthropicInputMessage["role"], blocks: AnthropicInputBlock[]): void => {
+    const previous = converted.at(-1);
+    if (previous?.role === role) previous.content.push(...blocks);
+    else converted.push({ role, content: [...blocks] });
+  };
+
+  for (const message of messages) {
+    if (message.role === "system") {
+      if (typeof message.content === "string" && message.content.trim()) system.push(message.content);
+      continue;
+    }
+    if (message.role === "tool") {
+      if (!message.tool_call_id?.trim()) {
+        throw new OpenRouterConfigurationError("Anthropic tool results require the originating tool-use id.");
+      }
+      append("user", [
+        {
+          type: "tool_result",
+          tool_use_id: message.tool_call_id,
+          content: typeof message.content === "string" ? message.content : "",
+        },
+      ]);
+      continue;
+    }
+    if (message.role === "user") {
+      append("user", [{ type: "text", text: typeof message.content === "string" ? message.content : "" }]);
+      continue;
+    }
+
+    const blocks: AnthropicInputBlock[] = [];
+    if (typeof message.content === "string" && message.content) {
+      blocks.push({ type: "text", text: message.content });
+    }
+    for (const call of message.tool_calls ?? []) {
+      let input: unknown;
+      try {
+        input = JSON.parse(call.function.arguments);
+      } catch {
+        throw new OpenRouterConfigurationError("Anthropic tool-call arguments must contain valid JSON.");
+      }
+      if (!isRecord(input)) {
+        throw new OpenRouterConfigurationError("Anthropic tool-call arguments must be a JSON object.");
+      }
+      blocks.push({ type: "tool_use", id: call.id, name: call.function.name, input });
+    }
+    if (blocks.length === 0) blocks.push({ type: "text", text: "" });
+    append("assistant", blocks);
+  }
+
+  if (converted.length === 0) {
+    throw new OpenRouterConfigurationError("Anthropic requests require at least one non-system message.");
+  }
+  return {
+    ...(system.length > 0 ? { system: system.join("\n\n") } : {}),
+    messages: converted,
+  };
+}
+
+function normalizeAnthropicUsage(value: unknown): NormalizedUsage {
+  const usage = isRecord(value) ? value : {};
+  const uncachedInputTokens = safeNumber(usage.input_tokens);
+  const cacheReadInputTokens = safeNumber(usage.cache_read_input_tokens);
+  const cacheCreationInputTokens = safeNumber(usage.cache_creation_input_tokens);
+  const inputTokens =
+    uncachedInputTokens === null
+      ? null
+      : uncachedInputTokens + (cacheReadInputTokens ?? 0) + (cacheCreationInputTokens ?? 0);
+  const outputTokens = safeNumber(usage.output_tokens);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null,
+    reasoningTokens: null,
+    cachedInputTokens: cacheReadInputTokens,
+    costUsd: null,
+  };
+}
+
+function parseAnthropicMessage(value: unknown): {
+  message: OpenRouterMessage;
+  annotations: OpenRouterAnnotation[];
+} {
+  if (!Array.isArray(value)) {
+    throw new OpenRouterError("invalid_response", "Anthropic returned malformed message content.");
+  }
+  const textBlocks: string[] = [];
+  const toolCalls: OpenRouterToolCall[] = [];
+  const annotations: OpenRouterAnnotation[] = [];
+  const seenUrls = new Set<string>();
+  const addCitation = (rawUrl: unknown, rawTitle: unknown): void => {
+    if (typeof rawUrl !== "string") return;
+    const url = stripTrackingParams(rawUrl);
+    if (!/^https:\/\//i.test(url) || seenUrls.has(url)) return;
+    seenUrls.add(url);
+    annotations.push({
+      type: "url_citation",
+      url_citation: {
+        url,
+        ...(typeof rawTitle === "string" && rawTitle.trim() ? { title: rawTitle.trim() } : {}),
+      },
+    });
+  };
+  const inspectSearchResult = (block: unknown): void => {
+    if (!isRecord(block)) return;
+    if (block.type === "web_search_result") addCitation(block.url, block.title);
+  };
+
+  for (const block of value) {
+    if (!isRecord(block)) continue;
+    if (block.type === "text") {
+      if (typeof block.text === "string") textBlocks.push(block.text);
+      if (Array.isArray(block.citations)) {
+        for (const citation of block.citations) {
+          if (isRecord(citation) && citation.type === "web_search_result_location") {
+            addCitation(citation.url, citation.title);
+          }
+        }
+      }
+      continue;
+    }
+    if (block.type === "tool_use") {
+      const id = typeof block.id === "string" ? block.id : "";
+      const name = typeof block.name === "string" ? block.name : "";
+      if (!id || !name || !isRecord(block.input)) {
+        throw new OpenRouterError("invalid_response", "Anthropic returned an incomplete tool-use block.");
+      }
+      toolCalls.push({ id, type: "function", function: { name, arguments: JSON.stringify(block.input) } });
+      continue;
+    }
+    if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
+      for (const result of block.content) inspectSearchResult(result);
+      continue;
+    }
+    inspectSearchResult(block);
+  }
+
+  return {
+    message: {
+      role: "assistant",
+      content: textBlocks.length > 0 ? textBlocks.join("") : null,
+      ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      ...(annotations.length > 0 ? { annotations } : {}),
+    },
+    annotations,
+  };
+}
+
+interface AnthropicCompletionArgs {
+  endpoint: URL;
+  apiKey: string;
+  model: string;
+  messages: readonly OpenRouterMessage[];
+  tools: readonly OpenRouterTool[];
+  webSearch: false | OpenRouterWebSearchTool["parameters"] | undefined;
+  maxCompletionTokens?: number;
+  temperature?: number;
+  hardenedFetch: (input: URL, init: RequestInit) => Promise<{ response: Response }>;
+  clock: () => number;
+  startedAt: number;
+  safeLog: (event: OpenRouterSafeLogEvent) => void;
+  logBase: { model: string; messageCount: number; functionToolCount: number; webSearchEnabled: boolean };
+  signal?: AbortSignal;
+}
+
+async function completeAnthropic(args: AnthropicCompletionArgs): Promise<OpenRouterCompletion> {
+  const input = anthropicInput(args.messages);
+  const functionTools = args.tools
+    .filter((tool): tool is OpenRouterFunctionTool => tool.type === "function")
+    .map((tool) => ({
+      name: tool.function.name,
+      description: tool.function.description,
+      input_schema: tool.function.parameters,
+    }));
+  const webSearchRequested = args.webSearch !== false && args.webSearch !== undefined;
+  const bodyTools: Array<Record<string, unknown>> = [...functionTools];
+  if (webSearchRequested) {
+    bodyTools.push({
+      type: "web_search_20250305",
+      name: "web_search",
+      // Each Atlas frontier action already owns one bounded query. Keep the
+      // provider-side server tool to a single search invocation as well.
+      max_uses: 1,
+    });
+  }
+  const tokenCap = boundedInteger(args.maxCompletionTokens, 4_096, 1, 64_000);
+  const body: Record<string, unknown> = {
+    model: args.model,
+    max_tokens: tokenCap,
+    ...input,
+    ...(bodyTools.length > 0 ? { tools: bodyTools, tool_choice: { type: "auto" } } : {}),
+    ...(args.temperature === undefined ? {} : { temperature: normalizeAnthropicTemperature(args.temperature) }),
+  };
+
+  let fetched;
+  try {
+    fetched = await args.hardenedFetch(args.endpoint, {
+      method: "POST",
+      headers: {
+        "x-api-key": args.apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: args.signal,
+    });
+  } catch (error) {
+    const latencyMs = Math.max(0, args.clock() - args.startedAt);
+    const code = error instanceof HardenedFetchError ? error.code : "network_error";
+    args.safeLog({ phase: "error", ...args.logBase, latencyMs, errorCode: code });
+    throw new OpenRouterError(code, "The Anthropic request failed before a valid response was received.", {
+      retryable: error instanceof HardenedFetchError && error.retryable,
+      cause: error,
+    });
+  }
+
+  const requestId = fetched.response.headers.get("request-id") ?? fetched.response.headers.get("x-request-id");
+  if (!fetched.response.ok) {
+    const latencyMs = Math.max(0, args.clock() - args.startedAt);
+    args.safeLog({
+      phase: "error",
+      ...args.logBase,
+      latencyMs,
+      status: fetched.response.status,
+      errorCode: "http_error",
+    });
+    throw new OpenRouterError(
+      "http_error",
+      fetched.response.status === 429
+        ? "Anthropic rate-limited this request (HTTP 429). Wait a moment and try again, or raise the account's rate limit."
+        : `Anthropic returned HTTP ${fetched.response.status}.`,
+      {
+        status: fetched.response.status,
+        retryable: isRetryableStatus(fetched.response.status),
+        requestId,
+        retryAfterMs: parseRetryAfterMs(fetched.response.headers),
+      },
+    );
+  }
+
+  let payload: unknown;
+  try {
+    payload = await fetched.response.json();
+  } catch (error) {
+    throw new OpenRouterError("invalid_response", "Anthropic returned invalid JSON.", { requestId, cause: error });
+  }
+  if (!isRecord(payload) || payload.type !== "message") {
+    throw new OpenRouterError("invalid_response", "Anthropic returned no completion message.", { requestId });
+  }
+  const parsed = parseAnthropicMessage(payload.content);
+  const usage = normalizeAnthropicUsage(payload.usage);
+  const latencyMs = Math.max(0, args.clock() - args.startedAt);
+  args.safeLog({
+    phase: "response",
+    ...args.logBase,
+    status: fetched.response.status,
+    latencyMs,
+    returnedToolCallCount: parsed.message.tool_calls?.length ?? 0,
+    usage,
+  });
+  return {
+    id: typeof payload.id === "string" ? payload.id : null,
+    model: typeof payload.model === "string" ? payload.model : args.model,
+    created: null,
+    finishReason: typeof payload.stop_reason === "string" ? payload.stop_reason : null,
+    message: parsed.message,
+    usage,
+    provider: webSearchRequested ? "anthropic:web_search" : "anthropic",
+    requestId,
+    latencyMs,
+  };
+}
+
 export function createOpenRouterClient(config: OpenRouterClientConfig) {
   const apiKey = config.apiKey?.trim();
   if (!apiKey) {
@@ -747,6 +1044,7 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
   }
   const isOpenAi = config.provider === "openai";
   const isGemini = config.provider === "gemini";
+  const isAnthropic = config.provider === "anthropic";
   // Both OpenAI and Gemini speak the OpenAI chat-completions dialect (Bearer
   // auth, strict-schema quirks, no OpenRouter attribution headers).
   const isOpenAiCompat = isOpenAi || isGemini;
@@ -754,7 +1052,9 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
     ? "https://api.openai.com/v1/chat/completions"
     : isGemini
       ? "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-      : "https://openrouter.ai/api/v1/chat/completions";
+      : isAnthropic
+        ? "https://api.anthropic.com/v1/messages"
+        : "https://openrouter.ai/api/v1/chat/completions";
   let endpoint: URL;
   try {
     endpoint = new URL(config.endpoint ?? defaultEndpoint);
@@ -762,7 +1062,7 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
     throw new OpenRouterConfigurationError("The model provider endpoint is invalid.");
   }
   if (endpoint.protocol !== "https:") {
-    throw new OpenRouterConfigurationError("The OpenRouter endpoint must use HTTPS.");
+    throw new OpenRouterConfigurationError("The model provider endpoint must use HTTPS.");
   }
   // Web discovery may be delegated to an OpenAI search provider even when the
   // reasoning provider is Gemini/OpenRouter. Resolve its endpoint/key up front
@@ -812,7 +1112,7 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
       const useOpenAiSearch = webSearchRequested && (isOpenAi || searchDelegated);
       const useGeminiSearch = webSearchRequested && isGemini && !searchDelegated;
       const tools: OpenRouterTool[] = [...(options.tools ?? [])];
-      if (!isOpenAiCompat && options.webSearch !== false && options.webSearch !== undefined) {
+      if (!isOpenAiCompat && !isAnthropic && options.webSearch !== false && options.webSearch !== undefined) {
         tools.push(webSearchTool(options.webSearch));
       }
       validateTools(tools);
@@ -822,7 +1122,10 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
         messageCount: options.messages.length,
         functionToolCount: tools.filter((tool) => tool.type === "function").length,
         webSearchEnabled:
-          useOpenAiSearch || useGeminiSearch || tools.some((tool) => tool.type === "openrouter:web_search"),
+          useOpenAiSearch ||
+          useGeminiSearch ||
+          (isAnthropic && webSearchRequested) ||
+          tools.some((tool) => tool.type === "openrouter:web_search"),
       };
 
       // One provider round-trip. Transient rate limits (429) and 5xx are retried
@@ -858,6 +1161,25 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
             apiKey,
             model: requestModel,
             messages: options.messages,
+            hardenedFetch,
+            clock,
+            startedAt,
+            safeLog,
+            logBase,
+            signal: options.signal,
+          });
+        }
+
+        if (isAnthropic) {
+          return await completeAnthropic({
+            endpoint,
+            apiKey,
+            model: requestModel,
+            messages: options.messages,
+            tools,
+            webSearch: options.webSearch,
+            maxCompletionTokens: options.maxCompletionTokens,
+            temperature: options.temperature,
             hardenedFetch,
             clock,
             startedAt,

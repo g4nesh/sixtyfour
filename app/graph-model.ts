@@ -226,6 +226,17 @@ export function frontierForNode(graph: CanonicalSearchGraph, node: SearchGraphNo
   return graph.frontier.find((entry) => entry.nodeId === node.id || entry.id === node.frontierEntryId) ?? null;
 }
 
+/** Return only explicit site: operators from the canonical bounded query. */
+export function querySiteScopes(query: string): string[] {
+  return [
+    ...new Set(
+      [...query.matchAll(/(?:^|[\s(])site:([^\s)]+)/giu)]
+        .map((match) => match[1]?.replace(/["'.,;:]+$/gu, "").toLocaleLowerCase("en-US"))
+        .filter((scope): scope is string => Boolean(scope)),
+    ),
+  ];
+}
+
 export function nodePathCost(graph: CanonicalSearchGraph, node: SearchGraphNode): number | undefined {
   return frontierForNode(graph, node)?.pathCost;
 }

@@ -39,6 +39,8 @@ test("compiler emits a finite, ordered exact-name plan with public-professional 
       "professional_site",
       "professional_site",
       "public_metadata_site",
+      "public_academic_site",
+      "public_social_site",
       "institution_site",
       "institution_site",
       "public_document",
@@ -73,12 +75,22 @@ test("compiler emits a finite, ordered exact-name plan with public-professional 
   assert.equal(appStore?.kind, "public_metadata_site");
   assert.equal(appStore?.derivedFrom, "compiler_public_metadata_allowlist");
   assert.equal(appStore?.query.startsWith('"Denise Hilary" site:apps.apple.com '), true);
-  for (const site of ["openreview.net", "semanticscholar.org", "openalex.org"]) {
+  for (const site of ["openreview.net", "semanticscholar.org", "crossref.org"]) {
     const query = plan.queries.find((item) => item.site === site);
     assert.equal(query?.kind, "professional_site", site);
     assert.equal(query?.derivedFrom, "compiler_professional_allowlist", site);
     assert.equal(query?.query.startsWith(`"Denise Hilary" site:${site} `), true, site);
   }
+  const publicAcademic = plan.queries.find((query) => query.kind === "public_academic_site");
+  assert.equal(publicAcademic?.site, null);
+  assert.equal(publicAcademic?.derivedFrom, "compiler_public_academic_allowlist");
+  for (const site of ["openalex.org", "researchgate.net"])
+    assert.ok(publicAcademic?.query.includes(`site:${site}`), site);
+  const publicSocial = plan.queries.find((query) => query.kind === "public_social_site");
+  assert.equal(publicSocial?.site, null);
+  assert.equal(publicSocial?.derivedFrom, "compiler_public_social_allowlist");
+  for (const site of ["instagram.com", "x.com", "facebook.com"])
+    assert.ok(publicSocial?.query.includes(`site:${site}`), site);
   assert.ok(
     plan.queries.some(
       (query) =>
@@ -99,7 +111,7 @@ test("compiler emits a finite, ordered exact-name plan with public-professional 
     "scholar.google.com",
     "openreview.net",
     "semanticscholar.org",
-    "openalex.org",
+    "crossref.org",
     "apps.apple.com",
     "asu.edu",
     "ox.ac.uk",
@@ -140,10 +152,7 @@ test("deep compiler can retain sixteen bounded variants without dropping allowli
 
   assert.equal(search.MAX_OSINT_QUERY_VARIANTS, 16);
   assert.equal(plan.queries.length, 16);
-  assert.equal(
-    plan.diagnostics.some((item) => item.code === "query_limit_applied"),
-    false,
-  );
+  assert.ok(plan.diagnostics.some((item) => item.code === "query_limit_applied" && item.count === 2));
   assert.deepEqual(
     plan.queries.filter((query) => query.site).map((query) => query.site),
     [
@@ -153,12 +162,24 @@ test("deep compiler can retain sixteen bounded variants without dropping allowli
       "scholar.google.com",
       "openreview.net",
       "semanticscholar.org",
-      "openalex.org",
+      "crossref.org",
       "apps.apple.com",
       "asu.edu",
       "ox.ac.uk",
     ],
   );
+  assert.equal(
+    plan.queries.some((query) => query.kind === "orthographic_name"),
+    false,
+  );
+  assert.equal(
+    plan.queries.some((query) => query.kind === "initial_name"),
+    false,
+  );
+  assert.ok(plan.queries.some((query) => query.kind === "public_social_site"));
+  assert.ok(plan.queries.some((query) => query.kind === "public_academic_site"));
+  assert.ok(plan.queries.some((query) => query.kind === "public_document"));
+  assert.ok(plan.queries.some((query) => query.kind === "exact_refinement"));
 });
 
 test("name transformations are mechanical and retain their derivation", () => {
@@ -187,6 +208,19 @@ test("parsed organization and role context produce quoted, deterministic profess
       (query) => query.kind === "exact_context" && query.query.startsWith('"Alex Kim" "Example Labs"'),
     ),
   );
+  for (const site of ["linkedin.com", "scholar.google.com", "crossref.org"]) {
+    assert.ok(
+      named.queries.some(
+        (query) => query.site === site && query.query.startsWith(`"Alex Kim" "Example Labs" site:${site}`),
+      ),
+      site,
+    );
+  }
+  assert.ok(
+    named.queries.some(
+      (query) => query.kind === "public_document" && query.query.startsWith('"Alex Kim" "Example Labs" filetype:pdf'),
+    ),
+  );
 
   const role = search.compileOsintQueries(domain.parseTarget("the CTO of Ariglad"));
   assert.equal(role.status, "compiled");
@@ -199,6 +233,29 @@ test("parsed organization and role context produce quoted, deterministic profess
   assert.ok(
     role.queries.some((query) => query.kind === "public_document" && query.query.includes("intitle:leadership")),
   );
+});
+
+test("natural adult-school context remains quoted across scoped and institutional document queries", () => {
+  const target = domain.parseTarget("Chinmay Bhat studies at Arizona State University");
+  const plan = search.compileOsintQueries(target);
+  assert.equal(plan.status, "compiled");
+  const contextual = plan.queries.filter(
+    (query) =>
+      query.site !== null ||
+      query.kind === "public_academic_site" ||
+      query.kind === "public_social_site" ||
+      query.kind === "public_document",
+  );
+  assert.ok(contextual.length >= 11);
+  assert.ok(
+    contextual.every((query) => query.query.includes('"Chinmay Bhat" "Arizona State University"')),
+    JSON.stringify(contextual),
+  );
+  assert.ok(contextual.some((query) => query.site === "linkedin.com"));
+  assert.ok(contextual.some((query) => query.site === "scholar.google.com"));
+  assert.ok(contextual.some((query) => query.kind === "public_academic_site"));
+  assert.ok(contextual.some((query) => query.kind === "public_social_site"));
+  assert.ok(contextual.some((query) => query.kind === "public_document"));
 });
 
 test("context compiler supports mononyms and retains bounded organization, role, and location discriminators", () => {
@@ -328,7 +385,7 @@ test("query limit is clamped and reports omitted variants without changing stabl
     plan.queries.map((query) => query.id),
     ["osint_query_01", "osint_query_02", "osint_query_03"],
   );
-  assert.ok(plan.diagnostics.some((item) => item.code === "query_limit_applied" && item.count === 11));
+  assert.ok(plan.diagnostics.some((item) => item.code === "query_limit_applied" && item.count === 13));
 
   const clamped = search.compileOsintQueries(domain.parseTarget("Denise Hilary"), {
     maxQueries: 100_000,

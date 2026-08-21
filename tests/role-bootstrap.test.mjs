@@ -257,6 +257,7 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
     clock: domain.createSequenceClock("2026-08-18T22:30:00.000Z", 2),
     ids: domain.createDeterministicIdFactory("plain-name-engine"),
   });
+  let extractionRequests = 0;
   const dependencies = createLiveDependencies(input, {
     apiKey: "test-key",
     model: "test/model",
@@ -283,6 +284,7 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
           });
         }
         if (body.tools?.some((tool) => tool.function?.name === "submit_evidence_extraction")) {
+          extractionRequests += 1;
           return providerResponse({
             id: "generation-plain-extraction",
             toolCalls: [
@@ -348,6 +350,7 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
   );
 
   assert.equal(direct.status, "partial");
+  assert.equal(extractionRequests, 0, "the exact fetched sentence must not require model extraction");
   assert.equal(
     direct.diagnostics.some((item) => item.code === "candidate_binding_strong_binding_missing"),
     true,
@@ -367,6 +370,9 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
   assert.equal(quarantinedDraft.candidateId, undefined);
   assert.equal(quarantinedDraft.attributes.quarantinedFromCandidateId, primary.id);
   assert.equal(quarantinedDraft.excerpt, "Chris Anderson works at Acme Labs.");
+  assert.equal(quarantinedDraft.attributes.extractedOrganization, "acme labs");
+  assert.equal(quarantinedDraft.reliability, 0.55);
+  assert.equal(quarantinedDraft.spoofable, true);
   assert.equal(
     engine
       .snapshot()

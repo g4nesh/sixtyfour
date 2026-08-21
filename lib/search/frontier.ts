@@ -1,5 +1,11 @@
 import { urlContainsRestrictedParameters } from "../domain/content-policy";
-import { cloneJson, isJsonValue, normalizeComparable, normalizeWhitespace } from "../domain/runtime";
+import {
+  cloneJson,
+  isJsonValue,
+  normalizeComparable,
+  normalizeWhitespace,
+  projectSearchGraphNodeLabel,
+} from "../domain/runtime";
 import type { IdFactory } from "../domain/runtime";
 import { parseTarget } from "../domain/target";
 import {
@@ -240,7 +246,7 @@ export function admitGraphNode(
     schemaVersion: SEARCH_GRAPH_SCHEMA_VERSION,
     id: ids.next("graph_node"),
     kind: admission.kind,
-    label: normalizeWhitespace(admission.label).slice(0, 320),
+    label: projectSearchGraphNodeLabel(admission.label),
     status: admission.status,
     sourceTier: admission.sourceTier ?? null,
     sourceLaneId: admission.sourceLaneId ?? null,
@@ -880,10 +886,16 @@ function isGroundedKeybaseDependency(graph: SearchGraph, entry: SearchFrontierEn
   );
 }
 
+export interface FrontierSelectionOptions {
+  /** Defer only optional candidate-link fetches until finite compiler searches have run once. */
+  reserveCanonicalCompilerBreadth?: boolean;
+}
+
 export function selectFrontierBatch(
   graphValue: SearchGraph,
   limit: number,
   timestamp: string,
+  options: FrontierSelectionOptions = {},
 ): SearchKernelResult<SearchFrontierEntry[]> {
   if (!Number.isInteger(limit) || limit < 0) throw new TypeError("frontier batch limit must be a non-negative integer");
   const graph = cloneJson(graphValue);
@@ -927,6 +939,14 @@ export function selectFrontierBatch(
           (entry) => entry.sourceTier > minimumEligibleTier && isClassifiedLeadDependency(graph, entry),
         )
       : [];
+  const pendingCanonicalSearches = initiallyExecutable.filter(isCanonicalCompilerSearchEntry);
+  const nextCanonicalTier =
+    pendingCanonicalSearches.length > 0
+      ? pendingCanonicalSearches.reduce<SourceTier>(
+          (value, entry) => Math.min(value, entry.sourceTier) as SourceTier,
+          pendingCanonicalSearches[0].sourceTier,
+        )
+      : null;
   const dependencyTier =
     pendingHigherTierFetches.length > 0
       ? pendingHigherTierFetches.reduce<SourceTier>(
@@ -935,18 +955,25 @@ export function selectFrontierBatch(
         )
       : null;
   // Candidate creation means a provider-attested lead may already be waiting
-  // for a hardened fetch. Consume the lane-compatible fetch pivot before
-  // spending calls on additional compiler breadth. If the current tier has
-  // only compiler queries, the source node's deterministic classification may
-  // open its one matching higher-tier fetch dependency. The monotonic breadth
-  // cursor deliberately stays put so every compiler query remains scheduled
-  // if that hardened fetch fails or does not complete the investigation.
-  const eligible =
+  // for a hardened fetch. Normal traversal consumes that lane-compatible pivot
+  // before additional compiler breadth. Deep traversal may explicitly reserve
+  // finite canonical breadth; in that mode only this optional lead fanout is
+  // deferred. T0, exact-URL, grounded specialist, mutation, and ordinary tier
+  // eligibility remain unchanged. The monotonic breadth cursor deliberately
+  // stays put when a higher-tier fetch dependency runs.
+  const normallyEligible =
     minimumTierFetches.length > 0
       ? minimumTierFetches
       : dependencyTier !== null
         ? pendingHigherTierFetches.filter((entry) => entry.sourceTier === dependencyTier)
         : minimumTierEntries;
+  const reserveCanonicalBreadth =
+    options.reserveCanonicalCompilerBreadth === true &&
+    nextCanonicalTier !== null &&
+    normallyEligible.some(isCandidateLeadFetchEntry);
+  const eligible = reserveCanonicalBreadth
+    ? pendingCanonicalSearches.filter((entry) => entry.sourceTier === nextCanonicalTier)
+    : normallyEligible;
   const selected: SearchFrontierEntry[] = [];
   let selectedMutations = 0;
   const selectedIds = new Set<string>();

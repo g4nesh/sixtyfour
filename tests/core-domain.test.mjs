@@ -161,6 +161,58 @@ test("target parsing retains bounded public-professional context for mononyms, r
     ]);
   }
 
+  for (const [query, organization, relationship] of [
+    ["Chinmay Bhat studies at Arizona State University", "Arizona State University", "current"],
+    ["Chinmay Bhat attends ASU", "ASU", "current"],
+    ["Chinmay Bhat student at ASU", "ASU", "current"],
+    ["Chinmay Bhat school Arizona State University", "Arizona State University", "current"],
+    ["Chinmay Bhat went to Arizona State University", "Arizona State University", "former"],
+    ["Chinmay Bhat, school: Arizona State University", "Arizona State University", "current"],
+  ]) {
+    const target = domain.parseTarget(query);
+    assert.equal(target.kind, "named_person", query);
+    assert.equal(target.name, "Chinmay Bhat", query);
+    assert.deepEqual(
+      target.organizationHints,
+      [
+        {
+          name: organization,
+          normalizedName: organization.toLocaleLowerCase("en-US"),
+          relationship,
+        },
+      ],
+      query,
+    );
+    assert.notEqual(domain.classifySafety(query).level, "block", query);
+  }
+
+  for (const query of [
+    "Alex Kim attends Central High School",
+    "Alex Kim student at Central High School",
+    "Alex Kim, school: Central Middle School",
+  ]) {
+    const target = domain.parseTarget(query);
+    assert.deepEqual(target.organizationHints, [], query);
+    const safety = domain.classifySafety(query);
+    assert.equal(safety.level, "block", query);
+    assert.ok(
+      safety.reasons.some((reason) => reason.code === "minor_or_vulnerable_person"),
+      query,
+    );
+  }
+
+  for (const query of [
+    "Alex Kim student at Lincoln",
+    "Alex Kim student at Lincoln Academy",
+    "Alex Kim student at HS",
+    "Alex Kim student at asu",
+  ]) {
+    const ambiguousSchool = domain.parseTarget(query);
+    assert.equal(ambiguousSchool.kind, "unknown", query);
+    assert.equal(ambiguousSchool.name, undefined, query);
+    assert.deepEqual(ambiguousSchool.organizationHints, [], query);
+  }
+
   for (const query of ["Ada Lovelace based in 123 Main Street", "Ada Lovelace based in 6025550199"]) {
     const target = domain.parseTarget(query);
     assert.equal(target.name, "Ada Lovelace", query);
@@ -313,6 +365,28 @@ test("evidence admission preserves complete audit metadata and deduplicates sour
     domain.assessConfidence([first.evidence, copiedRecord]).score,
     domain.assessConfidence([first.evidence]).score,
   );
+});
+
+test("evidence admission rejects exact durable URLs that the final report content policy restricts", () => {
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("restricted-crossref-url");
+  const candidateId = "candidate_crossref";
+  const restrictedUrl = "https://api.crossref.org/works/10.5555%2F602-555-0199";
+  assert.equal(domain.containsRestrictedPublicContent(restrictedUrl), true);
+
+  const admission = domain.admitEvidence(
+    {
+      candidateId,
+      claim: "Crossref surfaced a possible authored-work record; it is a discovery lead only.",
+      sourceUrl: restrictedUrl,
+      sourceType: "search_result",
+      canonicalSubset: { officialApiObservedUrl: true },
+      verificationMethod: "search_discovery",
+    },
+    { candidateIds: new Set([candidateId]), existing: [], ids, clock },
+  );
+
+  assert.deepEqual(admission, { admitted: false, reason: "sensitive_content" });
 });
 
 test("search snippets cannot support findings and spoofable-only evidence is confidence capped", () => {

@@ -1,5 +1,5 @@
 import type { Clock, IdFactory } from "./runtime";
-import { labelOccursAsTokenPhrase, normalizeWhitespace } from "./runtime";
+import { labelOccursAsTokenPhrase, normalizeWhitespace, projectSearchGraphNodeLabel } from "./runtime";
 import {
   SCHEMA_VERSION,
   type Candidate,
@@ -482,7 +482,7 @@ export function validateReferentialIntegrity(
         const node = nodes[0];
         const allowedData = new Set(["entityKey"]);
         if (
-          node.label !== candidate.displayName ||
+          node.label !== projectSearchGraphNodeLabel(candidate.displayName) ||
           node.data.entityKey !== `candidate:${candidate.id}` ||
           Object.keys(node.data).some((key) => !allowedData.has(key))
         ) {
@@ -518,7 +518,7 @@ export function validateReferentialIntegrity(
           "verificationMethod",
         ]);
         if (
-          node.label !== evidence.claim ||
+          node.label !== projectSearchGraphNodeLabel(evidence.claim) ||
           node.candidateId !== evidence.candidateId ||
           node.actionId !== evidence.toolCallId ||
           node.data.sourceUrl !== evidence.sourceUrl ||
@@ -563,7 +563,7 @@ export function validateReferentialIntegrity(
             "sourceUrl",
           ]);
           if (
-            sourceNode.label !== (evidence.title ?? evidence.sourceFamily) ||
+            sourceNode.label !== projectSearchGraphNodeLabel(evidence.title ?? evidence.sourceFamily) ||
             sourceNode.candidateId !== evidence.candidateId ||
             sourceNode.actionId !== evidence.toolCallId ||
             sourceNode.frontierEntryId !== node.frontierEntryId ||
@@ -625,7 +625,7 @@ export function validateReferentialIntegrity(
         const node = nodes[0];
         const allowedData = new Set(["category", "confidence", "entityKey"]);
         if (
-          node.label !== finding.title ||
+          node.label !== projectSearchGraphNodeLabel(finding.title) ||
           node.candidateId !== finding.candidateId ||
           node.data.category !== finding.category ||
           node.data.confidence !== finding.confidence.score ||

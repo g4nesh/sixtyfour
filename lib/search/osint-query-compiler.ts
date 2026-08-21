@@ -14,7 +14,7 @@ const COMPILER_SITE_SCOPES = [
   { site: "scholar.google.com", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
   { site: "openreview.net", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
   { site: "semanticscholar.org", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
-  { site: "openalex.org", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
+  { site: "crossref.org", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
   { site: "apps.apple.com", kind: "public_metadata_site", derivedFrom: "compiler_public_metadata_allowlist" },
 ] as const satisfies ReadonlyArray<{
   site: string;
@@ -24,6 +24,9 @@ const COMPILER_SITE_SCOPES = [
     "compiler_professional_allowlist" | "compiler_public_metadata_allowlist"
   >;
 }>;
+
+const PUBLIC_SOCIAL_SITE_EXPRESSION = "(site:instagram.com OR site:x.com OR site:facebook.com)" as const;
+const PUBLIC_ACADEMIC_SITE_EXPRESSION = "(site:openalex.org OR site:researchgate.net)" as const;
 
 /**
  * These are exclusions, never discovery targets. They keep broad queries away
@@ -38,6 +41,8 @@ export type OsintQueryVariantKind =
   | "orthographic_name"
   | "initial_name"
   | "professional_site"
+  | "public_academic_site"
+  | "public_social_site"
   | "public_metadata_site"
   | "institution_site"
   | "public_document";
@@ -60,6 +65,8 @@ export interface CompiledOsintQuery {
     | "target_name_orthography"
     | "target_name_initials"
     | "compiler_professional_allowlist"
+    | "compiler_public_academic_allowlist"
+    | "compiler_public_social_allowlist"
     | "compiler_public_metadata_allowlist"
     | "explicit_institution_domain"
     | "compiler_document_terms";
@@ -280,6 +287,21 @@ function boundedContextBody(
   return { body: retained > 0 ? parts.join(" ") : null, omitted };
 }
 
+function boundedScopedBody(
+  subject: string,
+  phrases: readonly string[],
+  suffix: string,
+): { body: string; omitted: number } {
+  const parts = [subject];
+  let omitted = 0;
+  for (const phrase of phrases) {
+    const candidate = `${[...parts, quotePhrase(phrase)].join(" ")} ${suffix}`;
+    if (withExclusions(candidate).length <= MAX_COMPILED_OSINT_QUERY_CHARACTERS) parts.push(quotePhrase(phrase));
+    else omitted += 1;
+  }
+  return { body: `${parts.join(" ")} ${suffix}`, omitted };
+}
+
 function documentTerms(targetKind: TargetKind): string {
   return targetKind === "organization" || targetKind === "role_query"
     ? "filetype:pdf (intitle:team OR intitle:leadership)"
@@ -405,9 +427,10 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
   }
 
   for (const scope of COMPILER_SITE_SCOPES) {
+    const scoped = boundedScopedBody(subject, context.contextPhrases, `site:${scope.site}`);
     drafts.push({
       kind: scope.kind,
-      body: `${subject} site:${scope.site}`,
+      body: scoped.body,
       subjectPhrase: context.subjectPhrase,
       site: scope.site,
       refinement: "public_web_noise_exclusions",
@@ -415,10 +438,31 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     });
   }
 
+  const academic = boundedScopedBody(subject, context.contextPhrases, PUBLIC_ACADEMIC_SITE_EXPRESSION);
+  drafts.push({
+    kind: "public_academic_site",
+    body: academic.body,
+    subjectPhrase: context.subjectPhrase,
+    site: null,
+    refinement: "public_web_noise_exclusions",
+    derivedFrom: "compiler_public_academic_allowlist",
+  });
+
+  const social = boundedScopedBody(subject, context.contextPhrases, PUBLIC_SOCIAL_SITE_EXPRESSION);
+  drafts.push({
+    kind: "public_social_site",
+    body: social.body,
+    subjectPhrase: context.subjectPhrase,
+    site: null,
+    refinement: "public_web_noise_exclusions",
+    derivedFrom: "compiler_public_social_allowlist",
+  });
+
   for (const site of institutions.accepted) {
+    const scoped = boundedScopedBody(subject, context.contextPhrases, `site:${site}`);
     drafts.push({
       kind: "institution_site",
-      body: `${subject} site:${site}`,
+      body: scoped.body,
       subjectPhrase: context.subjectPhrase,
       site,
       refinement: "public_web_noise_exclusions",
@@ -426,9 +470,10 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     });
   }
 
+  const document = boundedScopedBody(subject, context.contextPhrases, documentTerms(target.kind));
   drafts.push({
     kind: "public_document",
-    body: `${subject} ${documentTerms(target.kind)}`,
+    body: document.body,
     subjectPhrase: context.subjectPhrase,
     site: null,
     refinement: "public_web_noise_exclusions",
@@ -460,7 +505,24 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
       count: renderable.length - limit,
     });
   }
-  const queries = renderable.slice(0, limit).map((draft, index): CompiledOsintQuery => ({
+  let retained = renderable;
+  // At the default breadth cap, remove lower-value name rewrites before any
+  // closed source, explicit institution, contextual, or document query. This
+  // keeps the finite program honest: adding breadth cannot turn a compiled
+  // source into a dead variant merely because it was appended later.
+  if (limit === MAX_OSINT_QUERY_VARIANTS && renderable.length > limit) {
+    const removableKinds: OsintQueryVariantKind[] = ["orthographic_name", "initial_name", "exact_refinement"];
+    const removed = new Set<QueryDraft>();
+    for (const kind of removableKinds) {
+      if (renderable.length - removed.size <= limit) break;
+      const candidate = renderable.find((draft) => draft.kind === kind && !removed.has(draft));
+      if (candidate) removed.add(candidate);
+    }
+    retained = renderable.filter((draft) => !removed.has(draft)).slice(0, limit);
+  } else {
+    retained = renderable.slice(0, limit);
+  }
+  const queries = retained.map((draft, index): CompiledOsintQuery => ({
     id: `osint_query_${String(index + 1).padStart(2, "0")}`,
     kind: draft.kind,
     query: renderedQuery(draft),

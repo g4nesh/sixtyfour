@@ -15,6 +15,7 @@ import {
 } from "../domain/types";
 import { isInvestigationReport, parseInvestigationInput } from "../domain/validation";
 import { streamLiveResearch } from "../live/orchestrator";
+import { localDemoFixtures, resolveLocalDemo } from "./local-demo";
 import { createDohResolver } from "../tools/doh-resolver";
 import { findReplayForQuery, getReplayExample, listReplayExamples } from "../replay/catalog";
 
@@ -24,14 +25,18 @@ export interface ApiEnvironment {
   ATLAS_API_TOKEN?: string;
   /** Local development escape hatch. Never enable on public ingress. */
   ATLAS_ALLOW_UNAUTHENTICATED_LOCAL?: string;
-  /** Force a provider: "gemini" | "openai" | "openrouter" (otherwise auto-detected). */
+  /** Prefer a provider: "openai" | "gemini" | "anthropic"/"claude" | "openrouter". */
   LIVE_PROVIDER?: string;
+  /** Explicitly delegate grounded web discovery to OpenAI while keeping the selected reasoning provider. */
+  LIVE_SEARCH_PROVIDER?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
   OPENAI_SEARCH_MODEL?: string;
   OPENAI_BASE_URL?: string;
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
+  ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_MODEL?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODEL?: string;
   OPENROUTER_SITE_URL?: string;
@@ -82,7 +87,7 @@ async function liveRequestAuthorized(request: Request, url: URL, environment: Ap
 }
 
 interface ResolvedLiveProvider {
-  provider: "openai" | "openrouter" | "gemini";
+  provider: "openai" | "openrouter" | "gemini" | "anthropic";
   apiKey: string;
   model: string;
   searchModel?: string;
@@ -98,19 +103,39 @@ interface ResolvedLiveProvider {
  * Resolve the live model provider from the environment.
  *
  * Selection: an explicit LIVE_PROVIDER wins; otherwise Gemini is used when its
- * key is present, then OpenAI, then OpenRouter. Health reports only whether a
- * usable server-side configuration exists; it never discloses this selection.
+ * key is present, then OpenAI, Anthropic, and OpenRouter. Health reports only
+ * whether a usable server-side configuration exists; it never discloses this
+ * selection.
  *
- * Gemini uses its native Google Search grounding path. Keeping reasoning and
- * discovery on the same configured provider avoids turning an unrelated
- * OpenAI quota failure into a fatal Gemini run.
+ * Gemini uses its native Google Search grounding path by default. A separate
+ * OpenAI search surface is activated only by LIVE_SEARCH_PROVIDER=openai, so
+ * merely configuring a second key never creates an implicit billing path.
  */
 function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider | null {
   const openaiKey = environment.OPENAI_API_KEY?.trim();
   const geminiKey = environment.GEMINI_API_KEY?.trim();
+  const anthropicKey = environment.ANTHROPIC_API_KEY?.trim();
   const openrouterKey = environment.OPENROUTER_API_KEY?.trim();
   const forced = environment.LIVE_PROVIDER?.trim().toLowerCase();
   const openaiSearchModel = environment.OPENAI_SEARCH_MODEL?.trim() || "gpt-4o-mini";
+  const forcedSearchProvider = environment.LIVE_SEARCH_PROVIDER?.trim().toLowerCase();
+
+  const withSearchProvider = (config: ResolvedLiveProvider | null): ResolvedLiveProvider | null => {
+    if (!config || !forcedSearchProvider) return config;
+    // Cross-provider search is deliberately opt-in: it can consume a second
+    // provider's budget and must never happen merely because another key is
+    // present. An invalid or unconfigured explicit choice fails closed.
+    if (forcedSearchProvider !== "openai" || !openaiKey) return null;
+    if (config.provider === "openai") return config;
+    const base = environment.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1";
+    return {
+      ...config,
+      searchModel: openaiSearchModel,
+      searchProvider: "openai",
+      searchApiKey: openaiKey,
+      searchEndpoint: `${base.replace(/\/+$/, "")}/chat/completions`,
+    };
+  };
 
   const openaiConfig = (): ResolvedLiveProvider | null => {
     if (!openaiKey) return null;
@@ -134,6 +159,16 @@ function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider 
     };
   };
 
+  const anthropicConfig = (): ResolvedLiveProvider | null => {
+    if (!anthropicKey) return null;
+    return {
+      provider: "anthropic",
+      apiKey: anthropicKey,
+      model: environment.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514",
+      endpoint: "https://api.anthropic.com/v1/messages",
+    };
+  };
+
   const openrouterConfig = (): ResolvedLiveProvider | null => {
     if (!openrouterKey) return null;
     return {
@@ -145,10 +180,16 @@ function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider 
     };
   };
 
-  if (forced === "gemini") return geminiConfig() ?? openaiConfig() ?? openrouterConfig();
-  if (forced === "openai") return openaiConfig() ?? geminiConfig() ?? openrouterConfig();
-  if (forced === "openrouter") return openrouterConfig() ?? openaiConfig() ?? geminiConfig();
-  return geminiConfig() ?? openaiConfig() ?? openrouterConfig();
+  const fallbacks = () => geminiConfig() ?? openaiConfig() ?? anthropicConfig() ?? openrouterConfig();
+  if (forced === "gemini")
+    return withSearchProvider(geminiConfig() ?? openaiConfig() ?? anthropicConfig() ?? openrouterConfig());
+  if (forced === "openai")
+    return withSearchProvider(openaiConfig() ?? geminiConfig() ?? anthropicConfig() ?? openrouterConfig());
+  if (forced === "anthropic" || forced === "claude")
+    return withSearchProvider(anthropicConfig() ?? openaiConfig() ?? geminiConfig() ?? openrouterConfig());
+  if (forced === "openrouter")
+    return withSearchProvider(openrouterConfig() ?? openaiConfig() ?? geminiConfig() ?? anthropicConfig());
+  return withSearchProvider(fallbacks());
 }
 
 const FINDING_CATEGORIES: readonly FindingCategory[] = [
@@ -450,6 +491,7 @@ export function traceNdjsonResponse(
   source: (signal: AbortSignal) => AsyncIterable<TraceEvent>,
   requestSignal: AbortSignal,
   input: InvestigationInput,
+  executionMode: "live" | "replay" | "local_demo" = "live",
 ): Response {
   const localAbort = new AbortController();
   const combined = AbortSignal.any([requestSignal, localAbort.signal]);
@@ -535,6 +577,7 @@ export function traceNdjsonResponse(
       "cache-control": "no-store",
       "x-accel-buffering": "no",
       "x-content-type-options": "nosniff",
+      "x-atlas-execution-mode": executionMode,
     },
   });
 }
@@ -601,11 +644,20 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
       "blocked",
       "The request is outside Atlas's public-professional safety scope.",
     );
-    return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
+    return traceNdjsonResponse(() => replayEvents(events), request.signal, input, body.mode);
   }
   if (request.signal.aborted) {
     const events = immediateTerminalTrace(input, "canceled", "The caller canceled the investigation before it began.");
-    return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
+    return traceNdjsonResponse(() => replayEvents(events), request.signal, input, body.mode);
+  }
+
+  // Local-only demo fixtures let the app show a captured run when live
+  // providers are unavailable. They may intercept only through the explicit
+  // loopback development bypass; bearer-protected/public ingress always falls
+  // through to the requested replay/live path.
+  const localDemo = localBypassEnabled(url, environment) ? resolveLocalDemo(localDemoFixtures(), input) : null;
+  if (localDemo) {
+    return traceNdjsonResponse((signal) => localDemo.source(signal), request.signal, localDemo.input, "local_demo");
   }
 
   if (body.mode === "replay") {
@@ -624,7 +676,7 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
         422,
       );
     }
-    return traceNdjsonResponse(() => replayEvents(example.trace), request.signal, example.input);
+    return traceNdjsonResponse(() => replayEvents(example.trace), request.signal, example.input, "replay");
   }
 
   const liveEnabled = environment.ATLAS_LIVE_ENABLED?.trim() === "true";
@@ -635,7 +687,7 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
       "configuration_error",
       "Live HTTP research requires explicit enablement, a server-side model key, and protected ingress.",
     );
-    return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
+    return traceNdjsonResponse(() => replayEvents(events), request.signal, input, "live");
   }
   if (!(await liveRequestAuthorized(request, url, environment))) {
     return jsonResponse({ error: "unauthorized", message: "Valid live research authorization is required." }, 401, {
@@ -662,5 +714,6 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
       }),
     request.signal,
     input,
+    "live",
   );
 }

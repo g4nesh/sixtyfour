@@ -116,6 +116,10 @@ export async function denseReplayFixture() {
     throw new Error("The dense browser fixture must end in one result.terminal report.");
   }
   const graph = report.searchGraph;
+  const searchFrontier = graph.frontier.find(
+    (entry) => entry.allowedTools.includes("search_web") && /(?:^|\s)site:/i.test(entry.queryHint),
+  );
+  if (!searchFrontier) throw new Error("The dense browser fixture needs one site-scoped search frontier.");
   const snapshotCounts = [5, 11].filter((count) => count < graph.nodes.length);
   const snapshots = snapshotCounts.map((count, index) => ({
     schemaVersion: 2,
@@ -124,14 +128,62 @@ export async function denseReplayFixture() {
     runId: graph.runId,
     timestamp: graph.createdAt,
     elapsedMs: (index + 1) * 25,
-    kind: "event",
-    name: "graph.snapshot",
+    kind: index === 0 ? "span_start" : "span_end",
+    name: "tool.search_web",
     phase: "discover",
-    spanId: null,
+    spanId: "browser_fixture_search_span",
     parentSpanId: null,
     attempt: 1,
-    status: "recorded",
-    payload: { searchGraph: prefixGraph(graph, count) },
+    status: index === 0 ? "running" : "not_found",
+    payload: {
+      searchGraph: prefixGraph(graph, count),
+      actionId: searchFrontier.actionId,
+      frontierEntryId: searchFrontier.id,
+      sourceTier: searchFrontier.sourceTier,
+      sourceLaneId: searchFrontier.sourceLaneId,
+      ...(index === 0
+        ? { arguments: { query: searchFrontier.queryHint } }
+        : {
+            diagnostics: [
+              {
+                code: "search_provider_quota_exhausted",
+                severity: "warning",
+                message: "The configured web-search provider exhausted its retryable quota.",
+                retryable: true,
+              },
+              {
+                code: "google_results_not_observed",
+                severity: "info",
+                message: "The bounded Google public search returned no safe HTTPS result leads.",
+                retryable: false,
+              },
+              {
+                code: "duckduckgo_results_not_observed",
+                severity: "info",
+                message: "The bounded keyless public search returned no safe HTTPS result leads.",
+                retryable: false,
+              },
+              {
+                code: "github_exact_name_not_observed",
+                severity: "info",
+                message: "No exact public-name match was observed in bounded GitHub user records.",
+                retryable: false,
+              },
+              {
+                code: "semantic_scholar_exact_name_not_observed",
+                severity: "info",
+                message: "No exact public-name match was observed in bounded Semantic Scholar author records.",
+                retryable: false,
+              },
+              {
+                code: "crossref_exact_author_not_observed",
+                severity: "info",
+                message: "No exact author match was observed in bounded Crossref works records.",
+                retryable: false,
+              },
+            ],
+          }),
+    },
     usage: null,
   }));
   terminal.seq = snapshots.length + 1;

@@ -10,7 +10,11 @@ import {
 } from "../domain/content-policy";
 import type { Clock, IdFactory } from "../domain/runtime";
 import { cloneJson, isJsonValue, normalizeComparable } from "../domain/runtime";
-import { identitySignalGroundedByEvidence } from "../domain/candidates";
+import {
+  QUERY_SUBJECT_ANCHOR_ATTRIBUTE,
+  identitySignalGroundedByEvidence,
+  resolveQuerySubjectAnchor,
+} from "../domain/candidates";
 import { assessConfidence } from "../domain/confidence";
 import { evidenceSupportsFindingCategory } from "../domain/integrity";
 import { requestedCategoriesForInput, resolveIdentity } from "../domain/report";
@@ -407,6 +411,41 @@ function actionTraceStatus(status: ActionStatus): TraceSpanStatus {
   return "failed";
 }
 
+const TRACE_SEARCH_PROVIDER_LABELS = new Set([
+  "openai:web_search",
+  "openrouter:web_search",
+  "gemini:compatibility",
+  "gemini:google_search",
+  "anthropic:web_search",
+  "google:html_search",
+  "duckduckgo:html_search",
+  "github:public_user_search",
+  "semanticscholar:academic_graph_api",
+  "crossref:rest_api",
+]);
+
+/**
+ * Search result telemetry is a deliberately tiny scalar projection. Tool
+ * result data may contain untrusted URLs, titles, snippets, or vendor payloads;
+ * none of those belong in the append-only trace.
+ */
+function searchTraceResultData(tool: string, data: JsonValue | null | undefined): JsonObject | undefined {
+  if (tool !== "search_web" || !data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const input = data as JsonObject;
+  const projection: JsonObject = {};
+  for (const key of ["citationCount", "observedCitationCount"] as const) {
+    const value = input[key];
+    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 10_000) {
+      projection[key] = value;
+    }
+  }
+  const provider = input.provider;
+  if (typeof provider === "string" && TRACE_SEARCH_PROVIDER_LABELS.has(provider)) {
+    projection.provider = provider;
+  }
+  return Object.keys(projection).length > 0 ? projection : undefined;
+}
+
 function safeError(error: unknown): JsonObject {
   if (error instanceof Error) {
     return {
@@ -548,6 +587,43 @@ function reusableIsolatedCandidate(
   });
 
   return eligible.length === 1 ? eligible[0] : null;
+}
+
+function isQuerySubjectAnchorProposal(
+  draft: CandidateDraft,
+  result: ResearchActionResult,
+  target: InvestigationState["target"],
+): boolean {
+  if (target.kind !== "named_person" || !target.normalizedName || draft.ref !== "search-subject") return false;
+  const signals = draft.signals ?? [];
+  if (
+    signals.length === 0 ||
+    signals.some(
+      (signal) => signal.strength !== "weak" || signal.assurance !== "self_asserted" || signal.sourceEvidenceId,
+    )
+  )
+    return false;
+  const targetNameSignal = signals.some(
+    (signal) =>
+      signal.kind === "name" &&
+      signal.normalizedValue === target.normalizedName &&
+      signal.strength === "weak" &&
+      signal.assurance === "self_asserted" &&
+      !signal.sourceEvidenceId,
+  );
+  if (!targetNameSignal) return false;
+  return Boolean(
+    result.evidence?.some(
+      (evidence) =>
+        evidence.candidateRef === draft.ref &&
+        evidence.sourceType === "search_result" &&
+        (evidence.disposition ?? "discovery_only") === "discovery_only" &&
+        evidence.verificationMethod === "search_discovery" &&
+        evidence.attributes?.[QUERY_SUBJECT_ANCHOR_ATTRIBUTE] === true &&
+        typeof evidence.attributes.querySubjectName === "string" &&
+        normalizeComparable(evidence.attributes.querySubjectName) === target.normalizedName,
+    ) ?? false,
+  );
 }
 
 interface InternalModelAccounting extends ModelAttemptAccounting {
@@ -1076,6 +1152,41 @@ async function executeActions(
               ? "invalid_quarantined_candidate_branch"
               : "candidate_bound_action_cannot_create_candidates",
             expectedCandidateId: action.candidateId,
+          },
+        });
+        continue;
+      }
+      const querySubjectAnchorProposal =
+        !proposal.isolated &&
+        !action.candidateId &&
+        action.tool === "search_web" &&
+        isCanonicalCompilerSearchEntry(entry) &&
+        isQuerySubjectAnchorProposal(draft, result, state.target);
+      const querySubjectAnchor = querySubjectAnchorProposal
+        ? resolveQuerySubjectAnchor(engine.snapshot(), state.target)
+        : null;
+      if (querySubjectAnchor?.kind === "ambiguous") {
+        engine.trace.record("candidate.rejected", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            reason: "query_subject_anchor_ambiguous",
+            candidateRef: draft.ref ?? null,
+            matchingCandidateCount: querySubjectAnchor.candidates.length,
+          },
+        });
+        continue;
+      }
+      if (querySubjectAnchor?.kind === "unique" && draft.ref) {
+        localCandidateIds.set(draft.ref, querySubjectAnchor.candidate.id);
+        engine.trace.record("candidate.reused", {
+          phase: engine.phase,
+          parentSpanId: spanId,
+          payload: {
+            candidateId: querySubjectAnchor.candidate.id,
+            candidateRef: draft.ref,
+            supportingEvidenceId: querySubjectAnchor.evidence.id,
+            reason: "same_run_query_subject_anchor",
           },
         });
         continue;
@@ -1772,6 +1883,7 @@ async function executeActions(
     const reportedRequests = result.meta?.requests;
     const chargedRequests = reportedRequests ?? (action.budgetClass === "compute" ? 0 : 1);
     engine.recordToolCall(chargedRequests, action.budgetClass === "search");
+    const traceResultData = searchTraceResultData(action.tool, result.data);
     engine.trace.endSpan(spanId, {
       status: actionTraceStatus(result.status),
       payload: {
@@ -1781,6 +1893,7 @@ async function executeActions(
         incomplete: result.meta?.incomplete ?? false,
         evidenceProposed: result.evidence?.length ?? 0,
         candidateProposed: (result.candidates?.length ?? 0) + (result.candidateBranches?.length ?? 0),
+        ...(traceResultData ? { data: traceResultData } : {}),
         diagnostics: (result.diagnostics ?? []).map((diagnostic) => ({
           code: diagnostic.code,
           severity: diagnostic.severity,
@@ -2315,7 +2428,14 @@ export async function* runResearch(
         const state = engine.snapshot();
         const remainingCalls = Math.max(0, state.budget.limits.maxToolCalls - state.budget.usage.toolCalls);
         const limit = Math.min(state.budget.limits.maxActionsPerTurn, remainingCalls, MAX_OUTBOUND_CONCURRENCY);
-        const selection = selectFrontierBatch(graph, limit, engine.clock.now());
+        const selection = selectFrontierBatch(graph, limit, engine.clock.now(), {
+          // Deep investigations reserve finite compiler breadth. Once a
+          // provider search exposes many candidate links, hold those optional
+          // fetch pivots until every still-legal canonical query has reached
+          // the search adapter once. Exact T0 and exact-URL dependencies keep
+          // their normal tier/dependency precedence in the kernel.
+          reserveCanonicalCompilerBreadth: state.input.requestedDepth === "deep",
+        });
         graph = selection.graph;
         selectedEntries = selection.value;
         recordSearchEvents(engine, selection.events);

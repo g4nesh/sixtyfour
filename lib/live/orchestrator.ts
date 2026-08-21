@@ -15,6 +15,7 @@ import {
 import { sanitizeTraceValue, type TraceEvent } from "../agent/trace";
 import { containsRestrictedPublicContent, urlContainsRestrictedParameters } from "../domain/content-policy";
 import { BUDGET_PRESETS } from "../domain/budget";
+import { QUERY_SUBJECT_ANCHOR_ATTRIBUTE, resolveQuerySubjectAnchor } from "../domain/candidates";
 import { inferSourceFamily } from "../domain/evidence";
 import {
   cloneJson,
@@ -55,11 +56,14 @@ import {
   type OpenRouterMessage,
 } from "../providers/openrouter";
 import type { FetchLike, HostnameResolver, ToolContext, ToolResult } from "../tools/contracts";
+import { searchCrossrefWorksByExactAuthor } from "../tools/crossref-search";
 import { investigateGithubEmailCodegraph } from "../tools/github-codegraph";
 import { searchDuckDuckGoHtml } from "../tools/duckduckgo-search";
+import { searchGoogleHtml } from "../tools/google-search";
 import { searchGithubPublicUsersByExactName } from "../tools/github-user-search";
 import { fetchPublicSource, type PublicSourceData } from "../tools/public-source";
 import { lookupKeybaseGithub } from "../tools/keybase";
+import { searchSemanticScholarAuthorsByExactName } from "../tools/semantic-scholar-search";
 import { inspectWaybackHistory } from "../tools/wayback";
 import {
   classifiedFetchLaneId,
@@ -79,13 +83,33 @@ export const LIVE_TOOL_NAMES = [
   "wayback_profile_history",
 ] as const;
 
+const MAX_SAME_ORIGIN_PROFESSIONAL_LEADS_PER_RUN = 6;
+const MAX_DISCOVERY_CITATIONS_PER_ACTION = 10;
+const MAX_POSITIVE_SITE_SCOPES_PER_QUERY = 8;
+const QUERY_BOUND_WEB_DISCOVERY_PROVIDERS = new Set([
+  "openai:web_search",
+  "gemini:google_search",
+  "gemini:compatibility",
+  "anthropic:web_search",
+  "openrouter:web_search",
+  "duckduckgo:html_search",
+  "google:html_search",
+]);
+
+function discoveryCitationPriority(citation: Citation): number {
+  if (["semanticscholar:academic_graph_api", "crossref:rest_api"].includes(citation.provider)) return 0;
+  if (citation.provider === "github:public_user_search") return 3;
+  if (["duckduckgo:html_search", "google:html_search"].includes(citation.provider)) return 2;
+  return 1;
+}
+
 export interface LiveResearchConfig {
   apiKey: string;
   model: string;
   siteUrl?: string;
   appName?: string;
-  /** "openai" uses the OpenAI API directly with native web search; "gemini" uses Google's OpenAI-compat endpoint. */
-  provider?: "openrouter" | "openai" | "gemini";
+  /** Selects the native OpenAI, Gemini, or Anthropic path, or OpenRouter compatibility. */
+  provider?: "openrouter" | "openai" | "gemini" | "anthropic";
   /** Override the chat-completions endpoint (defaults per provider). */
   endpoint?: string;
   /** Search-preview model used only for the web-discovery turn (OpenAI). */
@@ -163,6 +187,40 @@ function safeHttpsUrl(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function normalizedSiteScopeDomain(value: string): string | null {
+  const normalized = value.toLocaleLowerCase("en-US");
+  if (!normalized || normalized.length > 253 || normalized.startsWith(".") || normalized.endsWith(".")) return null;
+  const labels = normalized.split(".");
+  if (labels.length < 2) return null;
+  if (
+    labels.some((label) => label.length < 1 || label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(label))
+  )
+    return null;
+  return normalized;
+}
+
+/**
+ * Parse only complete, positive site: domain operators emitted by the bounded
+ * query compiler. A quoted literal, negative operator, URL/path, wildcard, or
+ * partial token is deliberately ignored.
+ */
+export function positiveSiteScopesFromCompilerQuery(query: string): string[] {
+  const scopes: string[] = [];
+  for (const match of query.matchAll(/(?:^|[\s(])site:([a-z0-9.-]{1,253})(?=$|[\s)])/giu)) {
+    const scope = normalizedSiteScopeDomain(match[1] ?? "");
+    if (!scope || scopes.includes(scope)) continue;
+    scopes.push(scope);
+    if (scopes.length >= MAX_POSITIVE_SITE_SCOPES_PER_QUERY) break;
+  }
+  return scopes;
+}
+
+function citationMatchesPositiveSiteScope(url: string, scopes: readonly string[]): boolean {
+  if (scopes.length === 0) return true;
+  const hostname = new URL(url).hostname.toLocaleLowerCase("en-US");
+  return scopes.some((scope) => hostname === scope || hostname.endsWith(`.${scope}`));
 }
 
 /** Authorizes only a byte-canonical HTTPS URL explicitly present in user input. */
@@ -550,6 +608,108 @@ function deterministicNamedPersonPageExtraction(
   };
 }
 
+function deterministicQueryBoundNamedPersonPageExtraction(
+  source: PublicSourceData,
+  target: ParsedTarget,
+  subjectNameValue: string,
+  sourceType: EvidenceSourceType,
+): EvidenceExtraction | null {
+  const subjectName = stringValue(subjectNameValue, 120);
+  if (!subjectName || sourceType === "search_result") return null;
+
+  // Only the inert, policy-filtered static HTML projection can supply a
+  // richer deterministic claim. Provider snippets and model prose never enter
+  // this selection. Remove duplicated leading title projections so a body
+  // sentence wins without copying the title and sentence together.
+  let bodyProjection = source.normalizedText;
+  if (source.mimeType === "text/html" && source.title) {
+    while (bodyProjection.startsWith(source.title)) {
+      bodyProjection = bodyProjection.slice(source.title.length).trimStart();
+    }
+  }
+
+  const candidates: Array<{ excerpt: string; kind: "fragment" | "title"; ordinal: number }> = [];
+  const seen = new Set<string>();
+  let fragmentCandidates = 0;
+  const addCandidate = (value: string, kind: "fragment" | "title", ordinal: number): void => {
+    const excerpt = value.trim();
+    if (
+      !excerpt ||
+      excerpt.length > 480 ||
+      (kind === "fragment" && fragmentCandidates >= 32) ||
+      seen.has(excerpt) ||
+      !source.normalizedText.includes(excerpt) ||
+      !labelOccursAsTokenPhrase(excerpt, subjectName) ||
+      containsRestrictedPublicContent(excerpt)
+    )
+      return;
+    seen.add(excerpt);
+    candidates.push({ excerpt, kind, ordinal });
+    if (kind === "fragment") fragmentCandidates += 1;
+  };
+
+  if (source.mimeType === "text/html") {
+    // Boundary punctuation remains in the exact quote. Delimiters merely
+    // partition the already-normalized inert projection; no words are added,
+    // reordered, or paraphrased.
+    let ordinal = 0;
+    for (const fragment of bodyProjection.split(/(?<=[.!?;])\s+|\s+[|•]\s+/u)) {
+      addCandidate(fragment, "fragment", ordinal);
+      ordinal += 1;
+    }
+  }
+  if (source.title) addCandidate(source.title, "title", candidates.length);
+
+  const contextScore = (excerpt: string): number => {
+    const context = matchedTargetContext(target, subjectName, null, excerpt);
+    return Number(Boolean(context.organization)) + Number(Boolean(context.role)) + Number(Boolean(context.location));
+  };
+  const normalizedSubject = normalizeComparable(subjectName);
+  const informative = (excerpt: string): number => (normalizeComparable(excerpt) === normalizedSubject ? 0 : 1);
+  candidates.sort(
+    (left, right) =>
+      contextScore(right.excerpt) - contextScore(left.excerpt) ||
+      informative(right.excerpt) - informative(left.excerpt) ||
+      Number(left.kind === "title") - Number(right.kind === "title") ||
+      left.excerpt.length - right.excerpt.length ||
+      left.ordinal - right.ordinal,
+  );
+  const excerpt = candidates[0]?.excerpt;
+  if (!excerpt) return deterministicNamedPersonPageExtraction(source, subjectName, sourceType, null);
+  const targetOrganization = target.organizationHints.find((hint) =>
+    labelOccursAsTokenPhrase(excerpt, hint.name),
+  )?.name;
+  const subjectPattern = subjectName
+    .split(/\s+/u)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
+  const explicitOrganization = excerpt.match(
+    new RegExp(
+      `${subjectPattern}\\s+(?:currently\\s+)?(?:works|worked|serves|served)\\s+(?:at|for|with)\\s+([^,.!?;]{2,120})(?=[,.!?;]|$)`,
+      "iu",
+    ),
+  )?.[1];
+  const parsedOrganization = stringValue(explicitOrganization, 120);
+  const organization =
+    targetOrganization ??
+    (parsedOrganization &&
+    parsedOrganization.split(/\s+/u).length <= 8 &&
+    /^[\p{L}\p{N}&'’.-]+(?:\s+[\p{L}\p{N}&'’.-]+){0,7}$/u.test(parsedOrganization) &&
+    /[\p{Lu}\p{N}]/u.test(parsedOrganization) &&
+    !containsRestrictedPublicContent(parsedOrganization)
+      ? parsedOrganization
+      : null);
+  return {
+    claim: excerpt,
+    excerpt,
+    publisher: null,
+    sourceType,
+    temporalStatus: "unknown",
+    subjectName,
+    organization,
+  };
+}
+
 /**
  * Retain the bounded passive projection of an already-authorized HTML fetch
  * without granting the page any identity, ownership, or finding authority.
@@ -855,8 +1015,10 @@ function citationsFromCompletion(
   completion: OpenRouterCompletion,
   target: InvestigationState["target"],
   provider: string,
-): Citation[] {
+  positiveSiteScopes: readonly string[],
+): { citations: Citation[]; siteScopeMismatchCount: number } {
   const citations: Citation[] = [];
+  const mismatchedUrls = new Set<string>();
   for (const annotation of completion.message.annotations ?? []) {
     const record = annotation as Record<string, unknown>;
     const nested = isRecord(record.url_citation)
@@ -866,6 +1028,10 @@ function citationsFromCompletion(
         : record;
     const url = safeHttpsUrl(nested.url ?? nested.uri);
     if (!url) continue;
+    if (!citationMatchesPositiveSiteScope(url, positiveSiteScopes)) {
+      mismatchedUrls.add(url);
+      continue;
+    }
     const allowedEmails = new Set(
       target.identifiers
         .filter((identifier) => identifier.kind === "email" && identifier.provenance === "user_input")
@@ -896,18 +1062,22 @@ function citationsFromCompletion(
       unique.set(citation.url, citation);
     }
   }
-  return [...unique.values()].slice(0, 8);
+  return {
+    citations: [...unique.values()].slice(0, 8),
+    siteScopeMismatchCount: mismatchedUrls.size,
+  };
 }
 
 function searchProviderForCompletion(
   completion: OpenRouterCompletion,
-  fallback: "openai:web_search" | "openrouter:web_search" | "gemini:compatibility",
+  fallback: "openai:web_search" | "openrouter:web_search" | "gemini:compatibility" | "anthropic:web_search",
 ): string {
   // Only server-owned, bounded provenance labels may enter evidence metadata.
   // An OpenRouter upstream name (or any other provider-supplied string) remains
   // in `upstreamProvider`; it cannot impersonate a search transport.
   if (completion.provider === "openai:web_search") return "openai:web_search";
   if (completion.provider === "gemini:google_search") return "gemini:google_search";
+  if (completion.provider === "anthropic:web_search") return "anthropic:web_search";
   return fallback;
 }
 
@@ -1459,10 +1629,77 @@ export function createLiveDependencies(
   let providerAttempts = 0;
   let searchProviderCircuitOpen = false;
   let githubPublicUserFallbackAttempted = false;
+  let sameOriginProfessionalLeadsEmitted = 0;
   const globallyReported = new Map<TokenUsageField, number>();
   // Exact provider-returned URLs stay outside reports/traces. The model sees
   // only an opaque lead ID; policy resolves it back to the exact safe URL.
   const discoveryAuthorizations = new Map<string, string>();
+  const sameOriginProfessionalLeadKeys = new Set<string>();
+
+  const sameOriginProfessionalLinkEvidence = (
+    source: PublicSourceData,
+    binding: { candidateId: string } | { candidateRef: string },
+    state: InvestigationState,
+    candidateId: string | undefined,
+  ): EvidenceDraft[] => {
+    if (sameOriginProfessionalLeadsEmitted >= MAX_SAME_ORIGIN_PROFESSIONAL_LEADS_PER_RUN) return [];
+    const tierContext = sourceTierContextForState(state, candidateId);
+    const evidence: EvidenceDraft[] = [];
+    for (const link of source.professionalLinks) {
+      if (sameOriginProfessionalLeadsEmitted >= MAX_SAME_ORIGIN_PROFESSIONAL_LEADS_PER_RUN) break;
+      const bindingKey = "candidateId" in binding ? binding.candidateId : binding.candidateRef;
+      const dedupeKey = `${bindingKey}\u0000${link.url}`;
+      if (sameOriginProfessionalLeadKeys.has(dedupeKey)) continue;
+      const classifiedSourceType = deterministicSourceTypeForUrl(link.url, tierContext);
+      const classifiedSourceTier = classifiedSourceType
+        ? sourceTierForUrl(link.url, classifiedSourceType, false, tierContext)
+        : null;
+      const classifiedSourceLaneId = classifiedFetchLaneId(classifiedSourceType, classifiedSourceTier, true);
+      if (!classifiedSourceType || classifiedSourceTier === null || !classifiedSourceLaneId) continue;
+      const leadId = ids.next("lead");
+      discoveryAuthorizations.set(leadId, link.url);
+      sameOriginProfessionalLeadKeys.add(dedupeKey);
+      sameOriginProfessionalLeadsEmitted += 1;
+      evidence.push({
+        ...binding,
+        claim: `The hardened source page linked to the same-origin professional page “${link.label}”; it is a discovery lead only.`,
+        disposition: "discovery_only",
+        sourceUrl: link.url,
+        queryUrl: null,
+        sourceType: "search_result",
+        title: link.label,
+        publisher: new URL(link.url).hostname,
+        observedAt: source.observedAt,
+        httpStatus: null,
+        canonicalSubset: {
+          discoveryTransport: "page:same_origin_professional_links",
+          transportObservedUrl: true,
+          transportResultTitle: link.label,
+          sourcePageUrl: source.finalUrl,
+          sourcePageContentHash: source.contentHash,
+          sameOrigin: true,
+          relation: link.reason,
+        },
+        verificationMethod: "search_discovery",
+        temporalStatus: "unknown",
+        reliability: 0,
+        spoofable: true,
+        attributes: {
+          provider: "page:same_origin_professional_links",
+          upstreamProvider: null,
+          leadId,
+          classifiedSourceType,
+          classifiedSourceTier,
+          classifiedSourceLaneId,
+          parentSourceUrl: source.finalUrl,
+          parentSourceContentHash: source.contentHash,
+          sameOrigin: true,
+          relation: link.reason,
+        },
+      });
+    }
+    return evidence;
+  };
 
   const countedFetch: FetchLike = async (request, init) => {
     if (remainingTransportAttempts <= 0) {
@@ -1476,7 +1713,7 @@ export function createLiveDependencies(
     apiKey: config.apiKey,
     model: config.model,
     appUrl: config.siteUrl,
-    appTitle: config.appName ?? "Atlas People Intelligence",
+    appTitle: config.appName ?? "Atlas",
     ...(config.provider ? { provider: config.provider } : {}),
     ...(config.endpoint ? { endpoint: config.endpoint } : {}),
     ...(config.searchModel ? { searchModel: config.searchModel } : {}),
@@ -1930,7 +2167,9 @@ export function createLiveDependencies(
           ? "openai:web_search"
           : config.provider === "gemini"
             ? "gemini:compatibility"
-            : "openrouter:web_search";
+            : config.provider === "anthropic"
+              ? "anthropic:web_search"
+              : "openrouter:web_search";
       let searchProvider = configuredSearchProvider;
       let citations: Citation[] = [];
       let fallbackRequests = 0;
@@ -1938,6 +2177,17 @@ export function createLiveDependencies(
       let fallbackIncomplete = false;
       let publicFallbackReason: "provider_unavailable" | "sources_not_observed" | null = null;
       const searchDiagnostics: NonNullable<ResearchActionResult["diagnostics"]> = [];
+      const appendUniqueCitations = (incoming: readonly Citation[]): void => {
+        for (const citation of incoming) {
+          const existingIndex = citations.findIndex((candidate) => candidate.url === citation.url);
+          if (existingIndex < 0) {
+            citations.push(citation);
+            continue;
+          }
+          if (discoveryCitationPriority(citation) < discoveryCitationPriority(citations[existingIndex]))
+            citations[existingIndex] = citation;
+        }
+      };
       if (searchProviderCircuitOpen) {
         publicFallbackReason = "provider_unavailable";
         searchDiagnostics.push({
@@ -1975,7 +2225,30 @@ export function createLiveDependencies(
             modelTracker,
           );
           searchProvider = searchProviderForCompletion(completion, configuredSearchProvider);
-          citations = citationsFromCompletion(completion, context.state.target, searchProvider);
+          const querySubjectName =
+            !action.candidateId && context.state.target.kind === "named_person" ? context.state.target.name : null;
+          const positiveSiteScopes = positiveSiteScopesFromCompilerQuery(query);
+          const providerCitations = citationsFromCompletion(
+            completion,
+            context.state.target,
+            searchProvider,
+            positiveSiteScopes,
+          );
+          citations = providerCitations.citations.map((citation) =>
+            querySubjectName ? { ...citation, querySubjectName } : citation,
+          );
+          if (providerCitations.siteScopeMismatchCount > 0)
+            searchDiagnostics.push({
+              code: "search_provider_site_scope_mismatch",
+              severity: "info",
+              message:
+                "Atlas discarded configured-provider citations whose hosts were outside the query's explicit positive site scope.",
+              retryable: false,
+              details: {
+                rejectedCitationCount: providerCitations.siteScopeMismatchCount,
+                positiveSiteScopeCount: positiveSiteScopes.length,
+              },
+            });
           if (citations.length === 0) {
             publicFallbackReason = "sources_not_observed";
             searchDiagnostics.push({
@@ -1993,30 +2266,133 @@ export function createLiveDependencies(
           searchDiagnostics.push(searchProviderFailureDiagnostic(error));
         }
 
+      const exactTargetName = context.state.target.kind === "named_person" ? context.state.target.name : null;
+      const structuredAuthorSearchAllowed =
+        !action.candidateId && action.sourceLaneId === "t2.structured_professional" && Boolean(exactTargetName);
+      if (
+        structuredAuthorSearchAllowed &&
+        exactTargetName &&
+        /(?:^|\s)site:semanticscholar\.org(?:\s|$)/i.test(query)
+      ) {
+        const semanticScholar = await searchSemanticScholarAuthorsByExactName(exactTargetName, sharedContext);
+        fallbackRequests += semanticScholar.meta.requests;
+        fallbackBytesRead += semanticScholar.meta.bytesRead;
+        fallbackIncomplete ||= semanticScholar.meta.incomplete;
+        searchDiagnostics.push(...diagnostics(semanticScholar));
+        const scholarlyCitations = (semanticScholar.data?.matches ?? []).map(
+          (match) =>
+            ({
+              url: match.profileUrl,
+              title: `${match.name} — Semantic Scholar author`,
+              provider: "semanticscholar:academic_graph_api",
+              upstreamProvider: null,
+              attestedSubjectName: match.name,
+            }) satisfies Citation,
+        );
+        appendUniqueCitations(scholarlyCitations);
+        if (scholarlyCitations.length > 0)
+          searchDiagnostics.push({
+            code: "semantic_scholar_author_api_used",
+            severity: "info",
+            message:
+              "Atlas admitted exact-name discovery leads from Semantic Scholar's official public Academic Graph API.",
+            retryable: false,
+          });
+      }
+      if (structuredAuthorSearchAllowed && exactTargetName && /(?:^|\s)site:crossref\.org(?:\s|$)/i.test(query)) {
+        const crossref = await searchCrossrefWorksByExactAuthor(exactTargetName, sharedContext);
+        fallbackRequests += crossref.meta.requests;
+        fallbackBytesRead += crossref.meta.bytesRead;
+        fallbackIncomplete ||= crossref.meta.incomplete;
+        searchDiagnostics.push(...diagnostics(crossref));
+        const crossrefCitations = (crossref.data?.matches ?? []).map(
+          (match) =>
+            ({
+              url: match.recordUrl,
+              title: `${match.title} — Crossref metadata`,
+              provider: "crossref:rest_api",
+              upstreamProvider: null,
+              attestedSubjectName: match.attestedAuthorName,
+            }) satisfies Citation,
+        );
+        appendUniqueCitations(crossrefCitations);
+        if (crossrefCitations.length > 0)
+          searchDiagnostics.push({
+            code: "crossref_author_works_api_used",
+            severity: "info",
+            message: "Atlas admitted exact-author discovery leads from Crossref's official public REST API.",
+            retryable: false,
+          });
+      }
+
       if (publicFallbackReason) {
-        const publicFallback = await searchDuckDuckGoHtml(query, sharedContext);
-        fallbackRequests += publicFallback.meta.requests;
-        fallbackBytesRead += publicFallback.meta.bytesRead;
-        fallbackIncomplete ||= publicFallback.meta.incomplete;
-        searchDiagnostics.push(...diagnostics(publicFallback));
-        if (publicFallback.data && publicFallback.data.results.length > 0) {
-          searchProvider = "duckduckgo:html_search";
-          const querySubjectName = context.state.target.kind === "named_person" ? context.state.target.name : null;
-          citations = publicFallback.data.results.map((result) => ({
-            url: result.url,
-            title: result.title,
-            provider: searchProvider,
-            upstreamProvider: null,
-            ...(querySubjectName ? { querySubjectName } : {}),
-          }));
-          searchDiagnostics.push(
-            {
-              code: "duckduckgo_html_fallback_used",
+        const duckDuckGo = await searchDuckDuckGoHtml(query, sharedContext);
+        fallbackRequests += duckDuckGo.meta.requests;
+        fallbackBytesRead += duckDuckGo.meta.bytesRead;
+        fallbackIncomplete ||= duckDuckGo.meta.incomplete;
+        searchDiagnostics.push(...diagnostics(duckDuckGo));
+        let publicResults = duckDuckGo.data?.results ?? [];
+        let publicSearchStatus = duckDuckGo.status;
+        let publicSearchProvider = "duckduckgo:html_search";
+        let observedPublicResults = duckDuckGo.data?.observedResultAnchors ?? 0;
+        let unsafeFallbackQuery = duckDuckGo.diagnostics.some((item) => item.code === "unsafe_public_search_query");
+        if (publicResults.length === 0 && !unsafeFallbackQuery) {
+          const google = await searchGoogleHtml(query, sharedContext);
+          fallbackRequests += google.meta.requests;
+          fallbackBytesRead += google.meta.bytesRead;
+          fallbackIncomplete ||= google.meta.incomplete;
+          searchDiagnostics.push(...diagnostics(google));
+          observedPublicResults += google.data?.observedResultAnchors ?? 0;
+          unsafeFallbackQuery ||= google.diagnostics.some((item) => item.code === "unsafe_public_search_query");
+          if (google.data && google.data.results.length > 0) {
+            publicResults = google.data.results;
+            publicSearchStatus = google.status;
+            publicSearchProvider = "google:html_search";
+          } else if (
+            ["succeeded", "partial", "not_found"].includes(google.status) ||
+            !["succeeded", "partial", "not_found"].includes(duckDuckGo.status)
+          ) {
+            // Prefer whichever transport actually completed. A clean empty
+            // DDG result is still a valid finite-search outcome, so an
+            // optional Google challenge/outage must not turn that canonical
+            // branch into a rejected action.
+            publicSearchStatus = google.status;
+            publicSearchProvider = "google:html_search";
+          } else {
+            searchDiagnostics.push({
+              code: "secondary_public_search_failed_soft",
               severity: "info",
               message:
-                publicFallbackReason === "provider_unavailable"
-                  ? "Atlas admitted bounded title-and-URL leads from DuckDuckGo's public HTML search after the configured provider was unavailable."
-                  : "Atlas admitted bounded title-and-URL leads from DuckDuckGo's public HTML search because the configured provider returned no valid HTTPS source annotations.",
+                "The optional Google search did not complete; Atlas retained the completed empty DuckDuckGo result and exhausted this finite query without retrying or bypassing the failure.",
+              retryable: false,
+            });
+          }
+        }
+        if (publicResults.length > 0) {
+          searchProvider = publicSearchProvider;
+          const querySubjectName = context.state.target.kind === "named_person" ? context.state.target.name : null;
+          appendUniqueCitations(
+            publicResults.map((result) => ({
+              url: result.url,
+              title: result.title,
+              provider: publicSearchProvider,
+              upstreamProvider: null,
+              ...(querySubjectName ? { querySubjectName } : {}),
+            })),
+          );
+          searchDiagnostics.push(
+            {
+              code:
+                publicSearchProvider === "google:html_search"
+                  ? "google_html_fallback_used"
+                  : "duckduckgo_html_fallback_used",
+              severity: "info",
+              message:
+                publicSearchProvider === "google:html_search"
+                  ? "Atlas admitted bounded title-and-URL leads from Google public HTML after DuckDuckGo yielded no safe results; no challenge or consent flow was bypassed."
+                  : publicFallbackReason === "provider_unavailable"
+                    ? "Atlas admitted bounded title-and-URL leads from DuckDuckGo's public HTML search after the configured provider was unavailable."
+                    : "Atlas admitted bounded title-and-URL leads from DuckDuckGo's public HTML search because the configured provider returned no valid HTTPS source annotations.",
               retryable: false,
             },
             {
@@ -2077,9 +2453,6 @@ export function createLiveDependencies(
           }
         } else {
           const targetName = context.state.target.name;
-          const unsafeFallbackQuery = publicFallback.diagnostics.some(
-            (item) => item.code === "unsafe_public_search_query",
-          );
           const githubAllowed =
             !unsafeFallbackQuery &&
             !action.candidateId &&
@@ -2128,13 +2501,13 @@ export function createLiveDependencies(
                 },
               };
             }
-          } else {
+          } else if (citations.length === 0) {
             return {
-              status: publicFallback.status,
+              status: publicSearchStatus,
               data: {
                 citationCount: 0,
-                observedCitationCount: publicFallback.data?.observedResultAnchors ?? 0,
-                provider: "duckduckgo:html_search",
+                observedCitationCount: observedPublicResults,
+                provider: publicSearchProvider,
               },
               candidates: [],
               evidence: [],
@@ -2148,15 +2521,39 @@ export function createLiveDependencies(
           }
         }
       }
+      const observedCitationCount = citations.length;
+      citations = citations
+        .map((citation, ordinal) => ({ citation, ordinal }))
+        .sort(
+          (left, right) =>
+            discoveryCitationPriority(left.citation) - discoveryCitationPriority(right.citation) ||
+            left.ordinal - right.ordinal ||
+            left.citation.url.localeCompare(right.citation.url),
+        )
+        .slice(0, MAX_DISCOVERY_CITATIONS_PER_ACTION)
+        .map(({ citation }) => citation);
+      if (observedCitationCount > citations.length)
+        searchDiagnostics.push({
+          code: "discovery_citation_limit_applied",
+          severity: "info",
+          message:
+            "Atlas bounded this search action's discovery leads after prioritizing exact official structured records, configured-provider citations, public HTML results, and GitHub fallback records.",
+          retryable: false,
+          details: {
+            maximumCitations: MAX_DISCOVERY_CITATIONS_PER_ACTION,
+            omittedCitations: observedCitationCount - citations.length,
+          },
+        });
       const candidates: CandidateDraft[] = [];
       const candidateRefs = new Map<string, string>();
       const querySubject = !action.candidateId ? searchSubjectDraft(context.state.target) : null;
-      const existingQuerySubjectId = querySubject
-        ? context.state.candidates.find(
-            (candidate) => candidate.normalizedName === normalizeComparable(querySubject.displayName),
-          )?.id
-        : undefined;
-      const querySubjectRef = querySubject && !existingQuerySubjectId ? "search-subject" : undefined;
+      const querySubjectAnchor = querySubject
+        ? resolveQuerySubjectAnchor(context.state, context.state.target)
+        : { kind: "none" as const, candidates: [] };
+      const existingQuerySubjectId = querySubjectAnchor.kind === "unique" ? querySubjectAnchor.candidate.id : undefined;
+      const querySubjectAnchorAmbiguous = querySubjectAnchor.kind === "ambiguous";
+      const querySubjectRef =
+        querySubject && !existingQuerySubjectId && !querySubjectAnchorAmbiguous ? "search-subject" : undefined;
       if (querySubjectRef && querySubject) {
         candidates.push({
           ...querySubject,
@@ -2214,9 +2611,15 @@ export function createLiveDependencies(
         const discoveryClaim =
           citation.provider === "github:public_user_search"
             ? `GitHub's public-user API surfaced a possible public profile titled “${citation.title}”; it is a discovery lead only.`
-            : citation.provider === "duckduckgo:html_search"
-              ? `DuckDuckGo's public HTML search surfaced a possible direct source titled “${citation.title}”; it is a discovery lead only.`
-              : `The configured web-search provider surfaced a possible direct source titled “${citation.title}”; it is a discovery lead only.`;
+            : citation.provider === "semanticscholar:academic_graph_api"
+              ? `Semantic Scholar's public Academic Graph API surfaced a possible author profile titled “${citation.title}”; it is a discovery lead only.`
+              : citation.provider === "crossref:rest_api"
+                ? `Crossref's public REST API surfaced a possible authored-work record titled “${citation.title}”; it is a discovery lead only.`
+                : citation.provider === "duckduckgo:html_search"
+                  ? `DuckDuckGo's public HTML search surfaced a possible direct source titled “${citation.title}”; it is a discovery lead only.`
+                  : citation.provider === "google:html_search"
+                    ? `Google's public HTML search surfaced a possible direct source titled “${citation.title}”; it is a discovery lead only.`
+                    : `The configured web-search provider surfaced a possible direct source titled “${citation.title}”; it is a discovery lead only.`;
         return {
           ...(binding.candidateId ? { candidateId: binding.candidateId } : { candidateRef: binding.candidateRef }),
           claim: discoveryClaim,
@@ -2232,9 +2635,11 @@ export function createLiveDependencies(
             discoveryTransport: citation.provider,
             transportObservedUrl: true,
             transportResultTitle: citation.title,
-            ...(citation.provider === "github:public_user_search"
+            ...(["github:public_user_search", "semanticscholar:academic_graph_api", "crossref:rest_api"].includes(
+              citation.provider,
+            )
               ? { officialApiObservedUrl: true }
-              : citation.provider === "duckduckgo:html_search"
+              : citation.provider === "duckduckgo:html_search" || citation.provider === "google:html_search"
                 ? { publicHtmlSearchObservedUrl: true }
                 : { providerAttestedUrl: true }),
           },
@@ -2249,8 +2654,14 @@ export function createLiveDependencies(
             classifiedSourceType,
             classifiedSourceTier,
             classifiedSourceLaneId,
-            ...(citation.attestedSubjectName ? { attestedSubjectName: citation.attestedSubjectName } : {}),
             ...(citation.querySubjectName ? { querySubjectName: citation.querySubjectName } : {}),
+            ...(!action.candidateId && context.state.target.kind === "named_person" && context.state.target.name
+              ? {
+                  [QUERY_SUBJECT_ANCHOR_ATTRIBUTE]: true,
+                  querySubjectName: context.state.target.name,
+                }
+              : {}),
+            ...(citation.attestedSubjectName ? { attestedSubjectName: citation.attestedSubjectName } : {}),
             ...(citation.roleBootstrap ? { roleCandidateBootstrap: true, attestedConstraintMatch: true } : {}),
           },
         };
@@ -2261,13 +2672,24 @@ export function createLiveDependencies(
         status: evidence.length > 0 ? "succeeded" : "not_found",
         data: {
           citationCount: evidence.length,
-          observedCitationCount: citations.length,
+          observedCitationCount,
           provider: citations[0]?.provider ?? searchProvider,
         },
         candidates,
         evidence,
         diagnostics: [
           ...searchDiagnostics,
+          ...(querySubjectAnchorAmbiguous
+            ? [
+                {
+                  code: "query_subject_anchor_ambiguous",
+                  severity: "warning" as const,
+                  message:
+                    "Multiple run-local query anchors matched the named subject; Atlas failed closed instead of binding new search leads by name.",
+                  retryable: false,
+                },
+              ]
+            : []),
           ...(evidence.length > 0
             ? unboundRoleCitations > 0
               ? [
@@ -2350,6 +2772,7 @@ export function createLiveDependencies(
         };
       const sourceLane = sourceLaneById(action.sourceLaneId);
       const sourceTierContext = sourceTierContextForState(context.state, boundCandidateId);
+      const candidate = context.state.candidates.find((item) => item.id === boundCandidateId);
       const sourceType = deterministicSourceTypeForUrl(
         url,
         sourceTierContext,
@@ -2383,7 +2806,18 @@ export function createLiveDependencies(
           meta: { requests: 0, bytesRead: 0, incomplete: true, llmCalls: 0 },
         };
       }
-      const fetched = await fetchPublicSource({ url, allowedUrl }, sharedContext);
+      const fetched = await fetchPublicSource(
+        {
+          url,
+          allowedUrl,
+          ...(candidate?.displayName
+            ? { subjectName: candidate.displayName }
+            : context.state.target.kind === "named_person" && context.state.target.name
+              ? { subjectName: context.state.target.name }
+              : {}),
+        },
+        sharedContext,
+      );
       if (!fetched.data)
         return {
           status: fetched.status,
@@ -2439,7 +2873,6 @@ export function createLiveDependencies(
       const targetFocus = publicProfessionalClaimFocus(context.state.target);
       const requestedFocus = stringValue(action.arguments.claimFocus, 500) ?? action.purpose;
       const focus = `${targetFocus}; ${requestedFocus}`.slice(0, 500);
-      const candidate = context.state.candidates.find((item) => item.id === boundCandidateId);
       const attestedSubjectName = stringValue(leadEvidence?.attributes.attestedSubjectName, 120);
       const querySubjectName = stringValue(leadEvidence?.attributes.querySubjectName, 120);
       const targetName = context.state.target.kind === "named_person" ? context.state.target.name : null;
@@ -2458,9 +2891,23 @@ export function createLiveDependencies(
       const deterministicGithubHandle = deterministicGithubLead
         ? githubHandleFromCanonicalProfileUrl(fetched.data.finalUrl)
         : null;
-      const duckDuckGoNamedPersonLead = Boolean(
+      const deterministicStructuredApiLead = Boolean(
         leadEvidence &&
-        leadEvidence.attributes.provider === "duckduckgo:html_search" &&
+        ["semanticscholar:academic_graph_api", "crossref:rest_api"].includes(
+          String(leadEvidence.attributes.provider),
+        ) &&
+        leadEvidence.attributes.classifiedSourceType === "public_document" &&
+        sourceType === "public_document" &&
+        leadUrl &&
+        safeHttpsUrl(fetched.data.finalUrl) === safeHttpsUrl(leadUrl) &&
+        attestedSubjectName &&
+        targetName &&
+        normalizeComparable(attestedSubjectName) === normalizeComparable(targetName) &&
+        candidate?.normalizedName === normalizeComparable(targetName),
+      );
+      const publicHtmlNamedPersonLead = Boolean(
+        leadEvidence &&
+        QUERY_BOUND_WEB_DISCOVERY_PROVIDERS.has(String(leadEvidence.attributes.provider)) &&
         leadUrl &&
         safeHttpsUrl(fetched.data.finalUrl) === safeHttpsUrl(leadUrl) &&
         querySubjectName &&
@@ -2471,17 +2918,32 @@ export function createLiveDependencies(
       let extracted: EvidenceExtraction | null =
         deterministicGithubLead && targetName
           ? deterministicGithubProfileExtraction(fetched.data, targetName)
-          : duckDuckGoNamedPersonLead && targetName
-            ? deterministicNamedPersonPageExtraction(fetched.data, targetName, sourceType, null)
-            : null;
-      const deterministicDuckDuckGoExtraction = Boolean(duckDuckGoNamedPersonLead && extracted);
+          : deterministicStructuredApiLead && targetName
+            ? deterministicNamedPersonPageExtraction(
+                fetched.data,
+                targetName,
+                sourceType,
+                leadEvidence?.attributes.provider === "crossref:rest_api" ? "Crossref" : "Semantic Scholar",
+              )
+            : publicHtmlNamedPersonLead && targetName
+              ? deterministicQueryBoundNamedPersonPageExtraction(
+                  fetched.data,
+                  context.state.target,
+                  targetName,
+                  sourceType,
+                )
+              : null;
+      const deterministicStructuredApiExtraction = Boolean(deterministicStructuredApiLead && extracted);
+      const deterministicPublicHtmlExtraction = Boolean(publicHtmlNamedPersonLead && extracted);
       let extractionMethod = deterministicGithubLead
         ? "deterministic_github_profile_quote"
-        : deterministicDuckDuckGoExtraction
-          ? "deterministic_duckduckgo_named_person_quote"
-          : "model_exact_quote";
+        : deterministicStructuredApiExtraction
+          ? "deterministic_scholarly_api_name_quote"
+          : deterministicPublicHtmlExtraction
+            ? "deterministic_public_html_named_person_quote"
+            : "model_exact_quote";
       const extractionDiagnostics: NonNullable<ResearchActionResult["diagnostics"]> = [];
-      if (deterministicGithubLead && !extracted) {
+      if ((deterministicGithubLead || deterministicStructuredApiLead) && !extracted) {
         return {
           status: "partial",
           data: { sourceUrl: fetched.data.finalUrl, contentHash: fetched.data.contentHash, fullBodyRetained: false },
@@ -2490,9 +2952,13 @@ export function createLiveDependencies(
           diagnostics: [
             ...diagnostics(fetched),
             {
-              code: "deterministic_github_excerpt_missing",
+              code: deterministicGithubLead
+                ? "deterministic_github_excerpt_missing"
+                : "deterministic_scholarly_api_excerpt_missing",
               severity: "warning",
-              message: "The exact API-attested GitHub name was not present in the hardened fetched page title or text.",
+              message: deterministicGithubLead
+                ? "The exact API-attested GitHub name was not present in the hardened fetched page title or text."
+                : "The exact API-attested scholarly name was not present in the hardened fetched record.",
               retryable: false,
             },
           ],
@@ -2507,9 +2973,17 @@ export function createLiveDependencies(
             "Atlas retained an exact GitHub page title/name quote for the API-attested public profile without model extraction.",
           retryable: false,
         });
-      } else if (deterministicDuckDuckGoExtraction) {
+      } else if (deterministicStructuredApiExtraction) {
         extractionDiagnostics.push({
-          code: "deterministic_duckduckgo_extraction",
+          code: "deterministic_scholarly_api_extraction",
+          severity: "info",
+          message:
+            "Atlas retained only an exact fetched name quote from the API-attested scholarly record without model extraction.",
+          retryable: false,
+        });
+      } else if (deterministicPublicHtmlExtraction) {
+        extractionDiagnostics.push({
+          code: "deterministic_public_html_extraction",
           severity: "info",
           message:
             "Atlas retained only an exact fetched page title/name quote for the query-bound subject; no search snippet or organization inference was used.",
@@ -2622,12 +3096,15 @@ export function createLiveDependencies(
           extractionMethod,
           ...(deterministicGithubLead
             ? { apiAttestedSubjectName: attestedSubjectName }
-            : deterministicDuckDuckGoExtraction
-              ? { queryBoundSubjectName: querySubjectName }
-              : {
-                  modelDescriptiveSourceType: extracted.sourceType,
-                  modelClaimDiscarded: normalizeComparable(extracted.claim) !== normalizeComparable(extracted.excerpt),
-                }),
+            : deterministicStructuredApiExtraction
+              ? { apiAttestedSubjectName: attestedSubjectName }
+              : deterministicPublicHtmlExtraction
+                ? { queryBoundSubjectName: querySubjectName }
+                : {
+                    modelDescriptiveSourceType: extracted.sourceType,
+                    modelClaimDiscarded:
+                      normalizeComparable(extracted.claim) !== normalizeComparable(extracted.excerpt),
+                  }),
         },
       };
       if (!gate.allowed) {
@@ -2715,6 +3192,9 @@ export function createLiveDependencies(
               },
             ]
           : [];
+        const professionalLinkEvidence = candidateRef
+          ? sameOriginProfessionalLinkEvidence(fetched.data, { candidateRef }, context.state, undefined)
+          : [];
         return {
           status: "partial",
           data: { sourceUrl: fetched.data.finalUrl, contentHash: fetched.data.contentHash, fullBodyRetained: false },
@@ -2731,7 +3211,7 @@ export function createLiveDependencies(
           // person/organization claim can bind to the requested identity. Keep
           // the neutral footprint on the original/query-subject branch while
           // any exact quote remains isolated on the quarantined branch.
-          evidence: [...metadataEvidence, ...quarantinedEvidence],
+          evidence: [...metadataEvidence, ...quarantinedEvidence, ...professionalLinkEvidence],
           diagnostics: [
             ...diagnostics(fetched),
             ...extractionDiagnostics,
@@ -2742,11 +3222,32 @@ export function createLiveDependencies(
                 "The fetched page described a different or insufficiently contextualized subject, so it was not attached to the requested candidate.",
               retryable: false,
             },
+            ...(professionalLinkEvidence.length > 0
+              ? [
+                  {
+                    code: "same_origin_professional_links_discovered",
+                    severity: "info" as const,
+                    message:
+                      "Atlas admitted a tiny bounded set of same-origin professional links as discovery-only candidate capabilities.",
+                    retryable: false,
+                    details: { count: professionalLinkEvidence.length },
+                  },
+                ]
+              : []),
           ],
           meta: { requests: fetched.meta.requests, bytesRead: fetched.meta.bytesRead, incomplete: true },
         };
       }
-      const evidence: EvidenceDraft[] = [{ ...evidenceBase, candidateId: boundCandidateId! }];
+      const professionalLinkEvidence = sameOriginProfessionalLinkEvidence(
+        fetched.data,
+        { candidateId: boundCandidateId! },
+        context.state,
+        boundCandidateId,
+      );
+      const evidence: EvidenceDraft[] = [
+        { ...evidenceBase, candidateId: boundCandidateId! },
+        ...professionalLinkEvidence,
+      ];
       const targetIsPerson = ["named_person", "role_query", "email"].includes(context.state.target.kind);
       const admittedSignals: IdentitySignal[] = [
         ...(targetIsPerson && extracted.subjectName
@@ -2833,7 +3334,22 @@ export function createLiveDependencies(
         candidates: [],
         candidateSignals,
         evidence,
-        diagnostics: [...diagnostics(fetched), ...extractionDiagnostics],
+        diagnostics: [
+          ...diagnostics(fetched),
+          ...extractionDiagnostics,
+          ...(professionalLinkEvidence.length > 0
+            ? [
+                {
+                  code: "same_origin_professional_links_discovered",
+                  severity: "info" as const,
+                  message:
+                    "Atlas admitted a tiny bounded set of same-origin professional links as discovery-only candidate capabilities.",
+                  retryable: false,
+                  details: { count: professionalLinkEvidence.length },
+                },
+              ]
+            : []),
+        ],
         meta: {
           requests: fetched.meta.requests,
           bytesRead: fetched.meta.bytesRead,

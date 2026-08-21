@@ -448,6 +448,64 @@ test("runResearch hard-caps outbound concurrency at four and preserves unknown t
   assert.ok(toolEnds.every((event) => event.usage.unavailableReason === "not_reported"));
 });
 
+test("search tool spans expose only allowlisted scalar result telemetry", async () => {
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("search-trace-data");
+  const updates = [];
+  for await (const update of agent.runResearch(
+    { schemaVersion: domain.SCHEMA_VERSION, query: "Grace Hopper, US Navy", requestedDepth: "quick" },
+    {
+      clock,
+      ids,
+      planner: async ({ selectedFrontierEntries }) => {
+        const entry = selectedFrontierEntries[0];
+        if (!entry) return { kind: "stop", decisionSummary: "No legal search frontier remains." };
+        return {
+          kind: "actions",
+          decisionSummary: "Run one bounded public search.",
+          actions: [
+            {
+              frontierEntryId: entry.id,
+              tool: "search_web",
+              purpose: "Find bounded public professional sources.",
+              arguments: { query: entry.queryHint },
+              budgetClass: "search",
+            },
+          ],
+        };
+      },
+      executeAction: async () => ({
+        status: "succeeded",
+        data: {
+          citationCount: 2,
+          observedCitationCount: 3,
+          provider: "anthropic:web_search",
+          upstreamProvider: "DO_NOT_TRACE_UPSTREAM_PROVIDER",
+          url: "https://secret.example/?access_token=DO_NOT_TRACE",
+          title: "DO_NOT_TRACE_TITLE",
+          snippet: "DO_NOT_TRACE_SNIPPET",
+          nested: { vendorPayload: "DO_NOT_TRACE_VENDOR_PAYLOAD" },
+        },
+        meta: { requests: 1 },
+      }),
+    },
+    { availableTools: ["search_web"], budget: { maxTurns: 1 } },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  const searchEnd = completed.trace.events.find(
+    (event) => event.kind === "span_end" && event.name === "tool.search_web",
+  );
+  assert.ok(searchEnd);
+  assert.deepEqual(searchEnd.payload.data, {
+    citationCount: 2,
+    observedCitationCount: 3,
+    provider: "anthropic:web_search",
+  });
+  assert.doesNotMatch(JSON.stringify(searchEnd), /DO_NOT_TRACE|secret\.example/);
+});
+
 test("abort during in-flight synthesis closes the model span as canceled", async () => {
   const controller = new AbortController();
   const clock = domain.createSequenceClock("2026-08-18T23:30:00.000Z", 2);

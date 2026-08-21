@@ -48,6 +48,24 @@ export interface TraceDiagnostic {
   retryable: boolean;
 }
 
+export type SearchTransportOutcome = "attempted" | "returned_leads" | "no_safe_leads" | "no_match" | "unavailable";
+
+export interface SearchTransportAttempt {
+  id:
+    | "configured_provider"
+    | "google_html"
+    | "duckduckgo_html"
+    | "github_exact_name"
+    | "semantic_scholar_author_api"
+    | "crossref_author_works_api";
+  label: string;
+  outcome: SearchTransportOutcome;
+}
+
+export function isStructuredSearchTransport(transport: SearchTransportAttempt): boolean {
+  return transport.id === "semantic_scholar_author_api" || transport.id === "crossref_author_works_api";
+}
+
 export interface Candidate {
   id?: string;
   candidateId?: string;
@@ -199,6 +217,233 @@ export type RunStatus = "idle" | "loading" | "running" | "complete" | "error" | 
 
 export function eventType(event: TraceEvent): string {
   return event.name ?? event.type ?? event.eventType ?? "event";
+}
+
+function traceContainer(event: TraceEvent): Record<string, unknown> | undefined {
+  return event.payload ?? event.attributes;
+}
+
+/** Exact bounded query sent by a search-web span, when that event carries one. */
+export function traceSearchQuery(event: TraceEvent): string | null {
+  if (eventType(event) !== "tool.search_web") return null;
+  const argumentsValue = traceContainer(event)?.arguments;
+  if (!argumentsValue || typeof argumentsValue !== "object" || Array.isArray(argumentsValue)) return null;
+  const query = (argumentsValue as Record<string, unknown>).query;
+  if (typeof query !== "string" || !query.trim()) return null;
+  return query.trim().slice(0, 500);
+}
+
+/** Ordered, de-duplicated search program as it was actually emitted to tool spans. */
+export function traceSearchQueries(trace: readonly TraceEvent[]): string[] {
+  return [...new Set(trace.map(traceSearchQuery).filter((query): query is string => query !== null))];
+}
+
+function transportOutcome(
+  codes: ReadonlySet<string>,
+  returnedLeads: readonly string[],
+  noSafeLeads: readonly string[],
+  noMatch: readonly string[],
+  unavailable: readonly string[],
+  resultReturnedLeads = false,
+): SearchTransportOutcome {
+  if (resultReturnedLeads || returnedLeads.some((code) => codes.has(code))) return "returned_leads";
+  if (unavailable.some((code) => codes.has(code))) return "unavailable";
+  if (noMatch.some((code) => codes.has(code))) return "no_match";
+  if (noSafeLeads.some((code) => codes.has(code))) return "no_safe_leads";
+  return "attempted";
+}
+
+function traceSearchResultData(event: TraceEvent): {
+  citationCount: number | null;
+  provider: string | null;
+  status: string | null;
+} {
+  const container = traceContainer(event);
+  const value = container?.data;
+  const data = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  const citationCount =
+    typeof data?.citationCount === "number" && Number.isSafeInteger(data.citationCount) && data.citationCount >= 0
+      ? data.citationCount
+      : null;
+  const provider =
+    typeof data?.provider === "string" && data.provider.trim() ? data.provider.trim().slice(0, 96) : null;
+  const resultStatus = container?.resultStatus;
+  const status =
+    typeof resultStatus === "string" ? resultStatus : typeof event.status === "string" ? event.status : null;
+  return { citationCount, provider, status };
+}
+
+const FALLBACK_SEARCH_PROVIDERS = new Set([
+  "google:html_search",
+  "duckduckgo:html_search",
+  "github:public_user_search",
+  "semanticscholar:academic_graph_api",
+  "crossref:rest_api",
+]);
+
+function resultReturnedByProvider(trace: readonly TraceEvent[], provider: string | "configured"): boolean {
+  return trace.some((event) => {
+    if (eventType(event) !== "tool.search_web") return false;
+    const result = traceSearchResultData(event);
+    if (
+      result.citationCount === null ||
+      result.citationCount < 1 ||
+      !result.provider ||
+      !["succeeded", "partial"].includes(result.status ?? "")
+    )
+      return false;
+    return provider === "configured" ? !FALLBACK_SEARCH_PROVIDERS.has(result.provider) : result.provider === provider;
+  });
+}
+
+/**
+ * Transport attempts are intentionally distinct from verified sources. A
+ * transport can return discovery leads without any page surviving hardened
+ * fetch and evidence admission.
+ */
+export function traceSearchTransportAttempts(trace: readonly TraceEvent[]): SearchTransportAttempt[] {
+  const codes = new Set(trace.flatMap(traceDiagnostics).map((diagnostic) => diagnostic.code));
+  const queries = traceSearchQueries(trace);
+  const semanticScholarQueryAttempted = queries.some((query) =>
+    /(?:^|\s)site:semanticscholar\.org(?:\s|$)/i.test(query),
+  );
+  const crossrefQueryAttempted = queries.some((query) => /(?:^|\s)site:crossref\.org(?:\s|$)/i.test(query));
+  const attempts: SearchTransportAttempt[] = [];
+  if (trace.some((event) => eventType(event) === "tool.search_web")) {
+    attempts.push({
+      id: "configured_provider",
+      label: "Configured web-search provider",
+      outcome: transportOutcome(
+        codes,
+        [],
+        ["search_provider_sources_not_observed"],
+        [],
+        ["search_provider_quota_exhausted", "search_provider_unavailable", "search_provider_circuit_open"],
+        resultReturnedByProvider(trace, "configured"),
+      ),
+    });
+  }
+  if (
+    [...codes].some((code) => code.startsWith("duckduckgo_")) ||
+    resultReturnedByProvider(trace, "duckduckgo:html_search")
+  ) {
+    attempts.push({
+      id: "duckduckgo_html",
+      label: "DuckDuckGo HTML fallback",
+      outcome: transportOutcome(
+        codes,
+        ["duckduckgo_html_fallback_used"],
+        ["duckduckgo_results_not_observed"],
+        [],
+        [
+          "duckduckgo_html_unavailable",
+          "duckduckgo_html_rate_limited",
+          "duckduckgo_html_http_error",
+          "duckduckgo_html_decode_failed",
+          "dns_validation_unavailable",
+        ],
+        resultReturnedByProvider(trace, "duckduckgo:html_search"),
+      ),
+    });
+  }
+  if ([...codes].some((code) => code.startsWith("google_")) || resultReturnedByProvider(trace, "google:html_search")) {
+    attempts.push({
+      id: "google_html",
+      label: "Google HTML fallback",
+      outcome: transportOutcome(
+        codes,
+        ["google_html_fallback_used"],
+        ["google_results_not_observed"],
+        [],
+        [
+          "google_html_unavailable",
+          "google_html_rate_limited",
+          "google_html_http_error",
+          "google_html_decode_failed",
+          "google_html_challenge_observed",
+          "dns_validation_unavailable",
+        ],
+        resultReturnedByProvider(trace, "google:html_search"),
+      ),
+    });
+  }
+  if (
+    [...codes].some((code) => code.startsWith("github_public_user_") || code.startsWith("github_exact_name_")) ||
+    resultReturnedByProvider(trace, "github:public_user_search")
+  ) {
+    attempts.push({
+      id: "github_exact_name",
+      label: "GitHub exact-name fallback",
+      outcome: transportOutcome(
+        codes,
+        ["github_public_user_fallback_used"],
+        ["github_exact_name_not_observed"],
+        [],
+        [
+          "github_public_user_unavailable",
+          "github_public_user_rate_limited",
+          "github_public_user_http_error",
+          "github_public_user_invalid_json",
+          "github_public_user_invalid_response",
+          "github_public_user_budget_exhausted",
+        ],
+        resultReturnedByProvider(trace, "github:public_user_search"),
+      ),
+    });
+  }
+  if (
+    semanticScholarQueryAttempted ||
+    [...codes].some((code) => code.startsWith("semantic_scholar_")) ||
+    resultReturnedByProvider(trace, "semanticscholar:academic_graph_api")
+  ) {
+    attempts.push({
+      id: "semantic_scholar_author_api",
+      label: "Semantic Scholar author API",
+      outcome: transportOutcome(
+        codes,
+        ["semantic_scholar_author_api_used"],
+        [],
+        ["semantic_scholar_exact_name_not_observed"],
+        [
+          "invalid_semantic_scholar_author_name",
+          "semantic_scholar_unavailable",
+          "semantic_scholar_rate_limited",
+          "semantic_scholar_http_error",
+          "semantic_scholar_invalid_json",
+          "semantic_scholar_invalid_schema",
+          ...(semanticScholarQueryAttempted ? ["dns_validation_unavailable"] : []),
+        ],
+        resultReturnedByProvider(trace, "semanticscholar:academic_graph_api"),
+      ),
+    });
+  }
+  if (
+    crossrefQueryAttempted ||
+    [...codes].some((code) => code.startsWith("crossref_")) ||
+    resultReturnedByProvider(trace, "crossref:rest_api")
+  ) {
+    attempts.push({
+      id: "crossref_author_works_api",
+      label: "Crossref works API",
+      outcome: transportOutcome(
+        codes,
+        ["crossref_author_works_api_used"],
+        [],
+        ["crossref_exact_author_not_observed"],
+        [
+          "invalid_crossref_author_name",
+          "crossref_unavailable",
+          "crossref_rate_limited",
+          "crossref_http_error",
+          "crossref_invalid_json",
+          "crossref_invalid_schema",
+          ...(crossrefQueryAttempted ? ["dns_validation_unavailable"] : []),
+        ],
+        resultReturnedByProvider(trace, "crossref:rest_api"),
+      ),
+    });
+  }
+  return attempts;
 }
 
 /** Read only the bounded, operator-facing diagnostic projection from a trace event. */

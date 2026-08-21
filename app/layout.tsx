@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const title = "Atlas — People Intelligence";
+const title = "Atlas";
 const description = "An autonomous, evidence-led research agent for auditable public-source people intelligence.";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -30,7 +30,7 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: new URL(origin),
     title,
     description,
-    applicationName: "Atlas People Intelligence",
+    applicationName: title,
     category: "technology",
     openGraph: {
       type: "website",

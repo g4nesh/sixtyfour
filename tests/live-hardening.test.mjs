@@ -14,7 +14,7 @@ after(async () => vite.close());
 const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 const agent = await vite.ssrLoadModule("/lib/agent/index.ts");
 const search = await vite.ssrLoadModule("/lib/search/index.ts");
-const { createLiveDependencies, sourceAllowedForCandidate, streamLiveResearch } =
+const { createLiveDependencies, positiveSiteScopesFromCompilerQuery, sourceAllowedForCandidate, streamLiveResearch } =
   await vite.ssrLoadModule("/lib/live/orchestrator.ts");
 const { fetchPublicSource } = await vite.ssrLoadModule("/lib/tools/public-source.ts");
 
@@ -634,11 +634,664 @@ test("provider quota plus no exact GitHub public-user match returns an honest bo
 
   assert.equal(result.status, "not_found");
   assert.deepEqual(result.evidence, []);
-  assert.equal(result.meta.requests, 3, "DuckDuckGo plus GitHub search and one bounded detail are request-accounted");
+  assert.equal(
+    result.meta.requests,
+    4,
+    "DuckDuckGo, fail-soft Google, GitHub search, and one bounded detail are request-accounted",
+  );
   assert.equal(providerSettlements, 1, "the failed provider attempt is settled separately from fallback requests");
   assert.ok(result.diagnostics.some((item) => item.code === "search_provider_quota_exhausted"));
   assert.ok(result.diagnostics.some((item) => item.code === "duckduckgo_results_not_observed"));
+  assert.ok(result.diagnostics.some((item) => item.code === "secondary_public_search_failed_soft"));
   assert.ok(result.diagnostics.some((item) => item.code === "github_exact_name_not_observed"));
+});
+
+test("configured-provider citations obey complete positive site scopes without changing unscoped discovery", async () => {
+  assert.deepEqual(
+    positiveSiteScopesFromCompilerQuery('"Denise Hilary" (site:openalex.org OR site:researchgate.net) -jobs'),
+    ["openalex.org", "researchgate.net"],
+  );
+  assert.deepEqual(
+    positiveSiteScopesFromCompilerQuery(
+      '"site:quoted.example" -site:negative.example site:path.example/profile website:embedded.example site:.invalid',
+    ),
+    [],
+    "quoted literals, exclusions, paths, embedded tokens, and malformed domains are not positive compiler scopes",
+  );
+
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Denise Hilary",
+    requestedDepth: "standard",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T18:10:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("provider-site-scope-engine"),
+  });
+  const candidate = engine.addCandidate({ displayName: "Denise Hilary", signals: [] }).candidate;
+  const annotationSets = [
+    [
+      ["https://scholar.google.com/citations?user=denise", "Exact Scholar host"],
+      ["https://profiles.scholar.google.com/denise", "Scholar subdomain"],
+      ["https://www.berkeley.edu/people/denise", "Off-site university result"],
+    ],
+    [
+      ["https://api.openalex.org/authors/A123", "OpenAlex subdomain"],
+      ["https://www.researchgate.net/profile/Denise-Hilary", "ResearchGate profile"],
+      ["https://openalex.org.evil.example/denise", "Lookalike academic host"],
+    ],
+    [
+      ["https://www.instagram.com/denise", "Instagram profile"],
+      ["https://x.com/denise", "X profile"],
+      ["https://m.facebook.com/denise", "Facebook subdomain"],
+      ["https://facebook.com.evil.example/denise", "Lookalike social host"],
+    ],
+    [
+      ["https://www.berkeley.edu/people/denise", "University profile"],
+      ["https://profiles.example/denise", "Independent profile"],
+    ],
+  ];
+  let providerCall = 0;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    ids: domain.createDeterministicIdFactory("provider-site-scope-live"),
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      assert.equal(url.hostname, "openrouter.ai");
+      const annotations = annotationSets[providerCall++];
+      assert.ok(annotations, "unexpected extra configured-provider search");
+      return jsonResponse({
+        id: `generation-site-scope-${providerCall}`,
+        model: "test/model",
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: "Bounded provider results.",
+              annotations: annotations.map(([urlValue, title]) => ({
+                type: "url_citation",
+                url_citation: { url: urlValue, title },
+              })),
+            },
+          },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 1 },
+      });
+    },
+  });
+
+  const execute = (id, query) =>
+    dependencies.executeAction(
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        id,
+        tool: "search_web",
+        purpose: "Exercise configured-provider site-scope admission.",
+        arguments: { query },
+        candidateId: candidate.id,
+        budgetClass: "search",
+      },
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        state: engine.snapshot(),
+        modelAccounting: { reserve: () => true, settle: () => {} },
+      },
+    );
+
+  const scholar = await execute("action-provider-scholar-scope", '"Denise Hilary" site:scholar.google.com');
+  assert.deepEqual(
+    scholar.evidence.map((item) => new URL(item.sourceUrl).hostname),
+    ["scholar.google.com", "profiles.scholar.google.com"],
+    "the exact Scholar host and its subdomain are admitted while an off-site result is discarded",
+  );
+  const scholarMismatch = scholar.diagnostics.find((item) => item.code === "search_provider_site_scope_mismatch");
+  assert.deepEqual(scholarMismatch?.details, { rejectedCitationCount: 1, positiveSiteScopeCount: 1 });
+  assert.equal(JSON.stringify(scholarMismatch).includes("berkeley.edu"), false, "diagnostics must not leak URLs");
+
+  const academic = await execute(
+    "action-provider-academic-scopes",
+    '"Denise Hilary" (site:openalex.org OR site:researchgate.net)',
+  );
+  assert.deepEqual(
+    academic.evidence.map((item) => new URL(item.sourceUrl).hostname),
+    ["api.openalex.org", "www.researchgate.net"],
+  );
+  assert.deepEqual(academic.diagnostics.find((item) => item.code === "search_provider_site_scope_mismatch")?.details, {
+    rejectedCitationCount: 1,
+    positiveSiteScopeCount: 2,
+  });
+
+  const social = await execute(
+    "action-provider-social-scopes",
+    '"Denise Hilary" (site:instagram.com OR site:x.com OR site:facebook.com)',
+  );
+  assert.deepEqual(
+    social.evidence.map((item) => new URL(item.sourceUrl).hostname),
+    ["www.instagram.com", "x.com", "m.facebook.com"],
+  );
+  assert.deepEqual(social.diagnostics.find((item) => item.code === "search_provider_site_scope_mismatch")?.details, {
+    rejectedCitationCount: 1,
+    positiveSiteScopeCount: 3,
+  });
+
+  const unscoped = await execute("action-provider-unscoped", '"Denise Hilary" professional');
+  assert.deepEqual(
+    unscoped.evidence.map((item) => new URL(item.sourceUrl).hostname),
+    ["www.berkeley.edu", "profiles.example"],
+    "queries without a positive site operator preserve configured-provider citations",
+  );
+  assert.equal(
+    unscoped.diagnostics.some((item) => item.code === "search_provider_site_scope_mismatch"),
+    false,
+  );
+  assert.equal(providerCall, 4);
+});
+
+test("concurrent canonical searches and a later site query share one explicit run query anchor", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Avery Stone, Example University",
+    requestedDepth: "deep",
+  });
+  const sourceByQuery = (query) => {
+    if (query.includes("site:github.com")) return "https://github.com/avery-stone-professional";
+    if (query.includes("site:linkedin.com")) return "https://www.linkedin.com/in/avery-stone-professional";
+    if (query.includes('"Example University"')) return "https://context.example/people/avery-stone";
+    return "https://official.example/people/avery-stone";
+  };
+  const providerQueries = [];
+  const executedActions = [];
+  const live = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    clock: domain.createSequenceClock("2026-08-20T18:12:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("concurrent-query-subject-anchor"),
+    fetch: async (_request, init = {}) => {
+      const body = JSON.parse(typeof init.body === "string" ? init.body : new TextDecoder().decode(init.body));
+      const query = body.messages.at(-1)?.content;
+      assert.equal(typeof query, "string");
+      providerQueries.push(query);
+      const sourceUrl = sourceByQuery(query);
+      return jsonResponse({
+        id: `query-anchor-provider-${providerQueries.length}`,
+        model: "test/model",
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: "Bounded public-professional source.",
+              annotations: [
+                {
+                  type: "url_citation",
+                  url_citation: { url: sourceUrl, title: `Avery Stone at ${new URL(sourceUrl).hostname}` },
+                },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 1 },
+      });
+    },
+  });
+  const plannerBatches = [];
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: live.clock,
+      ids: live.ids,
+      planner: async ({ state, selectedFrontierEntries }) => {
+        if (
+          state.evidence.some(
+            (evidence) => evidence.canonicalUrl === "https://www.linkedin.com/in/avery-stone-professional",
+          )
+        ) {
+          return { kind: "stop", decisionSummary: "The bounded anchor regression is complete." };
+        }
+        plannerBatches.push(selectedFrontierEntries.map((entry) => entry.queryHint));
+        return {
+          kind: "actions",
+          decisionSummary: "Execute the selected canonical discovery breadth.",
+          actions: selectedFrontierEntries.map((entry) => ({
+            frontierEntryId: entry.id,
+            tool: "search_web",
+            purpose: "Exercise run-local query-subject admission.",
+            arguments: { query: entry.queryHint },
+          })),
+        };
+      },
+      executeAction: async (action, context) => {
+        executedActions.push({ tool: action.tool, query: String(action.arguments.query ?? "") });
+        return live.executeAction(action, context);
+      },
+      synthesize: async () => ({
+        decisionSummary: "Discovery leads remain non-factual until hardened fetches bind them.",
+        findings: [],
+        openQuestions: [],
+      }),
+    },
+    {
+      availableTools: ["search_web", "fetch_public_source"],
+      budget: {
+        maxTurns: 6,
+        maxLlmCalls: 12,
+        maxToolCalls: 12,
+        maxSearchCalls: 12,
+        maxEvidenceAttempts: 16,
+        maxConsecutiveNoProgress: 4,
+        maxActionsPerTurn: 2,
+        phaseCaps: { plan: 2, discover: 4, separate_candidates: 2, corroborate: 2, calibrate: 2, report: 1 },
+      },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(plannerBatches[0].length, 2);
+  assert.ok(plannerBatches[0].some((query) => query === '"Avery Stone"'));
+  assert.ok(plannerBatches[0].some((query) => query.includes('"Example University"')));
+  assert.ok(plannerBatches[1].some((query) => query.includes("site:github.com")));
+  assert.ok(plannerBatches[1].some((query) => query.includes("site:linkedin.com")));
+  assert.equal(
+    executedActions.some((action) => action.tool === "fetch_public_source"),
+    false,
+    "deep traversal must preserve the next canonical source breadth before optional lead fetches",
+  );
+  assert.deepEqual(
+    providerQueries,
+    executedActions.map((action) => action.query),
+  );
+
+  const queryCandidates = completed.report.candidates.filter((candidate) => candidate.normalizedName === "avery stone");
+  assert.equal(queryCandidates.length, 1, "the concurrent action-local refs must resolve to one run anchor");
+  const queryCandidate = queryCandidates[0];
+  const discovery = completed.report.evidence.filter(
+    (evidence) => evidence.sourceType === "search_result" && evidence.attributes.querySubjectAnchor === true,
+  );
+  assert.equal(discovery.length, 4);
+  assert.ok(discovery.every((evidence) => evidence.candidateId === queryCandidate.id));
+  assert.ok(discovery.every((evidence) => evidence.attributes.querySubjectName === "Avery Stone"));
+  assert.deepEqual(
+    new Set(discovery.map((evidence) => evidence.canonicalUrl)),
+    new Set([
+      "https://official.example/people/avery-stone",
+      "https://context.example/people/avery-stone",
+      "https://github.com/avery-stone-professional",
+      "https://www.linkedin.com/in/avery-stone-professional",
+    ]),
+  );
+  const ownersByCanonicalUrl = new Map();
+  for (const evidence of completed.report.evidence) {
+    const owners = ownersByCanonicalUrl.get(evidence.canonicalUrl) ?? new Set();
+    owners.add(evidence.candidateId);
+    ownersByCanonicalUrl.set(evidence.canonicalUrl, owners);
+  }
+  assert.ok(
+    [...ownersByCanonicalUrl.values()].every((owners) => owners.size === 1),
+    "no canonical source may be attached to two candidates through query-anchor reuse",
+  );
+  const queryAnchorReuse = completed.trace.events.filter(
+    (event) => event.name === "candidate.reused" && event.payload.reason === "same_run_query_subject_anchor",
+  );
+  assert.equal(queryAnchorReuse.length, 1);
+  assert.equal(queryAnchorReuse[0].payload.candidateId, queryCandidate.id);
+  assert.equal(
+    completed.trace.events.filter(
+      (event) => event.name === "candidate.created" && event.payload.displayName === "Avery Stone",
+    ).length,
+    1,
+  );
+  assert.equal(
+    completed.report.searchGraph.nodes.filter(
+      (node) => node.kind === "candidate" && node.candidateId === queryCandidate.id,
+    ).length,
+    1,
+  );
+  const queryCandidateNode = completed.report.searchGraph.nodes.find(
+    (node) => node.kind === "candidate" && node.candidateId === queryCandidate.id,
+  );
+  const discoveryEvidenceNodeIds = new Set(
+    completed.report.searchGraph.nodes
+      .filter((node) => node.kind === "evidence" && discovery.some((evidence) => evidence.id === node.evidenceId))
+      .map((node) => node.id),
+  );
+  assert.equal(
+    completed.report.searchGraph.edges.filter(
+      (edge) =>
+        edge.kind === "supports" &&
+        edge.status === "exhausted" &&
+        discoveryEvidenceNodeIds.has(edge.fromNodeId) &&
+        edge.toNodeId === queryCandidateNode.id,
+    ).length,
+    discovery.length,
+    "every discovery node must remain exhausted and bind to the single explicit query anchor",
+  );
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+  assert.doesNotThrow(() => domain.parseInvestigationState(completed.state));
+  assert.doesNotThrow(() => domain.parseInvestigationReport(completed.report));
+
+  const duplicateAnchorEvidence = {
+    ...discovery[0],
+    id: "evidence_duplicate_query_anchor",
+    candidateId: "candidate_duplicate_query_anchor",
+  };
+  const duplicateAnchorCandidate = {
+    ...queryCandidate,
+    id: duplicateAnchorEvidence.candidateId,
+    evidenceIds: [duplicateAnchorEvidence.id],
+  };
+  assert.equal(
+    domain.resolveQuerySubjectAnchor(
+      {
+        candidates: [queryCandidate, duplicateAnchorCandidate],
+        evidence: [...discovery, duplicateAnchorEvidence],
+      },
+      completed.state.target,
+    ).kind,
+    "ambiguous",
+    "two independently marked anchors must fail closed instead of falling back to same-name ordering",
+  );
+  const quarantinedMarker = {
+    ...discovery[0],
+    id: "evidence_quarantined_query_subject",
+    attributes: { ...discovery[0].attributes, quarantinedFromCandidateId: "candidate_parent" },
+  };
+  assert.equal(
+    domain.resolveQuerySubjectAnchor(
+      {
+        candidates: [{ ...queryCandidate, evidenceIds: [...queryCandidate.evidenceIds, quarantinedMarker.id] }],
+        evidence: [...discovery, quarantinedMarker],
+      },
+      completed.state.target,
+    ).kind,
+    "none",
+    "a fetched-subject quarantine marker must make a candidate ineligible as the neutral query anchor",
+  );
+});
+
+test("provider and public-HTML outages still admit exact Semantic Scholar API discovery", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Denise Hilary",
+    requestedDepth: "standard",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T18:15:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("semantic-scholar-provider-independent"),
+  });
+  let providerRequests = 0;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") {
+        providerRequests += 1;
+        return jsonResponse(
+          { error: { message: "provider quota exhausted" } },
+          { status: 429, headers: { "retry-after": "0" } },
+        );
+      }
+      if (url.hostname === "api.semanticscholar.org") {
+        return jsonResponse({ total: 1, data: [{ authorId: "123456", name: "Denise Hilary" }] });
+      }
+      if (url.hostname === "html.duckduckgo.com") {
+        return new Response("<html><body>No safe results observed.</body></html>", {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (url.hostname === "www.google.com") {
+        return new Response('<html><form action="/sorry/"><p>Unusual traffic</p></form></html>', {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      throw new Error(`Unexpected structured fallback request ${url.href}`);
+    },
+  });
+
+  const result = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-semantic-scholar-fallback",
+      frontierEntryId: "action-semantic-scholar-fallback",
+      tool: "search_web",
+      purpose: "Search the canonical scholarly-author lane.",
+      arguments: { query: '"Denise Hilary" site:semanticscholar.org' },
+      budgetClass: "search",
+      sourceTier: 2,
+      sourceLaneId: "t2.structured_professional",
+      pathCost: 1,
+      mutated: false,
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: engine.snapshot(),
+      modelAccounting: { reserve: () => true, settle: () => {} },
+    },
+  );
+
+  assert.equal(result.status, "succeeded");
+  assert.ok(providerRequests > 0);
+  assert.equal(result.meta.requests, 3, "Semantic Scholar, DuckDuckGo, and Google are each request-accounted");
+  assert.equal(result.meta.incomplete, true, "the optional Google challenge remains visible as incomplete");
+  assert.equal(result.evidence.length, 1);
+  assert.equal(result.evidence[0].sourceUrl, "https://www.semanticscholar.org/author/123456");
+  assert.equal(result.evidence[0].attributes.provider, "semanticscholar:academic_graph_api");
+  assert.equal(result.evidence[0].attributes.attestedSubjectName, "Denise Hilary");
+  assert.equal(result.evidence[0].attributes.classifiedSourceType, "public_document");
+  assert.equal(result.evidence[0].attributes.classifiedSourceLaneId, "t2.structured_professional");
+  assert.equal(result.evidence[0].canonicalSubset.officialApiObservedUrl, true);
+  assert.ok(result.diagnostics.some((item) => item.code === "semantic_scholar_author_api_used"));
+  assert.ok(result.diagnostics.some((item) => item.code === "google_html_challenge_observed"));
+  assert.ok(result.diagnostics.some((item) => item.code === "secondary_public_search_failed_soft"));
+});
+
+test("Crossref exact-author metadata is independently accounted and rejects off-scope provider discovery", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Denise Hilary",
+    requestedDepth: "standard",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T18:17:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("crossref-provider-independent"),
+  });
+  let providerSettlements = 0;
+  const crossrefUrl = "https://api.crossref.org/works/10.5555%2Fatlas.2026.2";
+  const providerUrl = "https://profiles.example/denise-hilary";
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") {
+        return jsonResponse({
+          id: "generation-crossref-provider",
+          model: "test/model",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "One provider result.",
+                annotations: [
+                  {
+                    type: "url_citation",
+                    url_citation: { url: crossrefUrl, title: "Provider-observed duplicate Crossref record" },
+                  },
+                  {
+                    type: "url_citation",
+                    url_citation: { url: providerUrl, title: "Denise Hilary — Public profile" },
+                  },
+                ],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        });
+      }
+      if (url.hostname === "api.crossref.org") {
+        return jsonResponse({
+          message: {
+            "total-results": 1,
+            items: [
+              {
+                DOI: "10.5555/atlas.2026.2",
+                title: ["Provider-Independent Public Metadata"],
+                author: [{ given: "Denise", family: "Hilary" }],
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`Unexpected Crossref integration request ${url.href}`);
+    },
+  });
+
+  const result = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-crossref-fallback",
+      frontierEntryId: "action-crossref-fallback",
+      tool: "search_web",
+      purpose: "Search the canonical Crossref lane.",
+      arguments: { query: '"Denise Hilary" site:crossref.org' },
+      budgetClass: "search",
+      sourceTier: 2,
+      sourceLaneId: "t2.structured_professional",
+      pathCost: 1,
+      mutated: false,
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: engine.snapshot(),
+      modelAccounting: {
+        reserve: () => true,
+        settle: () => {
+          providerSettlements += 1;
+        },
+      },
+    },
+  );
+
+  assert.equal(result.status, "succeeded");
+  assert.equal(providerSettlements, 1, "the configured-provider completion is accounted separately");
+  assert.equal(result.meta.requests, 1, "the Crossref request is charged to the tool transport budget");
+  assert.equal(result.evidence.length, 1);
+  assert.equal(result.evidence[0].attributes.provider, "crossref:rest_api");
+  assert.equal(result.evidence[0].sourceUrl, crossrefUrl);
+  assert.equal(result.evidence[0].canonicalSubset.officialApiObservedUrl, true);
+  assert.equal(
+    result.evidence.some((evidence) => evidence.sourceUrl === providerUrl),
+    false,
+    "a provider citation outside the explicit Crossref site scope is not admitted",
+  );
+  assert.deepEqual(result.diagnostics.find((item) => item.code === "search_provider_site_scope_mismatch")?.details, {
+    rejectedCitationCount: 1,
+    positiveSiteScopeCount: 1,
+  });
+  assert.ok(result.diagnostics.some((item) => item.code === "crossref_author_works_api_used"));
+});
+
+test("one search action caps citations deterministically with exact official structured matches first", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Denise Hilary",
+    requestedDepth: "standard",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T18:20:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("citation-cap-order"),
+  });
+  const providerUrls = Array.from(
+    { length: 8 },
+    (_, index) => `https://provider-${index + 1}.semanticscholar.org/person`,
+  );
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") {
+        return jsonResponse({
+          id: "generation-citation-cap",
+          model: "test/model",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "Bounded provider results.",
+                annotations: providerUrls.map((providerUrl, index) => ({
+                  type: "url_citation",
+                  url_citation: { url: providerUrl, title: `Provider result ${index + 1}` },
+                })),
+              },
+            },
+          ],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        });
+      }
+      if (url.hostname === "api.semanticscholar.org") {
+        return jsonResponse({
+          total: 3,
+          data: [
+            { authorId: "101", name: "Denise Hilary" },
+            { authorId: "102", name: "Denise Hilary" },
+            { authorId: "103", name: "Denise Hilary" },
+          ],
+        });
+      }
+      throw new Error(`Unexpected citation-cap request ${url.href}`);
+    },
+  });
+
+  const result = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-citation-cap",
+      frontierEntryId: "action-citation-cap",
+      tool: "search_web",
+      purpose: "Search the canonical scholarly-author lane.",
+      arguments: { query: '"Denise Hilary" site:semanticscholar.org' },
+      budgetClass: "search",
+      sourceTier: 2,
+      sourceLaneId: "t2.structured_professional",
+      pathCost: 1,
+      mutated: false,
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: engine.snapshot(),
+      modelAccounting: { reserve: () => true, settle: () => {} },
+    },
+  );
+
+  assert.equal(result.status, "succeeded");
+  assert.equal(result.data.citationCount, 10);
+  assert.equal(result.data.observedCitationCount, 11);
+  assert.deepEqual(
+    result.evidence.slice(0, 3).map((evidence) => evidence.attributes.provider),
+    ["semanticscholar:academic_graph_api", "semanticscholar:academic_graph_api", "semanticscholar:academic_graph_api"],
+  );
+  assert.deepEqual(
+    result.evidence.slice(3).map((evidence) => evidence.sourceUrl),
+    providerUrls.slice(0, 7),
+  );
+  assert.equal(
+    result.evidence.some((evidence) => evidence.sourceUrl === providerUrls[7]),
+    false,
+  );
+  const cap = result.diagnostics.find((item) => item.code === "discovery_citation_limit_applied");
+  assert.deepEqual(cap?.details, { maximumCitations: 10, omittedCitations: 1 });
 });
 
 test("provider 429 falls back to DuckDuckGo leads and a quarantined exact fetched-name quote", async () => {
@@ -785,10 +1438,358 @@ test("provider 429 falls back to DuckDuckGo leads and a quarantined exact fetche
   assert.equal(directQuote.sourceUrl, sourceUrl);
   assert.equal(directQuote.claim, "Ganesh Talluri — Portfolio");
   assert.equal(directQuote.excerpt, directQuote.claim);
-  assert.equal(directQuote.attributes.extractionMethod, "deterministic_duckduckgo_named_person_quote");
+  assert.equal(directQuote.attributes.extractionMethod, "deterministic_public_html_named_person_quote");
   assert.equal(directQuote.attributes.extractedOrganization, null);
   assert.equal(directQuote.attributes.quarantinedFromCandidateId, candidate.id);
-  assert.ok(direct.diagnostics.some((item) => item.code === "deterministic_duckduckgo_extraction"));
+  assert.ok(direct.diagnostics.some((item) => item.code === "deterministic_public_html_extraction"));
+});
+
+test("configured-provider person leads use exact fetched quotes and quarantine a wrong-school namesake", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Michael Jordan, professor at UC Berkeley",
+    requestedDepth: "deep",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T18:31:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("provider-query-bound-school-context"),
+  });
+  const candidate = engine.addCandidate({
+    displayName: "Michael Jordan",
+    signals: [
+      {
+        kind: "name",
+        value: "Michael Jordan",
+        normalizedValue: "michael jordan",
+        strength: "weak",
+        assurance: "self_asserted",
+      },
+    ],
+  }).candidate;
+  assert.equal(
+    engine.admitEvidence({
+      candidateId: candidate.id,
+      claim: "An earlier bounded search established this run's neutral query subject.",
+      disposition: "discovery_only",
+      sourceUrl: "https://search-anchor.example/michael-jordan",
+      sourceType: "search_result",
+      canonicalSubset: { providerAttestedUrl: true },
+      verificationMethod: "search_discovery",
+      temporalStatus: "unknown",
+      reliability: 0,
+      spoofable: true,
+      attributes: { querySubjectAnchor: true, querySubjectName: "Michael Jordan" },
+    }).admitted,
+    true,
+  );
+  const matchingUrl = "https://profiles.berkeley.edu/michael-jordan";
+  const conflictingUrl = "https://faculty.example.edu/michael-jordan";
+  let providerRequests = 0;
+  let extractionReservations = 0;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") {
+        providerRequests += 1;
+        assert.ok(providerRequests <= 2, "a page fetch must not fall through to model extraction");
+        return jsonResponse({
+          id: "generation-provider-school-context",
+          model: "test/model",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "Two public pages were observed.",
+                annotations: [
+                  {
+                    type: "url_citation",
+                    url_citation: { url: matchingUrl, title: "Michael Jordan — UC Berkeley" },
+                  },
+                  {
+                    type: "url_citation",
+                    url_citation: { url: conflictingUrl, title: "Michael Jordan — Example University" },
+                  },
+                ],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        });
+      }
+      if (url.href === matchingUrl) {
+        return new Response(
+          "<html><title>Michael Jordan — Professor at UC Berkeley</title><main><p>Michael Jordan is a Professor at UC Berkeley.</p></main></html>",
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.href === conflictingUrl) {
+        return new Response(
+          "<html><title>Michael Jordan — Professor at Example University</title><main><p>Michael Jordan is a Professor at Example University.</p></main></html>",
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      throw new Error(`Unexpected provider-context request ${url.href}`);
+    },
+  });
+
+  const searchResult = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-provider-school-search",
+      frontierEntryId: "action-provider-school-search",
+      tool: "search_web",
+      purpose: "Find exact public university pages for the named professor.",
+      arguments: { query: '"Michael Jordan" "UC Berkeley" "Professor"' },
+      budgetClass: "search",
+      sourceTier: 1,
+      sourceLaneId: "t1.first_party",
+      pathCost: 1,
+      mutated: false,
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: engine.snapshot(),
+      modelAccounting: { reserve: () => true, settle: () => {} },
+    },
+  );
+
+  assert.equal(searchResult.status, "succeeded");
+  assert.equal(searchResult.evidence.length, 2);
+  assert.ok(
+    searchResult.evidence.every(
+      (evidence) =>
+        evidence.attributes.provider === "openrouter:web_search" &&
+        evidence.attributes.querySubjectName === "Michael Jordan" &&
+        evidence.canonicalSubset.providerAttestedUrl === true,
+    ),
+  );
+  const candidateBoundSearch = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-provider-school-candidate-search",
+      frontierEntryId: "action-provider-school-candidate-search",
+      tool: "search_web",
+      purpose: "Search one candidate-bound refinement.",
+      arguments: { query: '"Michael Jordan" university profile' },
+      candidateId: candidate.id,
+      budgetClass: "search",
+      sourceTier: 6,
+      sourceLaneId: "t6.general_discovery",
+      pathCost: 1.2,
+      mutated: false,
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: engine.snapshot(),
+      modelAccounting: { reserve: () => true, settle: () => {} },
+    },
+  );
+  assert.equal(candidateBoundSearch.status, "succeeded");
+  assert.ok(
+    candidateBoundSearch.evidence.every((evidence) => evidence.attributes.querySubjectName === undefined),
+    "only candidate-free named-person discovery may mint deterministic query-subject provenance",
+  );
+  for (const evidence of searchResult.evidence) assert.equal(engine.admitEvidence(evidence).admitted, true);
+
+  const fetchLead = async (lead) =>
+    dependencies.executeAction(
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        id: `action-provider-fetch-${lead.attributes.leadId}`,
+        frontierEntryId: `action-provider-fetch-${lead.attributes.leadId}`,
+        tool: "fetch_public_source",
+        purpose: "Fetch the exact provider-attested university page.",
+        arguments: { leadId: lead.attributes.leadId, claimFocus: "Public professional identity and university" },
+        candidateId: candidate.id,
+        budgetClass: "fetch",
+        sourceTier: lead.attributes.classifiedSourceTier,
+        sourceLaneId: lead.attributes.classifiedSourceLaneId,
+        pathCost: 1.4,
+        mutated: false,
+      },
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        state: engine.snapshot(),
+        modelAccounting: {
+          reserve: () => {
+            extractionReservations += 1;
+            return true;
+          },
+          settle: () => {},
+        },
+      },
+    );
+
+  const matchingLead = searchResult.evidence.find((evidence) => evidence.sourceUrl === matchingUrl);
+  const conflictingLead = searchResult.evidence.find((evidence) => evidence.sourceUrl === conflictingUrl);
+  assert.ok(matchingLead);
+  assert.ok(conflictingLead);
+  const matchingResult = await fetchLead(matchingLead);
+  const conflictingResult = await fetchLead(conflictingLead);
+
+  assert.equal(extractionReservations, 0, "provider-cited exact pages do not invoke model extraction");
+  assert.equal(providerRequests, 2, "the only provider requests are the two explicit search actions");
+  assert.equal(matchingResult.status, "succeeded");
+  const matchingQuote = matchingResult.evidence.find((evidence) => evidence.verificationMethod === "direct_fetch");
+  assert.ok(matchingQuote);
+  assert.equal(matchingQuote.candidateId, candidate.id);
+  assert.equal(matchingQuote.candidateRef, undefined);
+  assert.equal(matchingQuote.claim, "Michael Jordan is a Professor at UC Berkeley.");
+  assert.equal(matchingQuote.excerpt, matchingQuote.claim);
+  assert.equal(matchingQuote.attributes.matchedTargetOrganization, "UC Berkeley");
+  assert.equal(matchingQuote.attributes.matchedTargetRole, "Professor");
+  assert.equal(matchingQuote.attributes.extractionMethod, "deterministic_public_html_named_person_quote");
+  assert.equal(matchingQuote.reliability, 0.55);
+  assert.equal(matchingQuote.spoofable, true);
+
+  assert.equal(conflictingResult.status, "partial");
+  const conflictingQuote = conflictingResult.evidence.find(
+    (evidence) => evidence.verificationMethod === "direct_fetch",
+  );
+  assert.ok(conflictingQuote);
+  assert.equal(conflictingQuote.candidateId, undefined);
+  assert.notEqual(conflictingQuote.candidateRef, undefined);
+  assert.equal(conflictingQuote.claim, "Michael Jordan is a Professor at Example University.");
+  assert.equal(conflictingQuote.excerpt, conflictingQuote.claim);
+  assert.equal(conflictingQuote.attributes.quarantinedFromCandidateId, candidate.id);
+  assert.equal(conflictingQuote.reliability, 0.55);
+  assert.equal(conflictingQuote.spoofable, true);
+  assert.equal(conflictingResult.candidateBranches.length, 1);
+  assert.equal(conflictingResult.candidateBranches[0].parentCandidateId, candidate.id);
+  assert.ok(conflictingResult.diagnostics.some((item) => item.code === "candidate_binding_organization_missing"));
+});
+
+test("an exact hardened page emits only bounded same-origin professional links as candidate discovery leads", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Ganesh Talluri",
+    requestedDepth: "standard",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T18:32:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("same-origin-professional-links"),
+  });
+  const candidate = engine.addCandidate({
+    displayName: "Ganesh Talluri",
+    signals: [
+      {
+        kind: "name",
+        value: "Ganesh Talluri",
+        normalizedValue: "ganesh talluri",
+        strength: "weak",
+        assurance: "self_asserted",
+      },
+    ],
+  }).candidate;
+  const sourceUrl = "https://portfolio.example/ganesh";
+  let sourceRequests = 0;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") {
+        return jsonResponse(
+          { error: { message: "provider quota exhausted" } },
+          { status: 429, headers: { "retry-after": "0" } },
+        );
+      }
+      if (url.hostname === "html.duckduckgo.com") {
+        const wrapped = `//duckduckgo.com/l/?uddg=${encodeURIComponent(sourceUrl)}&amp;rut=opaque`;
+        return new Response(`<a class="result__a" href="${wrapped}">Ganesh Talluri — Portfolio</a>`, {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (url.href === sourceUrl) {
+        sourceRequests += 1;
+        return new Response(
+          `<!doctype html><title>Ganesh Talluri — Portfolio</title><main><p>Ganesh Talluri</p>
+          <a href="/people/ganesh-talluri">Ganesh Talluri bio</a>
+          <a href="/about">About</a>
+          <a href="/publications">Publications</a>
+          <a href="/news">News beyond the page cap</a>
+          <a href="/login">Login</a>
+          <a href="https://other.example/team">Other origin</a></main>`,
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      throw new Error(`Unexpected same-origin test request ${url.href}`);
+    },
+  });
+  const modelAccounting = { reserve: () => true, settle: () => {} };
+  const searchResult = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-page-link-search",
+      frontierEntryId: "action-page-link-search",
+      tool: "search_web",
+      purpose: "Find the exact public page.",
+      arguments: { query: "Ganesh Talluri public professional profile" },
+      candidateId: candidate.id,
+      budgetClass: "search",
+      sourceTier: 6,
+      sourceLaneId: "t6.general_discovery",
+      pathCost: 1,
+      mutated: false,
+    },
+    { schemaVersion: domain.SCHEMA_VERSION, state: engine.snapshot(), modelAccounting },
+  );
+  assert.equal(engine.admitEvidence(searchResult.evidence[0]).admitted, true);
+
+  const fetched = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-page-link-fetch",
+      frontierEntryId: "action-page-link-fetch",
+      tool: "fetch_public_source",
+      purpose: "Fetch the exact candidate-bound discovery lead.",
+      arguments: {
+        leadId: searchResult.evidence[0].attributes.leadId,
+        claimFocus: "Public professional identity",
+      },
+      candidateId: candidate.id,
+      budgetClass: "fetch",
+      sourceTier: 6,
+      sourceLaneId: "t6.candidate_public_source",
+      pathCost: 1.4,
+      mutated: false,
+    },
+    { schemaVersion: domain.SCHEMA_VERSION, state: engine.snapshot(), modelAccounting },
+  );
+
+  assert.equal(sourceRequests, 1, "link discovery performs no hidden child-page request");
+  assert.equal(fetched.meta.requests, 1);
+  const direct = fetched.evidence.find((evidence) => evidence.verificationMethod === "direct_fetch");
+  const leads = fetched.evidence.filter(
+    (evidence) => evidence.attributes.provider === "page:same_origin_professional_links",
+  );
+  assert.ok(direct);
+  assert.equal(leads.length, 3);
+  assert.deepEqual(
+    leads.map((evidence) => evidence.sourceUrl),
+    [
+      "https://portfolio.example/people/ganesh-talluri",
+      "https://portfolio.example/about",
+      "https://portfolio.example/publications",
+    ],
+  );
+  assert.ok(leads.every((evidence) => evidence.disposition === "discovery_only"));
+  assert.ok(leads.every((evidence) => evidence.verificationMethod === "search_discovery"));
+  assert.ok(leads.every((evidence) => evidence.candidateRef === direct.candidateRef));
+  assert.ok(
+    leads.every((evidence) => evidence.attributes.classifiedSourceLaneId === "t6.candidate_public_source"),
+    "same-origin does not promote an otherwise unclassified host into a first-party tier",
+  );
+  assert.ok(leads.every((evidence) => evidence.canonicalSubset.sourcePageUrl === sourceUrl));
+  assert.ok(leads.every((evidence) => evidence.canonicalSubset.sourcePageContentHash === direct.contentHash));
+  assert.equal(JSON.stringify(leads).includes("/login"), false);
+  assert.equal(JSON.stringify(leads).includes("other.example"), false);
+  assert.ok(fetched.diagnostics.some((item) => item.code === "same_origin_professional_links_discovered"));
 });
 
 test("successful provider response without grounded URLs uses the bounded public-web fallback", async () => {
@@ -1088,7 +2089,7 @@ test("successful keyless fallback is charged as one search call with every trans
     completed.report.evidence.some(
       (evidence) =>
         evidence.verificationMethod === "direct_fetch" &&
-        evidence.attributes.extractionMethod === "deterministic_duckduckgo_named_person_quote",
+        evidence.attributes.extractionMethod === "deterministic_public_html_named_person_quote",
     ),
   );
   assert.equal(completed.report.usage.searchCalls, 1);
@@ -1781,15 +2782,16 @@ test("mechanical planning fetches every exact same-name lead after earlier direc
         }
         return { status: "not_found", meta: { requests: 0 } };
       },
-      synthesize: async () => ({
-        decisionSummary: "Retain three separated same-name candidate records.",
-        openQuestions: [],
-        findings: [],
-      }),
+      // This regression isolates deterministic lead routing; synthesis would
+      // spend model budget without affecting the three fetch dependencies.
+      synthesize: undefined,
     },
     {
       availableTools: ["search_web", "fetch_public_source"],
-      budget: { maxActionsPerTurn: 1 },
+      // One action per turn makes the ordering observable. Leave enough
+      // explicit test-only turns for full canonical Deep breadth plus all
+      // three exact lead dependencies; production Deep presets are unchanged.
+      budget: { maxActionsPerTurn: 1, maxTurns: 20 },
     },
   ))
     updates.push(update);
@@ -1807,6 +2809,8 @@ test("mechanical planning fetches every exact same-name lead after earlier direc
     new Set(exactFetchActions.map((action) => action.leadId)),
     new Set(leads.map((lead) => lead.leadId)),
     JSON.stringify({
+      stop: completed.report.stop,
+      usage: completed.report.usage,
       evidence: completed.report.evidence,
       frontier: completed.report.searchGraph.frontier,
       admissions: completed.trace.events.filter(
@@ -2333,7 +3337,7 @@ test("planner quota outage mechanically reaches DuckDuckGo and preserves a harde
   assert.ok(direct, "the valid direct-fetch record must survive later model unavailability");
   assert.equal(direct.claim, "g4nesh (Ganesh Talluri) · GitHub");
   assert.equal(direct.excerpt, direct.claim);
-  assert.equal(direct.attributes.extractionMethod, "deterministic_duckduckgo_named_person_quote");
+  assert.equal(direct.attributes.extractionMethod, "deterministic_public_html_named_person_quote");
   assert.equal(
     terminal.payload.report.findings.length,
     1,
@@ -2368,6 +3372,192 @@ test("planner quota outage mechanically reaches DuckDuckGo and preserves a harde
       event.payload?.diagnostics?.some((item) => item.code === "deterministic_finding_fallback_used"),
     ),
   );
+});
+
+test("provider outage preserves adult school context and binds only a matching institutional page", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Chinmay Bhat studies at Arizona State University",
+    requestedDepth: "deep",
+  });
+  const matchingUrl = "https://search.asu.edu/profile/chinmay-bhat";
+  const conflictingUrl = "https://people.example.edu/chinmay-bhat";
+  const duckDuckGoQueries = [];
+  let contextResultsReturned = false;
+  let matchingFetches = 0;
+  let conflictingFetches = 0;
+  let providerRequests = 0;
+  let searchProviderRequests = 0;
+
+  const fetch = async (request) => {
+    const url = new URL(String(request));
+    if (url.hostname === "html.duckduckgo.com") {
+      const query = url.searchParams.get("q") ?? "";
+      duckDuckGoQueries.push(query);
+      if (!contextResultsReturned && query.includes('"Arizona State University"')) {
+        contextResultsReturned = true;
+        return new Response(
+          [
+            `<a class="result__a" href="//duckduckgo.com/l/?uddg=${encodeURIComponent(matchingUrl)}&amp;rut=match">Chinmay Bhat | Arizona State University</a>`,
+            `<a class="result__a" href="//duckduckgo.com/l/?uddg=${encodeURIComponent(conflictingUrl)}&amp;rut=conflict">Chinmay Bhat | Example University</a>`,
+          ].join(""),
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      return new Response("<html><body>No safe results observed.</body></html>", {
+        headers: { "content-type": "text/html" },
+      });
+    }
+    if (url.hostname === "api.github.com") {
+      assert.equal(url.pathname, "/search/users");
+      return jsonResponse({ total_count: 0, incomplete_results: false, items: [] });
+    }
+    if (url.hostname === "www.google.com") {
+      return new Response("rate limited", {
+        status: 429,
+        headers: { "content-type": "text/html", "retry-after": "0" },
+      });
+    }
+    if (url.hostname === "api.semanticscholar.org") {
+      return jsonResponse({ total: 0, data: [] });
+    }
+    if (url.hostname === "api.crossref.org") {
+      return jsonResponse({ message: { "total-results": 0, items: [] } });
+    }
+    if (url.href === matchingUrl) {
+      matchingFetches += 1;
+      return new Response(
+        "<html><title>Chinmay Bhat | Arizona State University</title><main><h1>Chinmay Bhat</h1><p>Student researcher at Arizona State University.</p></main></html>",
+        { headers: { "content-type": "text/html" } },
+      );
+    }
+    if (url.href === conflictingUrl) {
+      conflictingFetches += 1;
+      return new Response(
+        "<html><title>Chinmay Bhat | Example University</title><main><h1>Chinmay Bhat</h1><p>Researcher at Example University.</p></main></html>",
+        { headers: { "content-type": "text/html" } },
+      );
+    }
+    assert.equal(url.hostname, "generativelanguage.googleapis.com");
+    providerRequests += 1;
+    if (url.pathname === "/v1beta/interactions") searchProviderRequests += 1;
+    return jsonResponse(
+      { error: { message: "forced provider quota exhaustion" } },
+      { status: 429, headers: { "retry-after": "0" } },
+    );
+  };
+
+  const events = [];
+  for await (const event of streamLiveResearch(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    provider: "gemini",
+    fetch,
+    resolveHostname: async () => ["93.184.216.34"],
+    clock: domain.createSequenceClock("2026-08-21T03:00:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("school-context-provider-outage"),
+  }))
+    events.push(event);
+
+  const terminal = events.at(-1);
+  assert.equal(terminal.name, "result.terminal");
+  assert.notEqual(terminal.payload.report.stop.reason, "fatal_error");
+  assert.ok(providerRequests >= 2, "planner and configured search failure remain explicitly accounted");
+  assert.ok(
+    duckDuckGoQueries.some((query) => query.includes('"Chinmay Bhat"') && query.includes('"Arizona State University"')),
+    JSON.stringify(duckDuckGoQueries),
+  );
+  assert.ok(
+    duckDuckGoQueries.some(
+      (query) => query.includes('"Arizona State University"') && query.includes("site:linkedin.com"),
+    ),
+    "the bounded fallback must execute a school-qualified professional-site query",
+  );
+  assert.ok(
+    duckDuckGoQueries.some(
+      (query) => query.includes('"Arizona State University"') && query.includes("site:scholar.google.com"),
+    ),
+    "the bounded fallback must execute a school-qualified scholarly-index query",
+  );
+  const contextFrontier = terminal.payload.report.searchGraph.frontier.filter(
+    (entry) => entry.queryHint.includes('"Chinmay Bhat"') && entry.queryHint.includes('"Arizona State University"'),
+  );
+  assert.ok(contextFrontier.length > 0);
+  assert.ok(
+    contextFrontier.every((entry) => entry.status === "exhausted"),
+    "a completed discovery query is exhausted after its finite leads are expanded; this is not a path-cost rejection",
+  );
+  assert.ok(contextFrontier.every((entry) => Number.isFinite(entry.pathCost) && entry.pathCost > 0));
+  assert.equal(matchingFetches, 1);
+  assert.equal(conflictingFetches, 1);
+
+  const runDiagnostics = events.flatMap((event) => event.payload?.diagnostics ?? []);
+  assert.equal(
+    searchProviderRequests,
+    4,
+    "one bounded four-attempt provider retry sequence must open the circuit for all later searches",
+  );
+  assert.ok(runDiagnostics.some((item) => item.code === "search_provider_quota_exhausted"));
+  assert.ok(runDiagnostics.some((item) => item.code === "search_provider_circuit_open"));
+  assert.ok(
+    runDiagnostics.some((item) => item.code === "google_html_rate_limited"),
+    "an optional secondary-search rate limit stays visible without rejecting a completed DuckDuckGo query",
+  );
+  assert.ok(runDiagnostics.some((item) => item.code === "secondary_public_search_failed_soft"));
+  assert.equal(
+    runDiagnostics.some((item) => item.code === "lead_lane_mismatch"),
+    false,
+  );
+
+  const directEvidence = terminal.payload.report.evidence.filter(
+    (evidence) => evidence.verificationMethod === "direct_fetch",
+  );
+  const matchingEvidence = directEvidence.find((evidence) => evidence.canonicalUrl === matchingUrl);
+  const conflictingEvidence = directEvidence.find((evidence) => evidence.canonicalUrl === conflictingUrl);
+  assert.ok(matchingEvidence, "the exact name-plus-school institutional page must survive the provider outage");
+  assert.ok(conflictingEvidence, "the same-name wrong-school page remains auditable on a quarantined branch");
+  const matchingDiscovery = terminal.payload.report.evidence.find(
+    (evidence) => evidence.sourceType === "search_result" && evidence.canonicalUrl === matchingUrl,
+  );
+  const matchingFetchFrontier = terminal.payload.report.searchGraph.frontier.find(
+    (entry) => entry.leadId === matchingDiscovery.attributes.leadId,
+  );
+  assert.equal(matchingFetchFrontier.sourceLaneId, "t3.institutional");
+  assert.equal(matchingFetchFrontier.status, "verified");
+  assert.equal(matchingEvidence.attributes.matchedTargetOrganization, "Arizona State University");
+  assert.notEqual(matchingEvidence.candidateId, conflictingEvidence.candidateId);
+  const matchingCandidate = terminal.payload.report.candidates.find(
+    (candidate) => candidate.id === matchingEvidence.candidateId,
+  );
+  assert.ok(
+    matchingCandidate.signals.some(
+      (signal) =>
+        signal.kind === "organization" &&
+        signal.normalizedValue === "arizona state university" &&
+        signal.sourceEvidenceId === matchingEvidence.id,
+    ),
+  );
+  const conflictingCandidate = terminal.payload.report.candidates.find(
+    (candidate) => candidate.id === conflictingEvidence.candidateId,
+  );
+  assert.equal(conflictingCandidate.normalizedName, "chinmay bhat");
+  assert.ok(runDiagnostics.some((item) => item.code === "candidate_binding_organization_missing"));
+  const candidateNodes = new Map(
+    terminal.payload.report.searchGraph.nodes
+      .filter((node) => node.kind === "candidate")
+      .map((node) => [node.candidateId, node.id]),
+  );
+  assert.ok(
+    terminal.payload.report.searchGraph.edges.some(
+      (edge) =>
+        edge.kind === "separates" &&
+        new Set([edge.fromNodeId, edge.toNodeId]).has(candidateNodes.get(matchingEvidence.candidateId)) &&
+        new Set([edge.fromNodeId, edge.toNodeId]).has(candidateNodes.get(conflictingEvidence.candidateId)),
+    ),
+    "same-name evidence without the requested school must remain on an explicitly separated branch",
+  );
+  assert.deepEqual(search.validateSearchGraph(terminal.payload.report.searchGraph), []);
+  assert.doesNotThrow(() => domain.parseInvestigationReport(terminal.payload.report));
 });
 
 test("planner and search outage executes every bounded standard OSINT query exactly once", async () => {

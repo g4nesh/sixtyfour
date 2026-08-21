@@ -13,18 +13,17 @@ import {
 import { asHardenedFetchError, createHardenedFetch, isBlockedIpAddress } from "./hardened-fetch";
 import { decodeHtmlTextForPolicy, projectInertHtml, replaceHtmlContainers } from "./inert-html";
 
-const DUCKDUCKGO_HTML_HOST = "html.duckduckgo.com";
-const DUCKDUCKGO_REDIRECT_HOSTS = new Set(["duckduckgo.com", "www.duckduckgo.com"]);
+const GOOGLE_SEARCH_HOST = "www.google.com";
 const MAX_RESULTS = 8;
 const MAX_RESPONSE_BYTES = 384_000;
 
-export interface DuckDuckGoHtmlResult {
+export interface GoogleHtmlResult {
   title: string;
   url: string;
 }
 
-export interface DuckDuckGoHtmlSearchData {
-  results: DuckDuckGoHtmlResult[];
+export interface GoogleHtmlSearchData {
+  results: GoogleHtmlResult[];
   observedResultAnchors: number;
   excludedResultAnchors: number;
   truncated: boolean;
@@ -34,12 +33,12 @@ function finish(
   startedAt: number,
   now: () => number,
   status: ToolStatus,
-  data: DuckDuckGoHtmlSearchData | null,
+  data: GoogleHtmlSearchData | null,
   diagnostics: ToolDiagnostic[],
   requests: number,
   bytesRead: number,
   incomplete: boolean,
-): ToolResult<DuckDuckGoHtmlSearchData> {
+): ToolResult<GoogleHtmlSearchData> {
   return {
     ok: status === "succeeded" || status === "partial" || status === "not_found",
     status,
@@ -57,15 +56,17 @@ function htmlAttribute(attributes: string, name: string): string | null {
 }
 
 function resultTitle(innerHtml: string): string | null {
-  const decoded = decodeHtmlTextForPolicy(innerHtml.replace(/<[^>]*>/g, " "));
+  const heading = innerHtml.match(/<h3\b[^>]*>([\s\S]*?)<\/h3\s*>/i)?.[1];
+  if (!heading) return null;
+  const decoded = decodeHtmlTextForPolicy(heading.replace(/<[^>]*>/g, " "));
   if (decoded === null) return null;
   const title = normalizeWhitespace(decoded.normalize("NFKC"));
   return title && !containsRestrictedPublicContent(title) ? title.slice(0, 320) : null;
 }
 
-function isDuckDuckGoHostname(hostname: string): boolean {
+function isGoogleHostname(hostname: string): boolean {
   const normalized = hostname.toLocaleLowerCase("en-US").replace(/\.$/, "");
-  return normalized === "duckduckgo.com" || normalized.endsWith(".duckduckgo.com");
+  return normalized === "google.com" || normalized.endsWith(".google.com");
 }
 
 function isUnsafeTargetHostname(hostname: string): boolean {
@@ -84,11 +85,11 @@ function isUnsafeTargetHostname(hostname: string): boolean {
 }
 
 /**
- * Accept either a direct HTTPS result or DuckDuckGo's exact `/l/` wrapper.
- * The wrapper is authorization metadata only: only its single decoded `uddg`
- * target survives, and no DuckDuckGo-internal URL can become a research lead.
+ * Accept a direct HTTPS result or Google's exact `/url` result wrapper. No
+ * Google-internal page, redirect chain, credentials, or restricted query can
+ * become a research capability.
  */
-export function unwrapDuckDuckGoResultUrl(value: string): string | null {
+export function unwrapGoogleResultUrl(value: string): string | null {
   const decoded = decodeHtmlTextForPolicy(value);
   if (decoded === null) return null;
   const href = decoded.trim();
@@ -96,35 +97,28 @@ export function unwrapDuckDuckGoResultUrl(value: string): string | null {
 
   let observed: URL;
   try {
-    if (href.startsWith("//")) observed = new URL(`https:${href}`);
-    else if (href.startsWith("/")) observed = new URL(href, "https://duckduckgo.com");
-    else observed = new URL(href);
+    observed = href.startsWith("/") ? new URL(href, `https://${GOOGLE_SEARCH_HOST}`) : new URL(href);
   } catch {
     return null;
   }
 
   let target = observed;
-  const observedHost = observed.hostname.toLocaleLowerCase("en-US").replace(/\.$/, "");
-  if (DUCKDUCKGO_REDIRECT_HOSTS.has(observedHost)) {
+  if (isGoogleHostname(observed.hostname)) {
     if (
       observed.protocol !== "https:" ||
       observed.username ||
       observed.password ||
       observed.port ||
-      (observed.pathname !== "/l/" && observed.pathname !== "/l") ||
-      observed.searchParams.getAll("uddg").length !== 1 ||
-      [...observed.searchParams.keys()].some((key) => key !== "uddg" && key !== "rut")
+      observed.pathname !== "/url"
     )
       return null;
-    const encodedTarget = observed.searchParams.get("uddg");
-    if (!encodedTarget || encodedTarget.length > 8_192) return null;
+    const candidates = [...observed.searchParams.getAll("q"), ...observed.searchParams.getAll("url")].filter(Boolean);
+    if (candidates.length !== 1 || candidates[0].length > 8_192) return null;
     try {
-      target = new URL(encodedTarget);
+      target = new URL(candidates[0]);
     } catch {
       return null;
     }
-  } else if (isDuckDuckGoHostname(observedHost)) {
-    return null;
   }
 
   if (
@@ -132,7 +126,7 @@ export function unwrapDuckDuckGoResultUrl(value: string): string | null {
     target.username ||
     target.password ||
     (target.port && target.port !== "443") ||
-    isDuckDuckGoHostname(target.hostname) ||
+    isGoogleHostname(target.hostname) ||
     isUnsafeTargetHostname(target.hostname) ||
     urlContainsRestrictedParameters(target.href) ||
     isDeniedResearchSource(target.href)
@@ -142,20 +136,19 @@ export function unwrapDuckDuckGoResultUrl(value: string): string | null {
   return target.href;
 }
 
-function parseResults(html: string): DuckDuckGoHtmlSearchData {
-  const results: DuckDuckGoHtmlResult[] = [];
+function parseResults(html: string): GoogleHtmlSearchData {
+  const results: GoogleHtmlResult[] = [];
   const seen = new Set<string>();
   let observedResultAnchors = 0;
   let excludedResultAnchors = 0;
   replaceHtmlContainers(projectInertHtml(html).passiveHtml, "a", (anchor) => {
-    const className = htmlAttribute(anchor.attributes, "class");
-    if (!className?.split(/\s+/).includes("result__a")) return " ";
+    const title = resultTitle(anchor.body);
+    if (!title) return " ";
     observedResultAnchors += 1;
     if (results.length >= MAX_RESULTS) return " ";
     const href = htmlAttribute(anchor.attributes, "href");
-    const title = resultTitle(anchor.body);
-    const url = href ? unwrapDuckDuckGoResultUrl(href) : null;
-    if (!title || !url || seen.has(url)) {
+    const url = href ? unwrapGoogleResultUrl(href) : null;
+    if (!url || seen.has(url)) {
       excludedResultAnchors += 1;
       return " ";
     }
@@ -171,15 +164,18 @@ function parseResults(html: string): DuckDuckGoHtmlSearchData {
   };
 }
 
+function challengeObserved(html: string): boolean {
+  return /(?:\/sorry\/|recaptcha|unusual traffic|automated queries|before you continue to google)/i.test(html);
+}
+
 /**
- * Keyless public discovery using DuckDuckGo's HTML-only search endpoint.
- * Result snippets and response HTML never leave this adapter; downstream code
- * receives at most eight bounded public titles and safely unwrapped URLs.
+ * A bounded, keyless Google HTML fallback. It never executes JavaScript,
+ * accepts cookies, submits consent/CAPTCHA forms, or retains snippets/raw HTML.
  */
-export async function searchDuckDuckGoHtml(
+export async function searchGoogleHtml(
   queryValue: string,
   context: ToolContext = {},
-): Promise<ToolResult<DuckDuckGoHtmlSearchData>> {
+): Promise<ToolResult<GoogleHtmlSearchData>> {
   const now = toolClock(context);
   const startedAt = now();
   const query = normalizeWhitespace(queryValue);
@@ -193,7 +189,7 @@ export async function searchDuckDuckGoHtml(
         {
           code: "unsafe_public_search_query",
           severity: "warning",
-          message: "The keyless public-search fallback requires one bounded public-professional query.",
+          message: "The Google public-search fallback requires one bounded public-professional query.",
           retryable: false,
         },
       ],
@@ -212,8 +208,7 @@ export async function searchDuckDuckGoHtml(
         {
           code: "dns_validation_unavailable",
           severity: "warning",
-          message:
-            "The keyless public-search fallback was skipped because this runtime cannot validate DuckDuckGo's DNS answers.",
+          message: "The Google public-search fallback was skipped because DNS answers cannot be validated.",
           retryable: false,
         },
       ],
@@ -223,23 +218,27 @@ export async function searchDuckDuckGoHtml(
     );
   }
 
-  const searchUrl = new URL(`https://${DUCKDUCKGO_HTML_HOST}/html/`);
+  const searchUrl = new URL(`https://${GOOGLE_SEARCH_HOST}/search`);
   searchUrl.searchParams.set("q", query);
+  searchUrl.searchParams.set("num", "10");
+  searchUrl.searchParams.set("hl", "en");
+  searchUrl.searchParams.set("filter", "0");
+  searchUrl.searchParams.set("safe", "active");
   const searchFetch = createHardenedFetch({
-    allowedHostnames: [DUCKDUCKGO_HTML_HOST],
+    allowedHostnames: [GOOGLE_SEARCH_HOST],
     resolveHostname: context.resolveHostname,
     allowedMethods: ["GET"],
     allowedMimeTypes: ["text/html"],
     timeoutMs: 8_000,
     maxBytes: MAX_RESPONSE_BYTES,
     maxRedirects: 0,
-    maxRetries: 1,
+    maxRetries: 0,
     maxRetryAfterMs: 1_000,
     fetch: context.fetch,
     clock: now,
     beforeRequest: () =>
       reserveToolBudget(context, {
-        tool: "duckduckgo_html_search",
+        tool: "google_html_search",
         networkRequests: 1,
         expectedBytes: MAX_RESPONSE_BYTES,
       }),
@@ -264,22 +263,16 @@ export async function searchDuckDuckGoHtml(
       null,
       [
         {
-          code: hardened?.code ?? "duckduckgo_html_unavailable",
+          code: hardened?.code ?? "google_html_unavailable",
           severity: budgetExhausted || hardened?.code === "aborted" ? "info" : "warning",
           message: budgetExhausted
-            ? "The keyless public-search fallback stopped at the network-request budget."
+            ? "Google public search stopped at the network-request budget."
             : hardened?.code === "aborted"
-              ? "The keyless public-search fallback was canceled."
-              : "The keyless public-search fallback could not be fetched safely.",
+              ? "Google public search was canceled."
+              : "Google public search could not be fetched safely.",
           retryable: hardened?.retryable ?? true,
           ...(hardened
-            ? {
-                details: {
-                  attempt: hardened.attempt,
-                  requests: hardened.requests,
-                  httpStatus: hardened.status,
-                },
-              }
+            ? { details: { attempt: hardened.attempt, requests: hardened.requests, httpStatus: hardened.status } }
             : {}),
         },
       ],
@@ -297,9 +290,9 @@ export async function searchDuckDuckGoHtml(
       null,
       [
         {
-          code: "duckduckgo_html_rate_limited",
+          code: "google_html_rate_limited",
           severity: "warning",
-          message: "DuckDuckGo rate-limited the keyless public-search fallback.",
+          message: "Google rate-limited the bounded public-search request; Atlas did not retry or bypass it.",
           retryable: true,
         },
       ],
@@ -316,9 +309,9 @@ export async function searchDuckDuckGoHtml(
       null,
       [
         {
-          code: "duckduckgo_html_http_error",
+          code: "google_html_http_error",
           severity: "warning",
-          message: `The keyless public-search fallback returned HTTP ${fetched.response.status}.`,
+          message: `Google public search returned HTTP ${fetched.response.status}.`,
           retryable: fetched.response.status >= 500,
         },
       ],
@@ -339,10 +332,29 @@ export async function searchDuckDuckGoHtml(
       null,
       [
         {
-          code: "duckduckgo_html_decode_failed",
+          code: "google_html_decode_failed",
           severity: "warning",
-          message: "The bounded public-search response could not be decoded as HTML.",
+          message: "The bounded Google search response could not be decoded as HTML.",
           retryable: false,
+        },
+      ],
+      fetched.requests,
+      fetched.bytesRead,
+      true,
+    );
+  }
+  if (challengeObserved(html)) {
+    return finish(
+      startedAt,
+      now,
+      "failed",
+      null,
+      [
+        {
+          code: "google_html_challenge_observed",
+          severity: "warning",
+          message: "Google returned a consent or anti-automation challenge; Atlas did not interact with or bypass it.",
+          retryable: true,
         },
       ],
       fetched.requests,
@@ -354,29 +366,27 @@ export async function searchDuckDuckGoHtml(
   const data = parseResults(html);
   const incomplete = data.excludedResultAnchors > 0 || data.truncated;
   const resultDiagnostics: ToolDiagnostic[] = [];
-  if (data.excludedResultAnchors > 0) {
+  if (data.excludedResultAnchors > 0)
     resultDiagnostics.push({
-      code: "duckduckgo_result_rows_excluded",
+      code: "google_result_rows_excluded",
       severity: "info",
-      message: "Unsafe, malformed, duplicate, or restricted public-search result rows were excluded.",
+      message: "Unsafe, malformed, duplicate, or restricted Google result rows were excluded.",
       retryable: false,
       details: { excludedResultAnchors: data.excludedResultAnchors },
     });
-  }
-  if (data.truncated) {
+  if (data.truncated)
     resultDiagnostics.push({
-      code: "duckduckgo_result_limit_reached",
+      code: "google_result_limit_reached",
       severity: "info",
-      message: "The public-search result set was bounded to eight safe leads.",
+      message: "Google public-search results were bounded to eight safe leads.",
       retryable: false,
       details: { maximumResults: MAX_RESULTS },
     });
-  }
   if (data.results.length === 0) {
     resultDiagnostics.push({
-      code: "duckduckgo_results_not_observed",
+      code: "google_results_not_observed",
       severity: "info",
-      message: "The bounded keyless public search returned no safe HTTPS result leads.",
+      message: "The bounded Google public search returned no safe HTTPS result leads.",
       retryable: false,
     });
     return finish(
