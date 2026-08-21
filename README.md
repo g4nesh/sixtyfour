@@ -1,6 +1,6 @@
 # Atlas
 
-Hi Henry and Saarth! This is the takehome for Sixtyfour's internship where I (along with Codex and Claude) tried to replicate Atlas and make it have temporal presence (more about that later). 
+Hi Henry and Saarth! This is the takehome for Sixtyfour's internship where I (along with Codex and Claude) tried to replicate Atlas and make it be a SOTA OSINT agent (more about that later). 
 
 My version of Atlas is an auditable public-source research agent for finding more about people. Its live scheduler performs a visible best-first search over an execution graph: it expands the lowest-cost legal source frontier first, keeps rejected and ambiguous branches, and reserves a small deterministic Metropolis-Hastings mutation lane for useful adjacent exploration (following the basic principles of Djikstra's algorithm). It separates same-name candidates, attaches every finding to direct evidence, exposes the full execution map, and stops when identity or coverage is insufficient.
 
