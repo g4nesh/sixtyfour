@@ -36,8 +36,6 @@ Open `http://localhost:3000` and enter a target such as:
 
 The interface streams the live search graph, source frontier, tool activity, evidence decisions, candidate resolution, and final report. Reports can be downloaded as JSON, Markdown, PDF, or trace NDJSON.
 
-Never expose provider keys through `NEXT_PUBLIC_*` variables.
-
 ## CLI and API
 
 ```bash
