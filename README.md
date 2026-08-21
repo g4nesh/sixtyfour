@@ -89,7 +89,7 @@ When the user explicitly supplies an email address, Atlas can search public GitH
 
 ### Historical profile analysis
 
-For an already-verified public URL, Atlas can inspect Wayback Machine captures and report when professional information appeared, disappeared, or changed.
+For an already-verified public URL, Atlas can inspect Wayback Machine (https://web.archive.org/) captures and report when professional information appeared, disappeared, or changed.
 This is the most novel OSINT method that I created and it provides the search query with past historical data about any webpage, adding on to the metadata from the past. This is especially important for things like personal websites which change often and are kept in the Wayback Machine's digital archive. Referencing the past data about a person can lead us to create a full map of their digital history which is one of the biggest things when creating a profile report.  
 
 ### Public page footprint
