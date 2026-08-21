@@ -27,6 +27,8 @@ import {
 } from "../domain/types";
 import {
   compiledQueriesForLane,
+  deterministicSourceTypeForUrl,
+  discoveryLeadSchedulingDecision,
   isDeniedResearchSource,
   isDeniedResearchTool,
   sourceLaneById,
@@ -34,7 +36,9 @@ import {
   sourceLaneQueryHint,
   sourceLanesForTarget,
   githubHandleFromCanonicalProfileUrl,
+  type DiscoveryLeadSchedulingDecision,
   type SourceLane,
+  type SourceTierContext,
 } from "./source-hierarchy";
 
 const MINIMUM_COST = 0.000001;
@@ -49,6 +53,7 @@ export interface SearchKernelEvent {
     | "frontier.pruned"
     | "frontier.expanded"
     | "frontier.exhausted"
+    | "frontier.quality_probe_selected"
     | "source.tier_advanced"
     | "mutation.proposed"
     | "mutation.accepted"
@@ -869,6 +874,159 @@ function isClassifiedLeadDependency(graph: SearchGraph, entry: SearchFrontierEnt
   );
 }
 
+const LEAD_SCHEDULING_DISPOSITIONS = new Set<DiscoveryLeadSchedulingDecision["disposition"]>([
+  "reject",
+  "deprioritize",
+  "neutral",
+  "prioritize",
+]);
+
+function discoveryLeadNode(graph: SearchGraph, entry: SearchFrontierEntry): SearchGraphNode | null {
+  if (!isClassifiedLeadDependency(graph, entry) || entry.candidateId === null) return null;
+  return (
+    graph.nodes.find(
+      (node) =>
+        node.kind === "source" &&
+        node.candidateId === entry.candidateId &&
+        node.evidenceId !== null &&
+        node.data.sourceType === "search_result" &&
+        node.data.leadId === entry.leadId,
+    ) ?? null
+  );
+}
+
+function schedulingDecisionForLead(
+  graph: SearchGraph,
+  entry: SearchFrontierEntry,
+  contexts: Readonly<Record<string, SourceTierContext>> | undefined,
+  persistedDecisions: Readonly<Record<string, DiscoveryLeadSchedulingDecision>> | undefined,
+): DiscoveryLeadSchedulingDecision | null {
+  const node = discoveryLeadNode(graph, entry);
+  if (!node || entry.candidateId === null || typeof node.data.sourceUrl !== "string") return null;
+  const deterministic = discoveryLeadSchedulingDecision(
+    node.data.sourceUrl,
+    node.label,
+    contexts?.[entry.candidateId] ?? {},
+  );
+  const persisted = entry.leadId ? persistedDecisions?.[entry.leadId] : undefined;
+  // The exact-subject slug probe is stamped only by the server-side citation
+  // qualifier after it verifies the exact T1 baseline query and bounded path
+  // grammar. The general URL/title classifier intentionally remains neutral
+  // for a generic result title, so this one persisted scheduling hint cannot
+  // be reproduced here. It changes traversal order only; source tier, type,
+  // trust, candidate binding, and fetch admission remain unchanged.
+  if (persisted?.disposition === "prioritize" && persisted.reason === "exact_subject_slug_probe") {
+    return persisted;
+  }
+  return persisted &&
+    LEAD_SCHEDULING_DISPOSITIONS.has(persisted.disposition) &&
+    persisted.disposition === deterministic.disposition &&
+    persisted.reason === deterministic.reason
+    ? persisted
+    : deterministic;
+}
+
+const CANONICAL_PERSON_PROFILE_SOURCE_TYPES = new Set<EvidenceSourceType>([
+  "official_profile",
+  "company_page",
+  "professional_profile",
+]);
+
+function normalizedPersonSlug(value: string): string {
+  return normalizeComparable(value)
+    .replace(/[@.+_-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function oneSegmentExactPersonSlug(value: string, context: SourceTierContext): boolean {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      (url.port && url.port !== "443") ||
+      url.search ||
+      url.hash
+    )
+      return false;
+    const segments = url.pathname.split("/").filter(Boolean);
+    if (segments.length !== 1) return false;
+    const decoded = decodeURIComponent(segments[0]);
+    if (decoded.includes("/") || decoded.includes("\\")) return false;
+    const slug = normalizedPersonSlug(decoded);
+    if (!slug) return false;
+    return (context.personNames ?? []).some((name) => normalizedPersonSlug(name) === slug);
+  } catch {
+    return false;
+  }
+}
+
+function canonicalPersonProfileRoute(value: string, context: SourceTierContext): boolean {
+  const deterministicType = deterministicSourceTypeForUrl(value, context);
+  if (deterministicType && CANONICAL_PERSON_PROFILE_SOURCE_TYPES.has(deterministicType)) return true;
+  if (githubHandleFromCanonicalProfileUrl(value)) return true;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname.toLocaleLowerCase("en-US") !== "scholar.google.com" ||
+      url.pathname !== "/citations" ||
+      url.username ||
+      url.password ||
+      (url.port && url.port !== "443")
+    )
+      return false;
+    const user = url.searchParams.get("user") ?? "";
+    const allowedParameters = new Set(["user", "hl"]);
+    return (
+      /^[A-Za-z0-9_-]{4,64}$/.test(user) && [...url.searchParams.keys()].every((key) => allowedParameters.has(key))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function qualityProbeRank(
+  graph: SearchGraph,
+  entry: SearchFrontierEntry,
+  context: SourceTierContext,
+  persistedDecisions: Readonly<Record<string, DiscoveryLeadSchedulingDecision>> | undefined,
+  decision: DiscoveryLeadSchedulingDecision | null,
+): number {
+  const persisted = entry.leadId ? persistedDecisions?.[entry.leadId] : undefined;
+  if (persisted?.disposition === "prioritize" && persisted.reason === "exact_subject_slug_probe") return 0;
+  const sourceUrl = discoveryLeadNode(graph, entry)?.data.sourceUrl;
+  if (typeof sourceUrl !== "string") return 4;
+  if (canonicalPersonProfileRoute(sourceUrl, context)) return 1;
+  if (oneSegmentExactPersonSlug(sourceUrl, context)) return 2;
+  if (decision?.disposition === "prioritize" && decision.reason === "candidate_bio_path") return 3;
+  return 4;
+}
+
+/**
+ * Order only one optional quality-probe selection at a time. The rank is
+ * deliberately trust-neutral: it never changes path cost, source tier,
+ * candidate scope, fetch authorization, evidence admission, or confidence.
+ */
+function compareQualityProbeEntries(
+  graph: SearchGraph,
+  left: SearchFrontierEntry,
+  right: SearchFrontierEntry,
+  contexts: Readonly<Record<string, SourceTierContext>> | undefined,
+  persistedDecisions: Readonly<Record<string, DiscoveryLeadSchedulingDecision>> | undefined,
+  decisionForLead: (entry: SearchFrontierEntry) => DiscoveryLeadSchedulingDecision | null,
+): number {
+  const leftContext = (left.candidateId ? contexts?.[left.candidateId] : undefined) ?? {};
+  const rightContext = (right.candidateId ? contexts?.[right.candidateId] : undefined) ?? {};
+  return (
+    qualityProbeRank(graph, left, leftContext, persistedDecisions, decisionForLead(left)) -
+      qualityProbeRank(graph, right, rightContext, persistedDecisions, decisionForLead(right)) ||
+    compareFrontierEntries(left, right)
+  );
+}
+
 function isGroundedKeybaseDependency(graph: SearchGraph, entry: SearchFrontierEntry): boolean {
   if (
     !isKeybaseSpecialistEntry(entry) ||
@@ -889,6 +1047,22 @@ function isGroundedKeybaseDependency(graph: SearchGraph, entry: SearchFrontierEn
 export interface FrontierSelectionOptions {
   /** Defer only optional candidate-link fetches until finite compiler searches have run once. */
   reserveCanonicalCompilerBreadth?: boolean;
+  /**
+   * Run a bounded trust-neutral, source-shape-prioritized discovery lead
+   * before ordinary candidate fanout. This changes traversal order only:
+   * source tier, evidence admission, and candidate scope remain immutable.
+   */
+  prioritizeDiscoveryLeadProbe?: boolean;
+  /** Hard cap for prioritized probe selections. Defaults to one and may never exceed two. */
+  maxPrioritizedDiscoveryLeadProbes?: number;
+  /**
+   * Entry IDs previously selected through the explicit quality-probe route.
+   * When supplied, this server-owned run state is authoritative; ordinary
+   * rejected/exhausted prioritized leads are not probe attempts.
+   */
+  attemptedPrioritizedDiscoveryLeadProbeEntryIds?: ReadonlySet<string>;
+  discoveryLeadContexts?: Readonly<Record<string, SourceTierContext>>;
+  discoveryLeadSchedulingDecisions?: Readonly<Record<string, DiscoveryLeadSchedulingDecision>>;
 }
 
 export function selectFrontierBatch(
@@ -898,6 +1072,19 @@ export function selectFrontierBatch(
   options: FrontierSelectionOptions = {},
 ): SearchKernelResult<SearchFrontierEntry[]> {
   if (!Number.isInteger(limit) || limit < 0) throw new TypeError("frontier batch limit must be a non-negative integer");
+  const maximumPrioritizedDiscoveryLeadProbes = options.maxPrioritizedDiscoveryLeadProbes ?? 1;
+  if (
+    !Number.isInteger(maximumPrioritizedDiscoveryLeadProbes) ||
+    maximumPrioritizedDiscoveryLeadProbes < 0 ||
+    maximumPrioritizedDiscoveryLeadProbes > 2
+  )
+    throw new TypeError("prioritized discovery lead probe limit must be an integer from zero to two");
+  if (
+    options.prioritizeDiscoveryLeadProbe === true &&
+    options.attemptedPrioritizedDiscoveryLeadProbeEntryIds === undefined
+  ) {
+    throw new TypeError("prioritized discovery lead probes require explicit attempted entry IDs");
+  }
   const graph = cloneJson(graphValue);
   const queued = graph.frontier
     .filter((entry) => entry.status === "queued" || entry.status === "mutated")
@@ -921,6 +1108,21 @@ export function selectFrontierBatch(
       (entry.mutation === null || mutationSelectionLegal(graph))
     );
   });
+  const leadSchedulingDecisions = new Map<string, DiscoveryLeadSchedulingDecision | null>();
+  const leadSchedulingDecision = (entry: SearchFrontierEntry): DiscoveryLeadSchedulingDecision | null => {
+    if (!leadSchedulingDecisions.has(entry.id)) {
+      leadSchedulingDecisions.set(
+        entry.id,
+        schedulingDecisionForLead(
+          graph,
+          entry,
+          options.discoveryLeadContexts,
+          options.discoveryLeadSchedulingDecisions,
+        ),
+      );
+    }
+    return leadSchedulingDecisions.get(entry.id) ?? null;
+  };
   const minimumEligibleTier =
     initiallyExecutable.length > 0
       ? initiallyExecutable.reduce<SourceTier>(
@@ -971,9 +1173,73 @@ export function selectFrontierBatch(
     options.reserveCanonicalCompilerBreadth === true &&
     nextCanonicalTier !== null &&
     normallyEligible.some(isCandidateLeadFetchEntry);
+  const qualitySchedulingEnabled = options.prioritizeDiscoveryLeadProbe === true;
+  const pendingMandatoryDependency = initiallyExecutable.some(
+    (entry) => isExactCandidateUrlDependency(entry) || isGroundedKeybaseDependency(graph, entry),
+  );
+  const attemptedPriorityProbeCount = options.attemptedPrioritizedDiscoveryLeadProbeEntryIds?.size ?? 0;
+  const priorityProbeEntries =
+    qualitySchedulingEnabled &&
+    pendingCanonicalSearches.length === 0 &&
+    !pendingMandatoryDependency &&
+    normallyEligible.length > 0 &&
+    normallyEligible.every(isCandidateLeadFetchEntry) &&
+    attemptedPriorityProbeCount < maximumPrioritizedDiscoveryLeadProbes
+      ? initiallyExecutable
+          .filter((entry) => leadSchedulingDecision(entry)?.disposition === "prioritize")
+          .sort((left, right) =>
+            compareQualityProbeEntries(
+              graph,
+              left,
+              right,
+              options.discoveryLeadContexts,
+              options.discoveryLeadSchedulingDecisions,
+              leadSchedulingDecision,
+            ),
+          )
+          .slice(0, 1)
+      : [];
+  const normallyEligibleNonDeprioritizedLeads = qualitySchedulingEnabled
+    ? normallyEligible.filter(
+        (entry) =>
+          isCandidateLeadFetchEntry(entry) &&
+          !["deprioritize", "reject"].includes(leadSchedulingDecision(entry)?.disposition ?? "neutral"),
+      )
+    : [];
+  const normallyEligibleAreOnlyDeprioritizedLeads =
+    qualitySchedulingEnabled &&
+    normallyEligible.length > 0 &&
+    normallyEligible.every(
+      (entry) =>
+        isCandidateLeadFetchEntry(entry) &&
+        ["deprioritize", "reject"].includes(leadSchedulingDecision(entry)?.disposition ?? "neutral"),
+    );
+  const nonDeprioritizedLeadDependencies = initiallyExecutable.filter(
+    (entry) =>
+      qualitySchedulingEnabled &&
+      isClassifiedLeadDependency(graph, entry) &&
+      !["deprioritize", "reject"].includes(leadSchedulingDecision(entry)?.disposition ?? "neutral"),
+  );
+  const nextNonDeprioritizedTier =
+    nonDeprioritizedLeadDependencies.length > 0
+      ? nonDeprioritizedLeadDependencies.reduce<SourceTier>(
+          (value, entry) => Math.min(value, entry.sourceTier) as SourceTier,
+          nonDeprioritizedLeadDependencies[0].sourceTier,
+        )
+      : null;
+  const deferredQualityEntries =
+    normallyEligibleAreOnlyDeprioritizedLeads && nextNonDeprioritizedTier !== null
+      ? nonDeprioritizedLeadDependencies.filter((entry) => entry.sourceTier === nextNonDeprioritizedTier)
+      : [];
   const eligible = reserveCanonicalBreadth
     ? pendingCanonicalSearches.filter((entry) => entry.sourceTier === nextCanonicalTier)
-    : normallyEligible;
+    : priorityProbeEntries.length > 0
+      ? priorityProbeEntries
+      : normallyEligibleNonDeprioritizedLeads.length > 0 && normallyEligible.every(isCandidateLeadFetchEntry)
+        ? normallyEligibleNonDeprioritizedLeads
+        : deferredQualityEntries.length > 0
+          ? deferredQualityEntries
+          : normallyEligible;
   const selected: SearchFrontierEntry[] = [];
   let selectedMutations = 0;
   const selectedIds = new Set<string>();
@@ -1013,6 +1279,23 @@ export function selectFrontierBatch(
       mutated: Boolean(entry.mutation),
     },
   }));
+  const selectedQualityProbe = selected.find((entry) => priorityProbeEntries.some((probe) => probe.id === entry.id));
+  if (selectedQualityProbe) {
+    const decision = leadSchedulingDecision(selectedQualityProbe);
+    events.push({
+      name: "frontier.quality_probe_selected",
+      payload: {
+        frontierEntryId: selectedQualityProbe.id,
+        actionId: selectedQualityProbe.actionId,
+        sourceTier: selectedQualityProbe.sourceTier,
+        sourceLaneId: selectedQualityProbe.sourceLaneId,
+        leadId: selectedQualityProbe.leadId ?? null,
+        schedulingDisposition: decision?.disposition ?? "neutral",
+        schedulingReason: decision?.reason ?? "neutral",
+        probeOrdinal: attemptedPriorityProbeCount + 1,
+      },
+    });
+  }
   const selectedTier = selected[0]?.sourceTier ?? null;
   const selectedHigherTierDependency =
     dependencyTier !== null &&
@@ -1022,6 +1305,8 @@ export function selectFrontierBatch(
   if (
     selectedTier !== null &&
     !selectedHigherTierDependency &&
+    !selectedQualityProbe &&
+    deferredQualityEntries.length === 0 &&
     (graph.currentSourceTier === null || selectedTier > graph.currentSourceTier)
   ) {
     const previousTier = graph.currentSourceTier;

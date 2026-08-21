@@ -13,10 +13,10 @@ after(async () => vite.close());
 
 const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 const agent = await vite.ssrLoadModule("/lib/agent/index.ts");
-const { createLiveDependencies, gateExtractedCandidate } = await vite.ssrLoadModule("/lib/live/orchestrator.ts");
+const { createLiveDependencies } = await vite.ssrLoadModule("/lib/live/orchestrator.ts");
 
-const ROLE_URL = "https://profiles.example/suzie-bishop";
-const UNBOUND_URL = "https://profiles.example/mallory-guess";
+const ROLE_URL = "https://www.linkedin.com/in/suzie-bishop";
+const UNBOUND_URL = "https://www.linkedin.com/in/mallory-guess";
 
 function jsonResponse(value) {
   return new Response(JSON.stringify(value), {
@@ -210,8 +210,8 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
       },
       candidateId: candidate.id,
       budgetClass: "fetch",
-      sourceTier: 6,
-      sourceLaneId: "t6.candidate_public_source",
+      sourceTier: 2,
+      sourceLaneId: "t2.structured_professional",
       pathCost: 1,
       mutated: false,
     },
@@ -246,7 +246,7 @@ test("role-only search bootstraps only an attested quarantined candidate, then d
   assert.equal(admission.evidence.claim, direct.evidence[0].excerpt);
 });
 
-test("a plain-name first page is quarantined with its quote and can be corroborated without contaminating the name candidate", async () => {
+test("a plain-name document remains discovery-only without contaminating the name candidate", async () => {
   const sourceUrl = "https://first.example/chris-anderson";
   const input = {
     schemaVersion: domain.SCHEMA_VERSION,
@@ -352,27 +352,31 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
   assert.equal(direct.status, "partial");
   assert.equal(extractionRequests, 0, "the exact fetched sentence must not require model extraction");
   assert.equal(
-    direct.diagnostics.some((item) => item.code === "candidate_binding_strong_binding_missing"),
+    direct.diagnostics.some((item) => item.code === "non_profile_subject_mention_discovery_only"),
     true,
   );
-  assert.equal(direct.candidates, undefined);
-  assert.equal(direct.candidateBranches.length, 1);
-  assert.equal(direct.candidateBranches[0].parentCandidateId, primary.id);
-  assert.equal(direct.candidateBranches[0].reason, "fetched_subject_unverified");
+  assert.deepEqual(direct.candidates, []);
+  assert.deepEqual(direct.candidateSignals, []);
+  assert.equal(direct.candidateBranches, undefined);
   assert.equal(direct.evidence.length, 2);
   const metadataObservation = direct.evidence.find((item) => item.attributes.metadataObservation === true);
   assert.ok(metadataObservation);
   assert.equal(metadataObservation.candidateId, primary.id);
   assert.equal(metadataObservation.disposition, "discovery_only");
   assert.equal(metadataObservation.excerpt ?? null, null);
-  const quarantinedDraft = direct.evidence.find((item) => typeof item.candidateRef === "string");
-  assert.ok(quarantinedDraft);
-  assert.equal(quarantinedDraft.candidateId, undefined);
-  assert.equal(quarantinedDraft.attributes.quarantinedFromCandidateId, primary.id);
-  assert.equal(quarantinedDraft.excerpt, "Chris Anderson works at Acme Labs.");
-  assert.equal(quarantinedDraft.attributes.extractedOrganization, "acme labs");
-  assert.equal(quarantinedDraft.reliability, 0.55);
-  assert.equal(quarantinedDraft.spoofable, true);
+  const discoveryDraft = direct.evidence.find((item) => item.verificationMethod === "direct_fetch");
+  assert.ok(discoveryDraft);
+  assert.equal(discoveryDraft.candidateId, primary.id);
+  assert.equal(discoveryDraft.candidateRef, undefined);
+  assert.equal(discoveryDraft.disposition, "discovery_only");
+  assert.equal(discoveryDraft.excerpt, "Chris Anderson works at Acme Labs.");
+  assert.equal(discoveryDraft.attributes.extractedOrganization, "acme labs");
+  assert.equal(discoveryDraft.attributes.identityBinding, false);
+  assert.equal(discoveryDraft.attributes.findingAuthority, false);
+  assert.equal(discoveryDraft.attributes.profileAuthority, false);
+  assert.equal(discoveryDraft.attributes.nonProfileSubjectMention, true);
+  assert.equal(discoveryDraft.reliability, 0);
+  assert.equal(discoveryDraft.spoofable, true);
   assert.equal(
     engine
       .snapshot()
@@ -380,29 +384,5 @@ test("a plain-name first page is quarantined with its quote and can be corrobora
     true,
   );
 
-  const quarantined = engine.addCandidate(direct.candidateBranches[0].candidate).candidate;
-  const quoted = { ...quarantinedDraft };
-  delete quoted.candidateRef;
-  assert.equal(engine.admitEvidence({ ...quoted, candidateId: quarantined.id }).admitted, true);
-  assert.notEqual(quarantined.id, primary.id);
-  assert.deepEqual(
-    gateExtractedCandidate(
-      engine.snapshot(),
-      quarantined.id,
-      "Chris Anderson",
-      "Acme Labs",
-      "https://second.example/chris-anderson",
-    ),
-    { allowed: true, reason: "matched" },
-  );
-  assert.deepEqual(
-    gateExtractedCandidate(
-      engine.snapshot(),
-      quarantined.id,
-      "Chris Anderson",
-      "Beta Labs",
-      "https://second.example/chris-anderson",
-    ),
-    { allowed: false, reason: "organization_mismatch" },
-  );
+  assert.equal(engine.snapshot().candidates.length, 1, "a plain document mention cannot mint a person branch");
 });

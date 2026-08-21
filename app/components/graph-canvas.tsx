@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -77,6 +77,14 @@ const statusColor: Record<GraphVisualStatus, string> = {
 const GRAPH_FIT_MIN_ZOOM = 0.46;
 const GRAPH_FIT_MIN_ZOOM_COMPACT = 0.62;
 const GRAPH_COMPACT_MEDIA_QUERY = "(max-width: 700px)";
+// React Flow observes every mounted custom node for dimension changes. Our
+// cards are fixed-size, so mounting an entire large live graph only creates
+// redundant ResizeObserver work. Pre-arm virtualization before a stream enters
+// the 80–120 node transition range: append-only updates then retain one render
+// mode instead of reconfiguring a large shared observer mid-run. Panning still
+// reveals every canonical node and edge.
+const GRAPH_VIRTUALIZATION_PREARM_THRESHOLD = 64;
+const defaultEdgeOptions = { interactionWidth: 18 } as const;
 
 function readableFitMinimum(): number {
   return window.matchMedia(GRAPH_COMPACT_MEDIA_QUERY).matches ? GRAPH_FIT_MIN_ZOOM_COMPACT : GRAPH_FIT_MIN_ZOOM;
@@ -101,6 +109,25 @@ function flowNodes(
         height: GRAPH_NODE_HEIGHT,
         initialWidth: GRAPH_NODE_WIDTH,
         initialHeight: GRAPH_NODE_HEIGHT,
+        measured: { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT },
+        handles: [
+          {
+            type: "target",
+            position: Position.Left,
+            x: -3,
+            y: GRAPH_NODE_HEIGHT / 2 - 3,
+            width: 6,
+            height: 6,
+          },
+          {
+            type: "source",
+            position: Position.Right,
+            x: GRAPH_NODE_WIDTH - 3,
+            y: GRAPH_NODE_HEIGHT / 2 - 3,
+            width: 6,
+            height: 6,
+          },
+        ],
         style: { width: GRAPH_NODE_WIDTH, height: GRAPH_NODE_HEIGHT },
         data: {
           source: node,
@@ -167,7 +194,7 @@ function AtlasGraphEdge({ id, data, style, markerEnd, interactionWidth }: EdgePr
   return <BaseEdge id={id} path={data.path} style={style} markerEnd={markerEnd} interactionWidth={interactionWidth} />;
 }
 
-function AtlasGraphNode({ data, selected }: NodeProps<AtlasFlowNode>) {
+const AtlasGraphNode = memo(function AtlasGraphNode({ data, selected }: NodeProps<AtlasFlowNode>) {
   const node = data.source;
   const visualStatus = nodeVisualStatus(node);
   const metrics = [
@@ -200,7 +227,7 @@ function AtlasGraphNode({ data, selected }: NodeProps<AtlasFlowNode>) {
       <Handle type="source" position={Position.Right} className="atlas-node-handle" />
     </div>
   );
-}
+});
 
 const nodeTypes = { atlas: AtlasGraphNode };
 const edgeTypes = { atlas: AtlasGraphEdge };
@@ -292,9 +319,18 @@ function GraphCanvasInner({
   fitRequest: number;
 }) {
   const onSelect = useCallback((id: string) => onSelectNode(id), [onSelectNode]);
+  const clearSelection = useCallback(() => onSelectNode(null), [onSelectNode]);
+  const selectFlowNode = useCallback(
+    (_: React.MouseEvent, node: AtlasFlowNode) => onSelectNode(node.id),
+    [onSelectNode],
+  );
   const topologyKey = graphTopologyKey(graph);
   const graphRef = useRef(graph);
-  const fallbackLayout = deterministicGraphLayout(graph);
+  // Node/edge identities, ordinals, and frontier depth are append-only for a
+  // canonical topology. Status-only snapshots must not repeat this O(n*e)
+  // fallback layout while live events stream.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const fallbackLayout = useMemo(() => deterministicGraphLayout(graph), [topologyKey]);
   const [layout, setLayout] = useState<GraphLayout>(() => fallbackLayout);
   const activeLayout = layout.topologyKey === topologyKey ? layout : fallbackLayout;
   const preparedNodes = useMemo(
@@ -306,8 +342,66 @@ function GraphCanvasInner({
     [activeLayout, focusedStableId, graph],
   );
   const instanceRef = useRef<ReactFlowInstance<AtlasFlowNode, AtlasFlowEdge> | null>(null);
-  const didInitialFit = useRef(false);
   const layoutGeneration = useRef(0);
+  const automaticFitFrame = useRef<number | null>(null);
+  const pendingAutomaticFit = useRef<{
+    runId: string;
+    topologyKey: string;
+    phase: "initial" | "terminal";
+  } | null>(null);
+  const automaticFitProgress = useRef({ runId: graph.runId, initial: false, terminal: false });
+  const virtualizeDenseGraph = graph.nodes.length >= GRAPH_VIRTUALIZATION_PREARM_THRESHOLD;
+
+  const flushAutomaticFit = useCallback(() => {
+    const request = pendingAutomaticFit.current;
+    if (!request || !instanceRef.current) return;
+    if (automaticFitFrame.current !== null) window.cancelAnimationFrame(automaticFitFrame.current);
+    automaticFitFrame.current = window.requestAnimationFrame(() => {
+      automaticFitFrame.current = window.requestAnimationFrame(() => {
+        automaticFitFrame.current = null;
+        const currentGraph = graphRef.current;
+        const progress = automaticFitProgress.current;
+        if (
+          pendingAutomaticFit.current !== request ||
+          currentGraph.runId !== request.runId ||
+          graphTopologyKey(currentGraph) !== request.topologyKey ||
+          progress.runId !== request.runId ||
+          progress[request.phase] ||
+          !instanceRef.current
+        )
+          return;
+        pendingAutomaticFit.current = null;
+        progress[request.phase] = true;
+        // Two animation frames allow the fixed node geometry, visibility
+        // projection, and React Flow ResizeObserver delivery to settle before
+        // the viewport transform is written. The transform itself does not
+        // alter card layout dimensions.
+        void instanceRef.current.fitView({
+          padding: 0.18,
+          minZoom: readableFitMinimum(),
+          maxZoom: 0.92,
+        });
+      });
+    });
+  }, []);
+
+  const scheduleAutomaticFit = useCallback(
+    (settledGraph: CanonicalSearchGraph) => {
+      if (automaticFitProgress.current.runId !== settledGraph.runId) {
+        automaticFitProgress.current = { runId: settledGraph.runId, initial: false, terminal: false };
+      }
+      const terminal = settledGraph.nodes.some((node) => node.kind === "report");
+      const phase = terminal ? "terminal" : "initial";
+      if (automaticFitProgress.current[phase]) return;
+      pendingAutomaticFit.current = {
+        runId: settledGraph.runId,
+        topologyKey: graphTopologyKey(settledGraph),
+        phase,
+      };
+      flushAutomaticFit();
+    },
+    [flushAutomaticFit],
+  );
 
   useEffect(() => {
     graphRef.current = graph;
@@ -315,61 +409,62 @@ function GraphCanvasInner({
 
   useEffect(() => {
     const snapshot = graphRef.current;
-    const safeLayout = deterministicGraphLayout(snapshot);
-    setLayout(safeLayout);
     const generation = ++layoutGeneration.current;
     const timeout = window.setTimeout(() => {
       void elkGraphLayout(snapshot)
         .then((nextLayout) => {
-          if (
-            nextLayout &&
-            layoutGeneration.current === generation &&
-            graphTopologyKey(graphRef.current) === topologyKey
-          )
-            setLayout(nextLayout);
+          if (layoutGeneration.current !== generation || graphTopologyKey(graphRef.current) !== topologyKey) return;
+          if (nextLayout) setLayout(nextLayout);
+          scheduleAutomaticFit(snapshot);
         })
         .catch(() => {
           // The full deterministic layout is already visible and collision-free.
+          if (layoutGeneration.current === generation && graphTopologyKey(graphRef.current) === topologyKey) {
+            scheduleAutomaticFit(snapshot);
+          }
         });
     }, 40);
     return () => {
       layoutGeneration.current += 1;
       window.clearTimeout(timeout);
     };
-  }, [topologyKey]);
+  }, [scheduleAutomaticFit, topologyKey]);
 
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      // Live snapshots can arrive faster than a fit animation completes. An
-      // immediate bounded fit prevents overlapping viewport tweens from
-      // briefly shrinking every card below the readability floor.
-      void instanceRef.current?.fitView({ padding: 0.18, minZoom: readableFitMinimum(), maxZoom: 0.92 });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [activeLayout.source, activeLayout.topologyKey]);
+  useEffect(
+    () => () => {
+      if (automaticFitFrame.current !== null) window.cancelAnimationFrame(automaticFitFrame.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (fitRequest <= 0) return;
     void instanceRef.current?.fitView({ padding: 0.2, duration: 260, minZoom: readableFitMinimum(), maxZoom: 1.1 });
   }, [fitRequest]);
 
-  const handleInit = useCallback((instance: ReactFlowInstance<AtlasFlowNode, AtlasFlowEdge>) => {
-    instanceRef.current = instance;
-    if (didInitialFit.current) return;
-    didInitialFit.current = true;
-    requestAnimationFrame(() => void instance.fitView({ padding: 0.2, minZoom: readableFitMinimum(), maxZoom: 0.9 }));
-  }, []);
+  const handleInit = useCallback(
+    (instance: ReactFlowInstance<AtlasFlowNode, AtlasFlowEdge>) => {
+      instanceRef.current = instance;
+      flushAutomaticFit();
+    },
+    [flushAutomaticFit],
+  );
 
   return (
-    <div className="graph-canvas" data-testid="canonical-graph-canvas" data-layout-source={activeLayout.source}>
+    <div
+      className="graph-canvas"
+      data-testid="canonical-graph-canvas"
+      data-layout-source={activeLayout.source}
+      data-render-mode={virtualizeDenseGraph ? "virtualized" : "eager"}
+    >
       <ReactFlow<AtlasFlowNode, AtlasFlowEdge>
         nodes={preparedNodes}
         edges={preparedEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onInit={handleInit}
-        onPaneClick={() => onSelectNode(null)}
-        onNodeClick={(_, node) => onSelectNode(node.id)}
+        onPaneClick={clearSelection}
+        onNodeClick={selectFlowNode}
         minZoom={0.24}
         maxZoom={2}
         panOnScroll
@@ -379,8 +474,9 @@ function GraphCanvasInner({
         nodesConnectable={false}
         nodesFocusable={false}
         edgesFocusable={false}
+        onlyRenderVisibleElements={virtualizeDenseGraph}
         colorMode="dark"
-        defaultEdgeOptions={{ interactionWidth: 18 }}
+        defaultEdgeOptions={defaultEdgeOptions}
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={0.75} color="rgba(114, 126, 118, 0.18)" />
       </ReactFlow>

@@ -316,7 +316,7 @@ export function traceSearchTransportAttempts(trace: readonly TraceEvent[]): Sear
       outcome: transportOutcome(
         codes,
         [],
-        ["search_provider_sources_not_observed"],
+        ["search_provider_sources_not_observed", "search_provider_sources_unqualified"],
         [],
         ["search_provider_quota_exhausted", "search_provider_unavailable", "search_provider_circuit_open"],
         resultReturnedByProvider(trace, "configured"),

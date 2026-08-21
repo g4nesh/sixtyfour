@@ -10,11 +10,6 @@ export const MAX_COMPILED_OSINT_QUERY_CHARACTERS = 320 as const;
 const COMPILER_SITE_SCOPES = [
   { site: "github.com", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
   { site: "linkedin.com", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
-  { site: "orcid.org", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
-  { site: "scholar.google.com", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
-  { site: "openreview.net", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
-  { site: "semanticscholar.org", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
-  { site: "crossref.org", kind: "professional_site", derivedFrom: "compiler_professional_allowlist" },
   { site: "apps.apple.com", kind: "public_metadata_site", derivedFrom: "compiler_public_metadata_allowlist" },
 ] as const satisfies ReadonlyArray<{
   site: string;
@@ -26,13 +21,24 @@ const COMPILER_SITE_SCOPES = [
 }>;
 
 const PUBLIC_SOCIAL_SITE_EXPRESSION = "(site:instagram.com OR site:x.com OR site:facebook.com)" as const;
+const PROFESSIONAL_IDENTITY_SITE_EXPRESSION = "(site:orcid.org OR site:scholar.google.com)" as const;
+const PUBLIC_SCHOLARLY_SITE_EXPRESSION =
+  "(site:openreview.net OR site:semanticscholar.org OR site:crossref.org)" as const;
 const PUBLIC_ACADEMIC_SITE_EXPRESSION = "(site:openalex.org OR site:researchgate.net)" as const;
+const PUBLIC_REGULATORY_SITE_EXPRESSION = "(site:sec.gov OR site:companieshouse.gov.uk)" as const;
 
 /**
  * These are exclusions, never discovery targets. They keep broad queries away
  * from common broker/contact surfaces without attempting to enumerate them.
  */
-const PUBLIC_PROFESSIONAL_EXCLUSIONS = ["-jobs", '-"resume template"', '-"name meaning"', '-"stock photo"'] as const;
+const PUBLIC_PROFESSIONAL_EXCLUSIONS = [
+  "-jobs",
+  '-"resume template"',
+  '-"name meaning"',
+  '-"stock photo"',
+  "-quotes",
+  "-crossword",
+] as const;
 
 export type OsintQueryVariantKind =
   | "exact_baseline"
@@ -41,9 +47,11 @@ export type OsintQueryVariantKind =
   | "orthographic_name"
   | "initial_name"
   | "professional_site"
+  | "public_scholarly_site"
   | "public_academic_site"
   | "public_social_site"
   | "public_metadata_site"
+  | "regulatory_filing"
   | "institution_site"
   | "public_document";
 
@@ -65,9 +73,11 @@ export interface CompiledOsintQuery {
     | "target_name_orthography"
     | "target_name_initials"
     | "compiler_professional_allowlist"
+    | "compiler_public_scholarly_allowlist"
     | "compiler_public_academic_allowlist"
     | "compiler_public_social_allowlist"
     | "compiler_public_metadata_allowlist"
+    | "compiler_regulatory_allowlist"
     | "explicit_institution_domain"
     | "compiler_document_terms";
 }
@@ -308,6 +318,12 @@ function documentTerms(targetKind: TargetKind): string {
     : "filetype:pdf (intitle:profile OR intitle:biography)";
 }
 
+function officialSourceTerms(targetKind: TargetKind): string {
+  return targetKind === "organization" || targetKind === "role_query"
+    ? "(official OR leadership OR team OR executives)"
+    : "(official OR biography OR leadership OR executive)";
+}
+
 /**
  * Compile finite public-professional search strings. This function performs no
  * network access and does not choose or scrape a search engine. Its output is
@@ -372,7 +388,7 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     },
     {
       kind: "exact_refinement",
-      body: `${subject} professional`,
+      body: `${subject} ${officialSourceTerms(target.kind)}`,
       subjectPhrase: context.subjectPhrase,
       site: null,
       refinement: "public_web_noise_exclusions",
@@ -438,6 +454,30 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     });
   }
 
+  const professionalIdentity = boundedScopedBody(
+    subject,
+    context.contextPhrases,
+    PROFESSIONAL_IDENTITY_SITE_EXPRESSION,
+  );
+  drafts.push({
+    kind: "professional_site",
+    body: professionalIdentity.body,
+    subjectPhrase: context.subjectPhrase,
+    site: null,
+    refinement: "public_web_noise_exclusions",
+    derivedFrom: "compiler_professional_allowlist",
+  });
+
+  const scholarly = boundedScopedBody(subject, context.contextPhrases, PUBLIC_SCHOLARLY_SITE_EXPRESSION);
+  drafts.push({
+    kind: "public_scholarly_site",
+    body: scholarly.body,
+    subjectPhrase: context.subjectPhrase,
+    site: null,
+    refinement: "public_web_noise_exclusions",
+    derivedFrom: "compiler_public_scholarly_allowlist",
+  });
+
   const academic = boundedScopedBody(subject, context.contextPhrases, PUBLIC_ACADEMIC_SITE_EXPRESSION);
   drafts.push({
     kind: "public_academic_site",
@@ -456,6 +496,16 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     site: null,
     refinement: "public_web_noise_exclusions",
     derivedFrom: "compiler_public_social_allowlist",
+  });
+
+  const regulatory = boundedScopedBody(subject, context.contextPhrases, PUBLIC_REGULATORY_SITE_EXPRESSION);
+  drafts.push({
+    kind: "regulatory_filing",
+    body: regulatory.body,
+    subjectPhrase: context.subjectPhrase,
+    site: null,
+    refinement: "public_web_noise_exclusions",
+    derivedFrom: "compiler_regulatory_allowlist",
   });
 
   for (const site of institutions.accepted) {
@@ -511,7 +561,12 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
   // keeps the finite program honest: adding breadth cannot turn a compiled
   // source into a dead variant merely because it was appended later.
   if (limit === MAX_OSINT_QUERY_VARIANTS && renderable.length > limit) {
-    const removableKinds: OsintQueryVariantKind[] = ["orthographic_name", "initial_name", "exact_refinement"];
+    const removableKinds: OsintQueryVariantKind[] = [
+      "orthographic_name",
+      "initial_name",
+      "regulatory_filing",
+      "exact_refinement",
+    ];
     const removed = new Set<QueryDraft>();
     for (const kind of removableKinds) {
       if (renderable.length - removed.size <= limit) break;

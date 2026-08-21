@@ -10,6 +10,7 @@ import {
   humanize,
   traceDiagnostics,
   traceDuration,
+  traceSearchTransportAttempts,
   traceUsage,
 } from "./atlas-types";
 import {
@@ -39,7 +40,7 @@ const MODALITIES: ReadonlyArray<{ id: FindingCategory; label: string }> = [
   { id: "education", label: "Education" },
 ];
 
-const DEFAULT_MODALITIES: readonly FindingCategory[] = ["identity", "employment", "online_presence"];
+const DEFAULT_MODALITIES: readonly FindingCategory[] = MODALITIES.map((modality) => modality.id);
 
 const EXAMPLE_QUERIES: readonly string[] = [
   "torvalds@linux-foundation.org",
@@ -83,6 +84,7 @@ function runMessage(
   status: string | undefined,
   diagnosticCodes: ReadonlySet<string> = new Set(),
   hasDirectEvidence = false,
+  configuredProviderReturnedLeads = false,
 ): string {
   if (status === "configuration_error")
     return "Live mode is not configured on this server. Enable live mode and configure a server-side provider key.";
@@ -90,10 +92,14 @@ function runMessage(
   if (status === "failed") return "The run ended early. Inspect the terminal trace for the recorded boundary.";
   if (status === "canceled") return "The run was canceled. Its partial graph and trace remain inspectable.";
   const providerUnavailable =
-    diagnosticCodes.has("search_provider_quota_exhausted") ||
-    diagnosticCodes.has("search_provider_unavailable") ||
-    diagnosticCodes.has("search_provider_circuit_open");
-  const providerUngrounded = diagnosticCodes.has("search_provider_sources_not_observed");
+    !configuredProviderReturnedLeads &&
+    (diagnosticCodes.has("search_provider_quota_exhausted") ||
+      diagnosticCodes.has("search_provider_unavailable") ||
+      diagnosticCodes.has("search_provider_circuit_open"));
+  const providerUngrounded =
+    !configuredProviderReturnedLeads &&
+    (diagnosticCodes.has("search_provider_sources_not_observed") ||
+      diagnosticCodes.has("search_provider_sources_unqualified"));
   const googleAttempted = [...diagnosticCodes].some((code) => code.startsWith("google_"));
   const duckDuckGoAttempted = [...diagnosticCodes].some((code) => code.startsWith("duckduckgo_"));
   const githubAttempted = [...diagnosticCodes].some(
@@ -255,6 +261,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     setMessage("Searching public professional sources…");
     let terminalStatus: string | undefined;
     let completedReport: Report | null = null;
+    let configuredProviderReturnedLeads = false;
     const diagnosticCodes = new Set<string>();
     try {
       const response = await fetch("/api/research", {
@@ -291,6 +298,9 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
           if (abortRef.current !== controller || controller.signal.aborted) return;
           const streamed = JSON.parse(line) as TraceEvent;
           traceDiagnostics(streamed).forEach((diagnostic) => diagnosticCodes.add(diagnostic.code));
+          configuredProviderReturnedLeads ||= traceSearchTransportAttempts([streamed]).some(
+            (attempt) => attempt.id === "configured_provider" && attempt.outcome === "returned_leads",
+          );
           completedReport = terminalReport(streamed) ?? completedReport;
           terminalStatus = ingestEvent(streamed) ?? terminalStatus;
         }
@@ -299,6 +309,9 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       if (buffered.trim()) {
         const streamed = JSON.parse(buffered) as TraceEvent;
         traceDiagnostics(streamed).forEach((diagnostic) => diagnosticCodes.add(diagnostic.code));
+        configuredProviderReturnedLeads ||= traceSearchTransportAttempts([streamed]).some(
+          (attempt) => attempt.id === "configured_provider" && attempt.outcome === "returned_leads",
+        );
         completedReport = terminalReport(streamed) ?? completedReport;
         terminalStatus = ingestEvent(streamed) ?? terminalStatus;
       }
@@ -306,7 +319,12 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       setRunStatus((current) => (current === "running" ? "complete" : current));
       const hasDirectEvidence =
         completedReport?.evidence?.some((evidence) => evidence.verificationMethod === "direct_fetch") ?? false;
-      const completionMessage = runMessage(terminalStatus, diagnosticCodes, hasDirectEvidence);
+      const completionMessage = runMessage(
+        terminalStatus,
+        diagnosticCodes,
+        hasDirectEvidence,
+        configuredProviderReturnedLeads,
+      );
       setMessage(
         responseExecutionMode === "local_demo" ? `Local demo replay — ${completionMessage}` : completionMessage,
       );

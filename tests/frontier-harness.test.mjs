@@ -264,7 +264,7 @@ test("Ashwin Rokkam and Chinmay Bhat receive the complete canonical hierarchy wi
 
     assert.equal(target.kind, "named_person", name);
     assert.equal(plan.status, "compiled", name);
-    assert.equal(plan.queries.length, 14, name);
+    assert.equal(plan.queries.length, 12, name);
     assert.deepEqual(
       new Set(compilerEntries.map((entry) => entry.queryHint)),
       new Set(plan.queries.map((query) => query.query)),
@@ -414,20 +414,20 @@ test("frontier schedules every surviving compiler variant on its legal source la
     candidateFrontier.value.some((entry) => entry.intent.startsWith("OSINT query ")),
     false,
   );
-  assert.deepEqual(
-    t2Searches.map((entry) => entry.queryHint.match(/site:([^ ]+)/)?.[1]),
-    [
-      "github.com",
-      "linkedin.com",
-      "orcid.org",
-      "scholar.google.com",
-      "openreview.net",
-      "semanticscholar.org",
-      "crossref.org",
-      "apps.apple.com",
-      "openalex.org",
-    ],
-  );
+  const compiledT2Queries = t2Searches.map((entry) => entry.queryHint).join("\n");
+  for (const site of [
+    "github.com",
+    "linkedin.com",
+    "orcid.org",
+    "scholar.google.com",
+    "openreview.net",
+    "semanticscholar.org",
+    "crossref.org",
+    "apps.apple.com",
+    "openalex.org",
+    "researchgate.net",
+  ])
+    assert.ok(compiledT2Queries.includes(`site:${site}`), site);
   const publicAcademicSearch = t2Searches.find((entry) => entry.queryHint.includes("site:openalex.org"));
   assert.ok(publicAcademicSearch?.queryHint.includes("site:researchgate.net"));
   assert.ok(
@@ -590,7 +590,7 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
   const target = domain.parseTarget("Renée D'Angelo Smith, Example Labs");
   const plan = search.compileOsintQueries(target);
   assert.equal(plan.status, "compiled");
-  assert.equal(plan.queries.length, 16);
+  assert.equal(plan.queries.length, 14);
   assert.ok(plan.queries.length <= search.MAX_OSINT_QUERY_VARIANTS);
 
   const ids = domain.createDeterministicIdFactory("compiler-zero-result");
@@ -637,17 +637,14 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
   assert.deepEqual([...executedQueries].sort(), plan.queries.map((query) => query.query).sort());
   assert.deepEqual(
     plan.queries.filter((query) => query.site).map((query) => query.site),
-    [
-      "github.com",
-      "linkedin.com",
-      "orcid.org",
-      "scholar.google.com",
-      "openreview.net",
-      "semanticscholar.org",
-      "crossref.org",
-      "apps.apple.com",
-    ],
+    ["github.com", "linkedin.com", "apps.apple.com"],
   );
+  const groupedQueries = plan.queries
+    .filter((query) => query.site === null)
+    .map((query) => query.query)
+    .join("\n");
+  for (const site of ["orcid.org", "scholar.google.com", "openreview.net", "semanticscholar.org", "crossref.org"])
+    assert.ok(groupedQueries.includes(`site:${site}`), site);
   for (const kind of [
     "exact_baseline",
     "exact_refinement",
@@ -960,7 +957,7 @@ test("the standard runner exhausts every canonical name query before terminating
   const target = domain.parseTarget(targetRaw);
   const plan = search.compileOsintQueries(target);
   assert.equal(plan.status, "compiled");
-  assert.equal(plan.queries.length, 16);
+  assert.equal(plan.queries.length, 14);
   assert.ok(plan.queries.length <= search.MAX_OSINT_QUERY_VARIANTS);
 
   const executedQueries = [];
@@ -1019,8 +1016,8 @@ test("the standard runner exhausts every canonical name query before terminating
   assert.notEqual(completed.report.stop.reason, "diminishing_returns");
   assert.equal(
     completed.report.stop.reason,
-    "budget_exhausted",
-    "executing all sixteen canonical queries exactly consumes the standard search-call budget",
+    "no_legal_actions",
+    "the grouped fourteen-query program ends only after every finite adapter call settles",
   );
   assert.equal(
     completed.report.searchGraph.frontier.every((entry) => entry.status === "exhausted"),
@@ -1158,6 +1155,1268 @@ test("deep provider fanout reserves every canonical search before candidate fetc
   assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
 });
 
+test("deep runner routes canonical batches mechanically before opaque lead planning", async () => {
+  const targetRaw = "Elon Musk";
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: targetRaw,
+    requestedDepth: "deep",
+  });
+  const plan = search.compileOsintQueries(domain.parseTarget(input));
+  assert.equal(plan.status, "compiled");
+  assert.ok(plan.queries.length > 4, "the regression needs more than one selected compiler batch");
+
+  let canonicalPlannerCalls = 0;
+  let nonCanonicalPlannerCalls = 0;
+  let discoverySearches = 0;
+  let opaqueFetchCalls = 0;
+  let fetchExtractionAttempts = 0;
+  let synthesisCalls = 0;
+  const adapterQueries = [];
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-21T09:00:00.000Z", 1),
+      ids: domain.createDeterministicIdFactory("deep-partial-planner-completion"),
+      planner: async ({ selectedFrontierEntries }) => {
+        const selectedSearches = selectedFrontierEntries.filter((entry) =>
+          search.isCanonicalCompilerSearchEntry(entry),
+        );
+        if (selectedSearches.length > 0) {
+          canonicalPlannerCalls += 1;
+          return {
+            kind: "stop",
+            decisionSummary: "This no-op must never control a mechanically complete canonical batch.",
+          };
+        }
+        nonCanonicalPlannerCalls += 1;
+        const opaqueLeads = selectedFrontierEntries.filter(
+          (entry) =>
+            entry.candidateId &&
+            entry.leadId &&
+            entry.allowedTools.length === 1 &&
+            entry.allowedTools[0] === "fetch_public_source",
+        );
+        if (opaqueLeads.length > 0) {
+          return {
+            kind: "actions",
+            decisionSummary: "Fetch the selected exact candidate-scoped opaque leads after canonical breadth.",
+            actions: opaqueLeads.map((entry) => ({
+              frontierEntryId: entry.id,
+              tool: "fetch_public_source",
+              purpose: "Fetch the exact selected public-professional discovery capability.",
+              arguments: { leadId: entry.leadId },
+              candidateId: entry.candidateId,
+            })),
+          };
+        }
+        return { kind: "advance", decisionSummary: "No mechanically bound test action is selected." };
+      },
+      executeAction: async (action, context) => {
+        if (action.tool === "search_web") {
+          adapterQueries.push(action.arguments.query);
+          discoverySearches += 1;
+          if (discoverySearches <= 3) {
+            const candidateRef = `elon_query_subject_${discoverySearches}`;
+            return {
+              status: "succeeded",
+              candidates: [{ ref: candidateRef, displayName: targetRaw }],
+              evidence: Array.from({ length: 3 }, (_, index) => {
+                const leadOrdinal = (discoverySearches - 1) * 3 + index + 1;
+                return {
+                  candidateRef,
+                  claim: `A bounded provider search surfaced public code-profile lead ${leadOrdinal}.`,
+                  disposition: "discovery_only",
+                  sourceUrl: `https://github.com/elon-musk-regression-${leadOrdinal}`,
+                  sourceType: "search_result",
+                  canonicalSubset: { providerAttestedUrl: true },
+                  verificationMethod: "search_discovery",
+                  attributes: {
+                    leadId: `lead_elon_regression_${leadOrdinal}`,
+                    classifiedSourceLaneId: "t2.structured_professional",
+                    classifiedSourceTier: 2,
+                    classifiedSourceType: "code_profile",
+                  },
+                };
+              }),
+              meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+            };
+          }
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        if (action.tool === "fetch_public_source") {
+          opaqueFetchCalls += 1;
+          assert.match(action.arguments.leadId, /^lead_elon_regression_/);
+          assert.ok(action.candidateId, "opaque lead fetch stays candidate-bound");
+          if (context.modelAccounting.reserve()) {
+            fetchExtractionAttempts += 1;
+            context.modelAccounting.settle({ networkRequests: 1 });
+          }
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        throw new Error(`Unexpected test action ${action.tool}`);
+      },
+      synthesize: async (_state, context) => {
+        synthesisCalls += 1;
+        assert.equal(context.modelAccounting.reserve(), true, "the final reserved synthesis call must remain usable");
+        context.modelAccounting.settle({ networkRequests: 1 });
+        return {
+          decisionSummary: "The remaining public evidence does not support a higher-confidence finding.",
+          findings: [],
+          openQuestions: [],
+        };
+      },
+    },
+    {
+      availableTools: ["search_web", "fetch_public_source"],
+      budget: { maxLlmCalls: 9 },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(new Set(adapterQueries).size, plan.queries.length);
+  assert.deepEqual(
+    [...adapterQueries].sort(),
+    plan.queries.map((query) => query.query).sort(),
+    "every finite canonical query must reach the real adapter without spending a planner call",
+  );
+  assert.ok(opaqueFetchCalls > 0, "remaining Deep budget must reach at least one legal opaque lead fetch");
+  assert.ok(fetchExtractionAttempts > 0, "noncanonical lead extraction may use budget above the final reserve");
+  assert.equal(synthesisCalls, 1, "intermediate synthesis must be deferred until the reserved final opportunity");
+  assert.ok(completed.report.usage.toolCalls < completed.state.budget.limits.maxToolCalls);
+  assert.ok(completed.report.usage.searchCalls < completed.state.budget.limits.maxSearchCalls);
+  assert.equal(completed.report.usage.llmCalls, completed.state.budget.limits.maxLlmCalls);
+
+  const compilerEntries = completed.report.searchGraph.frontier.filter((entry) =>
+    search.isCanonicalCompilerSearchEntry(entry),
+  );
+  const searchStarts = completed.trace.events.filter(
+    (event) => event.kind === "span_start" && event.name === "tool.search_web",
+  );
+  const searchEnds = completed.trace.events.filter(
+    (event) => event.kind === "span_end" && event.name === "tool.search_web",
+  );
+  assert.equal(compilerEntries.length, plan.queries.length);
+  for (const entry of compilerEntries) {
+    assert.ok(["verified", "exhausted"].includes(entry.status));
+    assert.equal(
+      searchStarts.filter((event) => event.payload.frontierEntryId === entry.id).length,
+      1,
+      `compiler entry ${entry.id} must have one real adapter span start`,
+    );
+    assert.equal(
+      searchEnds.filter((event) => event.payload.frontierEntryId === entry.id).length,
+      1,
+      `compiler entry ${entry.id} must have one real adapter span end`,
+    );
+  }
+  const fetchStarts = completed.trace.events.filter(
+    (event) => event.kind === "span_start" && event.name === "tool.fetch_public_source",
+  );
+  assert.ok(fetchStarts.length > 0);
+  assert.ok(
+    Math.max(...searchStarts.map((event) => event.seq)) < Math.min(...fetchStarts.map((event) => event.seq)),
+    "Deep breadth reservation must finish every canonical search before optional opaque fanout",
+  );
+  const synthesisStarts = completed.trace.events.filter(
+    (event) => event.kind === "span_start" && event.name === "synthesis.findings",
+  );
+  assert.equal(synthesisStarts.length, 1);
+  assert.ok(Math.max(...fetchStarts.map((event) => event.seq)) < synthesisStarts[0].seq);
+  assert.equal(completed.trace.events.filter((event) => event.name === "synthesis.final_call_reserved").length, 1);
+  const deterministicRoutes = completed.trace.events.filter(
+    (event) => event.name === "scheduler.canonical_batch_routed",
+  );
+  assert.ok(deterministicRoutes.length > 1);
+  assert.equal(
+    deterministicRoutes.reduce((sum, event) => sum + event.payload.entryCount, 0),
+    plan.queries.length,
+  );
+  assert.equal(canonicalPlannerCalls, 0, "canonical-only selection must bypass the model planner entirely");
+  assert.ok(nonCanonicalPlannerCalls > 0, "opaque lead capabilities still use their existing planner boundary");
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
+test("deep runner consumes one persisted exact-subject slug probe before neutral and deprioritized fanout", async () => {
+  const targetRaw = "Alex Rivera";
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: targetRaw,
+    requestedDepth: "deep",
+  });
+  const plan = search.compileOsintQueries(domain.parseTarget(input));
+  assert.equal(plan.status, "compiled");
+
+  const leadSpecs = [
+    {
+      leadId: "lead_alex_official_bio",
+      sourceUrl: "https://example-robotics.com/alex-rivera",
+      title: "Public source at example-robotics.com",
+      classifiedSourceLaneId: "t6.candidate_public_source",
+      classifiedSourceTier: 6,
+      classifiedSourceType: "other",
+      persistedScheduling: {
+        disposition: "prioritize",
+        reason: "exact_subject_slug_probe",
+      },
+    },
+    {
+      leadId: "lead_alex_media_profile",
+      sourceUrl: "https://media.example/profile/alex-rivera",
+      title: "Alex Rivera | Media",
+      classifiedSourceLaneId: "t4.reputable_media",
+      classifiedSourceTier: 4,
+      classifiedSourceType: "news",
+    },
+    {
+      leadId: "lead_alex_github_profile",
+      sourceUrl: "https://github.com/alex-rivera",
+      title: "Alex Rivera · GitHub",
+      classifiedSourceLaneId: "t2.structured_professional",
+      classifiedSourceTier: 2,
+      classifiedSourceType: "code_profile",
+    },
+    {
+      leadId: "lead_wrong_person_slug",
+      sourceUrl: "https://evil.example/profile/jordan-lee",
+      title: "Jordan Lee | Evil",
+      classifiedSourceLaneId: "t6.candidate_public_source",
+      classifiedSourceTier: 6,
+      classifiedSourceType: "other",
+    },
+    {
+      leadId: "lead_random_subject_article",
+      sourceUrl: "https://example-robotics.com/articles/alex-rivera",
+      title: "Public source at example-robotics.com — article",
+      classifiedSourceLaneId: "t6.candidate_public_source",
+      classifiedSourceTier: 6,
+      classifiedSourceType: "other",
+    },
+    {
+      leadId: "lead_alex_gist_noise",
+      sourceUrl: "https://gist.github.com/example/0123456789abcdef",
+      title: "Alex Rivera notes",
+      classifiedSourceLaneId: "t6.candidate_public_source",
+      classifiedSourceTier: 6,
+      classifiedSourceType: "other",
+    },
+  ].map((lead) => ({
+    ...lead,
+    deterministicScheduling: search.discoveryLeadSchedulingDecision(lead.sourceUrl, lead.title, {
+      personNames: [targetRaw],
+    }),
+    scheduling:
+      lead.persistedScheduling ??
+      search.discoveryLeadSchedulingDecision(lead.sourceUrl, lead.title, {
+        personNames: [targetRaw],
+      }),
+  }));
+  assert.deepEqual(
+    leadSpecs.map((lead) => lead.deterministicScheduling.disposition),
+    ["neutral", "prioritize", "neutral", "neutral", "neutral", "deprioritize"],
+    "the matching media bio is eligible, while generic titles, an evil wrong-person slug, and an article path must not manufacture priority",
+  );
+  assert.deepEqual(
+    leadSpecs.map((lead) => lead.scheduling.disposition),
+    ["prioritize", "prioritize", "neutral", "neutral", "neutral", "deprioritize"],
+  );
+
+  let emittedLeads = false;
+  let synthesisCalls = 0;
+  let fetchedCountAtFirstSynthesis = null;
+  const fetchedLeadIds = [];
+  const adapterQueries = [];
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-21T10:00:00.000Z", 1),
+      ids: domain.createDeterministicIdFactory("deep-quality-probe"),
+      planner: async ({ selectedFrontierEntries }) => ({
+        kind: "actions",
+        decisionSummary: "Execute the remaining exact opaque lead capabilities.",
+        actions: selectedFrontierEntries.map((entry) => ({
+          frontierEntryId: entry.id,
+          tool: entry.allowedTools[0],
+          purpose: "Execute one selected public capability.",
+          arguments: entry.allowedTools[0] === "search_web" ? { query: entry.queryHint } : { leadId: entry.queryHint },
+          ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
+        })),
+      }),
+      executeAction: async (action) => {
+        if (action.tool === "search_web") {
+          adapterQueries.push(action.arguments.query);
+          if (!emittedLeads && action.sourceLaneId === "t1.first_party") {
+            emittedLeads = true;
+            return {
+              status: "succeeded",
+              candidates: [{ ref: "alex_query_subject", displayName: targetRaw }],
+              evidence: leadSpecs.map((lead) => ({
+                candidateRef: "alex_query_subject",
+                claim: `Public discovery surfaced ${lead.title}.`,
+                disposition: "discovery_only",
+                sourceUrl: lead.sourceUrl,
+                title: lead.title,
+                sourceType: "search_result",
+                canonicalSubset: { providerAttestedUrl: true },
+                verificationMethod: "search_discovery",
+                attributes: {
+                  leadId: lead.leadId,
+                  classifiedSourceLaneId: lead.classifiedSourceLaneId,
+                  classifiedSourceTier: lead.classifiedSourceTier,
+                  classifiedSourceType: lead.classifiedSourceType,
+                  leadSchedulingDisposition: lead.scheduling.disposition,
+                  leadSchedulingReason: lead.scheduling.reason,
+                },
+              })),
+              meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+            };
+          }
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        if (action.tool === "fetch_public_source") {
+          fetchedLeadIds.push(action.arguments.leadId);
+          const lead = leadSpecs.find((item) => item.leadId === action.arguments.leadId);
+          assert.ok(lead);
+          if (lead.leadId !== "lead_alex_official_bio") {
+            return {
+              status: "not_found",
+              evidence: [],
+              meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+            };
+          }
+          return {
+            status: "succeeded",
+            evidence: [
+              {
+                candidateId: action.candidateId,
+                claim: "Alex Rivera leads Example Robotics as its founder.",
+                excerpt: "Alex Rivera leads Example Robotics as its founder.",
+                title: lead.title,
+                sourceUrl: lead.sourceUrl,
+                sourceType: lead.classifiedSourceType,
+                httpStatus: 200,
+                verificationMethod: "direct_fetch",
+              },
+            ],
+            meta: { requests: 1, bytesRead: 128, incomplete: false, llmCalls: 0 },
+          };
+        }
+        throw new Error(`Unexpected test action ${action.tool}`);
+      },
+      synthesize: async (state, context) => {
+        synthesisCalls += 1;
+        if (fetchedCountAtFirstSynthesis === null) fetchedCountAtFirstSynthesis = fetchedLeadIds.length;
+        const directEvidence = state.evidence.find(
+          (evidence) =>
+            evidence.sourceUrl === leadSpecs[0].sourceUrl &&
+            evidence.disposition === "supports" &&
+            evidence.verificationMethod === "direct_fetch",
+        );
+        assert.ok(directEvidence, "quality-triggered synthesis must follow admitted direct supporting evidence");
+        assert.equal(context.modelAccounting.reserve(), true);
+        context.modelAccounting.settle({ networkRequests: 1 });
+        return {
+          decisionSummary: "The bounded official-page probe was synthesized.",
+          findings: [
+            {
+              candidateId: directEvidence.candidateId,
+              title: `Employment — ${targetRaw}`,
+              description: directEvidence.excerpt,
+              category: "employment",
+              evidenceIds: [directEvidence.id],
+            },
+          ],
+          openQuestions: [],
+        };
+      },
+    },
+    {
+      availableTools: ["search_web", "fetch_public_source"],
+      budget: { maxTurns: 10, maxLlmCalls: 6 },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.deepEqual(
+    [...adapterQueries].sort(),
+    plan.queries.map((query) => query.query).sort(),
+    "quality scheduling must not trade away finite canonical breadth",
+  );
+  assert.equal(
+    fetchedLeadIds[0],
+    "lead_alex_official_bio",
+    JSON.stringify({
+      stop: completed.report.stop,
+      usage: completed.report.usage,
+      leads: completed.report.searchGraph.frontier
+        .filter((entry) => entry.leadId)
+        .map((entry) => ({ leadId: entry.leadId, status: entry.status, lane: entry.sourceLaneId })),
+      qualityEvents: completed.trace.events.filter((event) => event.name.includes("quality_probe")),
+    }),
+  );
+  assert.ok(fetchedLeadIds.includes("lead_alex_github_profile"), JSON.stringify(fetchedLeadIds));
+  assert.ok(fetchedLeadIds.includes("lead_alex_media_profile"), JSON.stringify(fetchedLeadIds));
+  assert.ok(fetchedLeadIds.includes("lead_wrong_person_slug"), JSON.stringify(fetchedLeadIds));
+  assert.ok(fetchedLeadIds.includes("lead_random_subject_article"), JSON.stringify(fetchedLeadIds));
+  assert.ok(fetchedLeadIds.includes("lead_alex_gist_noise"), JSON.stringify(fetchedLeadIds));
+  assert.ok(
+    fetchedLeadIds.indexOf("lead_alex_official_bio") < fetchedLeadIds.indexOf("lead_wrong_person_slug") &&
+      fetchedLeadIds.indexOf("lead_alex_official_bio") < fetchedLeadIds.indexOf("lead_random_subject_article"),
+    "wrong-name and random-article leads must remain ordinary neutral fanout, never the quality probe",
+  );
+  assert.ok(
+    fetchedLeadIds.indexOf("lead_alex_github_profile") < fetchedLeadIds.indexOf("lead_alex_gist_noise"),
+    "neutral structured leads must remain ahead of explicitly deprioritized optional noise",
+  );
+  assert.equal(fetchedCountAtFirstSynthesis, 1, "synthesis must run immediately after the useful quality probe");
+  assert.equal(synthesisCalls, 1, "the same evidence snapshot must not trigger repeated intermediate synthesis");
+  assert.equal(completed.report.findings.length, 1);
+  assert.equal(completed.report.findings[0].category, "employment");
+  const qualityProbeEvents = completed.trace.events.filter((event) => event.name === "frontier.quality_probe_selected");
+  assert.equal(qualityProbeEvents.length, 1, "one durable professional quote must stop the backup quality-probe route");
+  assert.equal(qualityProbeEvents[0].payload.leadId, "lead_alex_official_bio");
+  assert.equal(qualityProbeEvents[0].payload.schedulingDisposition, "prioritize");
+  assert.equal(qualityProbeEvents[0].payload.schedulingReason, "exact_subject_slug_probe");
+  const qualityFrontier = completed.report.searchGraph.frontier.find(
+    (entry) => entry.leadId === "lead_alex_official_bio",
+  );
+  const mediaFrontier = completed.report.searchGraph.frontier.find(
+    (entry) => entry.leadId === "lead_alex_media_profile",
+  );
+  assert.ok(qualityFrontier && mediaFrontier);
+  assert.ok(
+    mediaFrontier.pathCost < qualityFrontier.pathCost,
+    "the persisted exact-subject probe must win by probe rank even when Dijkstra would select the lower-tier media bio",
+  );
+  assert.equal(
+    completed.trace.events.filter(
+      (event) =>
+        event.kind === "span_start" &&
+        event.name === "tool.fetch_public_source" &&
+        event.payload.frontierEntryId === qualityProbeEvents[0].payload.frontierEntryId,
+    ).length,
+    1,
+    "the quality selection event must join to one real hardened-fetch adapter span",
+  );
+  assert.equal(completed.trace.events.filter((event) => event.name === "scheduler.quality_probe_routed").length, 1);
+  assert.equal(completed.trace.events.filter((event) => event.name === "synthesis.quality_probe_ready").length, 1);
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
+test("quality probe attempt accounting ignores rejected and exhausted prioritized leads", () => {
+  const targetRaw = "Casey Rowan";
+  const target = domain.parseTarget(targetRaw);
+  const ids = domain.createDeterministicIdFactory("quality-probe-attempt-accounting");
+  const seeded = search.seedFrontier(
+    search.emptySearchGraph("run_quality_probe_attempt_accounting", target.normalizedQuery, "2026-08-21T20:00:00.000Z"),
+    target,
+    ["search_web", "fetch_public_source"],
+    ids,
+    "2026-08-21T20:00:00.001Z",
+  );
+  let graph = search.setFrontierStatus(
+    seeded.graph,
+    seeded.graph.frontier.map((entry) => entry.id),
+    "exhausted",
+    "2026-08-21T20:00:00.002Z",
+  );
+  const parent = graph.frontier[0];
+  assert.ok(parent);
+  const actionNode = search.admitGraphNode(
+    graph,
+    {
+      kind: "action",
+      label: "search_web",
+      status: "exhausted",
+      sourceTier: parent.sourceTier,
+      sourceLaneId: parent.sourceLaneId,
+      frontierEntryId: parent.id,
+      actionId: parent.actionId,
+      data: { tool: "search_web" },
+      dedupeEntityKey: `action:${parent.id}`,
+    },
+    ids,
+    "2026-08-21T20:00:00.003Z",
+  );
+  const actionEdge = search.admitGraphEdge(
+    actionNode.graph,
+    {
+      fromNodeId: parent.nodeId,
+      toNodeId: actionNode.value.id,
+      kind: "expands",
+      status: "exhausted",
+      frontierEntryId: parent.id,
+      actionId: parent.actionId,
+      edgeCost: 0.05,
+      pathCost: parent.pathCost + 0.05,
+    },
+    ids,
+    "2026-08-21T20:00:00.004Z",
+  );
+  graph = actionEdge.graph;
+  const candidate = { id: "candidate_casey_rowan", displayName: targetRaw };
+
+  const context = { personNames: [targetRaw] };
+  const specs = [
+    {
+      leadId: "lead_stale_rejected",
+      sourceUrl: "https://archive.example/people/casey-rowan",
+      title: "Casey Rowan | Archive",
+      status: "rejected",
+      decision: { disposition: "prioritize", reason: "candidate_bio_path" },
+    },
+    {
+      leadId: "lead_stale_exhausted",
+      sourceUrl: "https://old.example/casey-rowan",
+      title: "Public source at old.example",
+      status: "exhausted",
+      decision: { disposition: "prioritize", reason: "exact_subject_slug_probe" },
+    },
+    {
+      leadId: "lead_actual_first_probe",
+      sourceUrl: "https://official.example/casey-rowan",
+      title: "Public source at official.example",
+      status: "queued",
+      decision: { disposition: "prioritize", reason: "exact_subject_slug_probe" },
+    },
+    {
+      leadId: "lead_comparator_backup",
+      sourceUrl: "https://casey.example/casey-rowan",
+      title: "Casey Rowan | Profile",
+      status: "queued",
+      decision: { disposition: "prioritize", reason: "candidate_bio_path" },
+    },
+    {
+      leadId: "lead_ordinary_after_cap",
+      sourceUrl: "https://laboratory.example/people/casey-rowan",
+      title: "Casey Rowan | Laboratory",
+      status: "queued",
+      decision: { disposition: "prioritize", reason: "candidate_bio_path" },
+    },
+  ];
+  const entries = new Map();
+  const decisions = {};
+  let tick = 5;
+  for (const spec of specs) {
+    if (spec.decision.reason === "candidate_bio_path") {
+      assert.deepEqual(
+        search.discoveryLeadSchedulingDecision(spec.sourceUrl, spec.title, context),
+        spec.decision,
+        spec.leadId,
+      );
+    }
+    const evidenceId = `evidence_${spec.leadId}`;
+    const sourceNode = search.admitGraphNode(
+      graph,
+      {
+        kind: "source",
+        label: spec.title,
+        status: "exhausted",
+        sourceTier: parent.sourceTier,
+        sourceLaneId: parent.sourceLaneId,
+        frontierEntryId: parent.id,
+        actionId: parent.actionId,
+        candidateId: candidate.id,
+        evidenceId,
+        data: {
+          sourceUrl: spec.sourceUrl,
+          sourceType: "search_result",
+          classifiedSourceLaneId: "t6.candidate_public_source",
+          classifiedSourceTier: 6,
+          classifiedSourceType: "other",
+          leadId: spec.leadId,
+        },
+        dedupeEntityKey: `source:${evidenceId}`,
+      },
+      ids,
+      `2026-08-21T20:00:00.${String(tick++).padStart(3, "0")}Z`,
+    );
+    const sourceEdge = search.admitGraphEdge(
+      sourceNode.graph,
+      {
+        fromNodeId: actionNode.value.id,
+        toNodeId: sourceNode.value.id,
+        kind: "expands",
+        status: "exhausted",
+        frontierEntryId: parent.id,
+        actionId: parent.actionId,
+        edgeCost: 0.04,
+        pathCost: parent.pathCost + 0.09,
+      },
+      ids,
+      `2026-08-21T20:00:00.${String(tick++).padStart(3, "0")}Z`,
+    );
+    graph = sourceEdge.graph;
+    const enqueued = search.enqueueCandidateLeadFetchFrontier(
+      graph,
+      target,
+      candidate,
+      {
+        leadId: spec.leadId,
+        sourceUrl: spec.sourceUrl,
+        sourceEvidenceId: evidenceId,
+        classifiedSourceLaneId: "t6.candidate_public_source",
+        classifiedSourceTier: 6,
+        classifiedSourceType: "other",
+      },
+      parent,
+      sourceNode.value.id,
+      ["fetch_public_source"],
+      ids,
+      `2026-08-21T20:00:00.${String(tick++).padStart(3, "0")}Z`,
+    );
+    assert.ok(enqueued.value);
+    graph = enqueued.graph;
+    entries.set(spec.leadId, enqueued.value);
+    decisions[spec.leadId] = spec.decision;
+    if (spec.status !== "queued") {
+      graph = search.setFrontierStatus(
+        graph,
+        [enqueued.value.id],
+        spec.status,
+        `2026-08-21T20:00:00.${String(tick++).padStart(3, "0")}Z`,
+      );
+    }
+  }
+  assert.deepEqual(search.validateSearchGraph(graph), []);
+
+  const selectionOptions = {
+    prioritizeDiscoveryLeadProbe: true,
+    maxPrioritizedDiscoveryLeadProbes: 2,
+    discoveryLeadContexts: { [candidate.id]: context },
+    discoveryLeadSchedulingDecisions: decisions,
+  };
+  assert.throws(
+    () => search.selectFrontierBatch(graph, 1, "2026-08-21T20:00:00.999Z", selectionOptions),
+    /require explicit attempted entry IDs/,
+  );
+  const first = search.selectFrontierBatch(graph, 1, "2026-08-21T20:00:01.000Z", {
+    ...selectionOptions,
+    attemptedPrioritizedDiscoveryLeadProbeEntryIds: new Set(),
+  });
+  assert.equal(first.value[0]?.leadId, "lead_actual_first_probe");
+  assert.deepEqual(
+    first.events
+      .filter((event) => event.name === "frontier.quality_probe_selected")
+      .map((event) => [event.payload.leadId, event.payload.probeOrdinal]),
+    [["lead_actual_first_probe", 1]],
+  );
+
+  graph = search.setFrontierStatus(first.graph, [first.value[0].id], "running", "2026-08-21T20:00:01.001Z");
+  graph = search.recordFrontierOutcome(graph, first.value[0], "exhausted", "2026-08-21T20:00:01.002Z").graph;
+  const second = search.selectFrontierBatch(graph, 1, "2026-08-21T20:00:02.000Z", {
+    ...selectionOptions,
+    attemptedPrioritizedDiscoveryLeadProbeEntryIds: new Set([first.value[0].id]),
+  });
+  assert.equal(second.value[0]?.leadId, "lead_comparator_backup");
+  assert.deepEqual(
+    second.events
+      .filter((event) => event.name === "frontier.quality_probe_selected")
+      .map((event) => [event.payload.leadId, event.payload.probeOrdinal]),
+    [["lead_comparator_backup", 2]],
+  );
+
+  graph = search.setFrontierStatus(second.graph, [second.value[0].id], "running", "2026-08-21T20:00:02.001Z");
+  graph = search.recordFrontierOutcome(graph, second.value[0], "verified", "2026-08-21T20:00:02.002Z").graph;
+  const afterCap = search.selectFrontierBatch(graph, 1, "2026-08-21T20:00:03.000Z", {
+    ...selectionOptions,
+    attemptedPrioritizedDiscoveryLeadProbeEntryIds: new Set([first.value[0].id, second.value[0].id]),
+  });
+  assert.equal(afterCap.value[0]?.id, entries.get("lead_ordinary_after_cap").id);
+  assert.equal(afterCap.events.filter((event) => event.name === "frontier.quality_probe_selected").length, 0);
+  assert.deepEqual(search.validateSearchGraph(afterCap.graph), []);
+});
+
+test("deep runner tries one deterministic backup after a bare-name quality probe, then resumes ordinary fanout", async () => {
+  const targetRaw = "Alex Rivera";
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: targetRaw,
+    requestedDepth: "deep",
+  });
+  const plan = search.compileOsintQueries(domain.parseTarget(input));
+  assert.equal(plan.status, "compiled");
+
+  const leads = [
+    {
+      leadId: "lead_exact_subject_probe",
+      sourceUrl: "https://official.example/alex-rivera",
+      title: "Public source at official.example",
+      lane: "t6.candidate_public_source",
+      tier: 6,
+      type: "other",
+      scheduling: { disposition: "prioritize", reason: "exact_subject_slug_probe" },
+    },
+    {
+      leadId: "lead_exact_person_slug",
+      sourceUrl: "https://alex.example/alex-rivera",
+      title: "Alex Rivera | Alex",
+      lane: "t6.candidate_public_source",
+      tier: 6,
+      type: "other",
+      scheduling: { disposition: "prioritize", reason: "candidate_bio_path" },
+    },
+    {
+      leadId: "lead_candidate_bio_path",
+      sourceUrl: "https://robotics.example/people/alex-rivera",
+      title: "Alex Rivera | Robotics",
+      lane: "t6.candidate_public_source",
+      tier: 6,
+      type: "other",
+      scheduling: { disposition: "prioritize", reason: "candidate_bio_path" },
+    },
+    {
+      leadId: "lead_neutral_profile",
+      sourceUrl: "https://github.com/alex-rivera",
+      title: "Alex Rivera · GitHub",
+      lane: "t2.structured_professional",
+      tier: 2,
+      type: "code_profile",
+      scheduling: { disposition: "neutral", reason: "neutral" },
+    },
+  ];
+  const expectedDecisions = leads
+    .slice(1)
+    .map((lead) => search.discoveryLeadSchedulingDecision(lead.sourceUrl, lead.title, { personNames: [targetRaw] }));
+  assert.deepEqual(
+    expectedDecisions,
+    leads.slice(1).map((lead) => lead.scheduling),
+  );
+
+  let emittedLeads = false;
+  let ordinaryPlannerCalls = 0;
+  const fetchedLeadIds = [];
+  const qualityRoleLeadIds = [];
+  let synthesisCalls = 0;
+  let fetchedCountAtFirstSynthesis = null;
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-21T20:00:00.000Z", 1),
+      ids: domain.createDeterministicIdFactory("deep-backup-quality-probe"),
+      planner: async ({ selectedFrontierEntries }) => {
+        ordinaryPlannerCalls += 1;
+        return {
+          kind: "actions",
+          decisionSummary: "Resume the ordinary bounded lead traversal.",
+          actions: selectedFrontierEntries.map((entry) => ({
+            frontierEntryId: entry.id,
+            tool: entry.allowedTools[0],
+            purpose: "Execute the selected ordinary capability.",
+            arguments:
+              entry.allowedTools[0] === "search_web" ? { query: entry.queryHint } : { leadId: entry.queryHint },
+            ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
+          })),
+        };
+      },
+      executeAction: async (action) => {
+        if (action.tool === "search_web") {
+          if (!emittedLeads && action.sourceLaneId === "t1.first_party") {
+            emittedLeads = true;
+            return {
+              status: "succeeded",
+              candidates: [{ ref: "alex_query_subject", displayName: targetRaw }],
+              evidence: leads.map((lead) => ({
+                candidateRef: "alex_query_subject",
+                claim: `Public discovery surfaced ${lead.title}.`,
+                disposition: "discovery_only",
+                sourceUrl: lead.sourceUrl,
+                title: lead.title,
+                sourceType: "search_result",
+                canonicalSubset: { providerAttestedUrl: true },
+                verificationMethod: "search_discovery",
+                attributes: {
+                  leadId: lead.leadId,
+                  classifiedSourceLaneId: lead.lane,
+                  classifiedSourceTier: lead.tier,
+                  classifiedSourceType: lead.type,
+                  leadSchedulingDisposition: lead.scheduling.disposition,
+                  leadSchedulingReason: lead.scheduling.reason,
+                },
+              })),
+              meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+            };
+          }
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        if (action.tool === "fetch_public_source") {
+          fetchedLeadIds.push(action.arguments.leadId);
+          if (action.executionRole === "quality_probe") qualityRoleLeadIds.push(action.arguments.leadId);
+          const lead = leads.find((item) => item.leadId === action.arguments.leadId);
+          assert.ok(lead);
+          if (lead.leadId === "lead_exact_subject_probe") {
+            return {
+              status: "succeeded",
+              evidence: [
+                {
+                  candidateId: action.candidateId,
+                  claim: targetRaw,
+                  excerpt: targetRaw,
+                  title: targetRaw,
+                  sourceUrl: lead.sourceUrl,
+                  sourceType: lead.type,
+                  httpStatus: 200,
+                  contentHash: `sha256:${"1".repeat(64)}`,
+                  verificationMethod: "direct_fetch",
+                },
+              ],
+              meta: { requests: 1, bytesRead: 64, incomplete: false, llmCalls: 0 },
+            };
+          }
+          if (lead.leadId === "lead_exact_person_slug") {
+            return {
+              status: "succeeded",
+              evidence: [
+                {
+                  candidateId: action.candidateId,
+                  claim: `${targetRaw} founded Example Robotics and serves as its chief engineer.`,
+                  excerpt: `${targetRaw} founded Example Robotics and serves as its chief engineer.`,
+                  title: lead.title,
+                  sourceUrl: lead.sourceUrl,
+                  sourceType: lead.type,
+                  httpStatus: 200,
+                  contentHash: `sha256:${"2".repeat(64)}`,
+                  verificationMethod: "direct_fetch",
+                },
+              ],
+              meta: { requests: 1, bytesRead: 160, incomplete: false, llmCalls: 0 },
+            };
+          }
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        throw new Error(`Unexpected backup-probe action ${action.tool}`);
+      },
+      synthesize: async (_state, context) => {
+        synthesisCalls += 1;
+        if (fetchedCountAtFirstSynthesis === null) fetchedCountAtFirstSynthesis = fetchedLeadIds.length;
+        assert.equal(context.modelAccounting.reserve(), true);
+        context.modelAccounting.settle({ networkRequests: 1 });
+        throw new Error("simulated synthesis outage after the informative backup probe");
+      },
+    },
+    {
+      availableTools: ["search_web", "fetch_public_source"],
+      budget: { maxTurns: 10, maxLlmCalls: 6 },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.deepEqual(
+    fetchedLeadIds.slice(0, 2),
+    ["lead_exact_subject_probe", "lead_exact_person_slug"],
+    "the stable quality comparator must order both bounded attempts ahead of ordinary path cost",
+  );
+  assert.equal(fetchedLeadIds.length, leads.length, "ordinary candidate fanout must resume after two failed probes");
+  assert.ok(ordinaryPlannerCalls > 0, "ordinary work must return to the planner after the mechanical probes");
+  const qualityEvents = completed.trace.events.filter((event) => event.name === "frontier.quality_probe_selected");
+  assert.deepEqual(
+    qualityEvents.map((event) => [event.payload.leadId, event.payload.probeOrdinal]),
+    [
+      ["lead_exact_subject_probe", 1],
+      ["lead_exact_person_slug", 2],
+    ],
+  );
+  assert.equal(
+    completed.trace.events.filter((event) => event.name === "scheduler.quality_probe_routed").length,
+    2,
+    "the backup path must never route more than two quality probes",
+  );
+  assert.deepEqual(
+    qualityRoleLeadIds,
+    ["lead_exact_subject_probe", "lead_exact_person_slug"],
+    "only mechanically selected probes may receive the server-owned execution role",
+  );
+  assert.equal(
+    fetchedCountAtFirstSynthesis,
+    2,
+    "a bare-name direct quote must not stop the backup probe or trigger immediate synthesis",
+  );
+  assert.equal(synthesisCalls, 1);
+  const bareEvidence = completed.report.evidence.find((evidence) => evidence.claim === targetRaw);
+  const durableClaim = `${targetRaw} founded Example Robotics and serves as its chief engineer.`;
+  const durableEvidence = completed.report.evidence.find((evidence) => evidence.claim === durableClaim);
+  assert.ok(bareEvidence && durableEvidence);
+  assert.ok(
+    bareEvidence.id.localeCompare(durableEvidence.id) < 0,
+    "the earlier bare-name ID must lose to the later informative exact quote",
+  );
+  assert.equal(completed.report.findings.length, 1);
+  assert.equal(completed.report.findings[0].title, `Identity — ${targetRaw}`);
+  assert.equal(completed.report.findings[0].category, "identity");
+  assert.deepEqual(completed.report.findings[0].evidenceIds, [durableEvidence.id]);
+  assert.equal(completed.report.findings[0].description, durableClaim);
+  assert.equal(completed.report.findings[0].confidence.label, "low");
+  assert.ok(completed.report.findings[0].confidence.score < 0.45);
+  assert.ok(fetchedLeadIds.includes("lead_candidate_bio_path"), "a third prioritized lead remains ordinary fanout");
+  assert.ok(fetchedLeadIds.includes("lead_neutral_profile"));
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
+test("deterministic fallback retains a bare-name direct quote when it is the sole eligible record", async () => {
+  const targetRaw = "Casey Morgan";
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: targetRaw,
+    requestedDepth: "deep",
+  });
+  const lead = {
+    leadId: "lead_casey_exact_subject",
+    sourceUrl: "https://official.example/casey-morgan",
+    title: "Public source at official.example",
+  };
+  let emittedLead = false;
+  let synthesisCalls = 0;
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-21T20:20:00.000Z", 1),
+      ids: domain.createDeterministicIdFactory("bare-name-only-deterministic-fallback"),
+      planner: async ({ selectedFrontierEntries }) => ({
+        kind: "actions",
+        decisionSummary: "Execute the remaining bounded public capability.",
+        actions: selectedFrontierEntries.map((entry) => ({
+          frontierEntryId: entry.id,
+          tool: entry.allowedTools[0],
+          purpose: "Execute one selected public capability.",
+          arguments: entry.allowedTools[0] === "search_web" ? { query: entry.queryHint } : { leadId: entry.queryHint },
+          ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
+        })),
+      }),
+      executeAction: async (action) => {
+        if (action.tool === "search_web") {
+          if (!emittedLead && action.sourceLaneId === "t1.first_party") {
+            emittedLead = true;
+            return {
+              status: "succeeded",
+              candidates: [{ ref: "casey_query_subject", displayName: targetRaw }],
+              evidence: [
+                {
+                  candidateRef: "casey_query_subject",
+                  claim: `Public discovery surfaced ${lead.title}.`,
+                  disposition: "discovery_only",
+                  sourceUrl: lead.sourceUrl,
+                  title: lead.title,
+                  sourceType: "search_result",
+                  canonicalSubset: { providerAttestedUrl: true },
+                  verificationMethod: "search_discovery",
+                  attributes: {
+                    leadId: lead.leadId,
+                    classifiedSourceLaneId: "t6.candidate_public_source",
+                    classifiedSourceTier: 6,
+                    classifiedSourceType: "other",
+                    leadSchedulingDisposition: "prioritize",
+                    leadSchedulingReason: "exact_subject_slug_probe",
+                  },
+                },
+              ],
+              meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+            };
+          }
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        if (action.tool === "fetch_public_source") {
+          assert.equal(action.arguments.leadId, lead.leadId);
+          return {
+            status: "succeeded",
+            evidence: [
+              {
+                candidateId: action.candidateId,
+                claim: targetRaw,
+                excerpt: targetRaw,
+                title: targetRaw,
+                sourceUrl: lead.sourceUrl,
+                sourceType: "other",
+                httpStatus: 200,
+                contentHash: `sha256:${"3".repeat(64)}`,
+                verificationMethod: "direct_fetch",
+              },
+            ],
+            meta: { requests: 1, bytesRead: 64, incomplete: false, llmCalls: 0 },
+          };
+        }
+        throw new Error(`Unexpected bare-only fallback action ${action.tool}`);
+      },
+      synthesize: async (_state, context) => {
+        synthesisCalls += 1;
+        assert.equal(context.modelAccounting.reserve(), true);
+        context.modelAccounting.settle({ networkRequests: 1 });
+        throw new Error("simulated synthesis outage with one bare-name direct quote");
+      },
+    },
+    {
+      availableTools: ["search_web", "fetch_public_source"],
+      budget: { maxTurns: 10, maxLlmCalls: 6 },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(synthesisCalls, 1);
+  const direct = completed.report.evidence.find(
+    (evidence) => evidence.verificationMethod === "direct_fetch" && evidence.claim === targetRaw,
+  );
+  assert.ok(direct);
+  assert.equal(completed.report.findings.length, 1);
+  const finding = completed.report.findings[0];
+  assert.equal(finding.title, `Identity — ${targetRaw}`);
+  assert.equal(finding.description, targetRaw);
+  assert.deepEqual(finding.evidenceIds, [direct.id]);
+  assert.equal(finding.confidence.label, "low");
+  assert.ok(finding.confidence.score < 0.45);
+  assert.ok(
+    completed.trace.events.some((event) =>
+      event.payload?.diagnostics?.some((diagnostic) => diagnostic.code === "deterministic_finding_fallback_used"),
+    ),
+  );
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
+test("standard runner never enables the Deep-only quality-probe fallback", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Alex Rivera",
+    requestedDepth: "standard",
+  });
+  let emittedLeads = false;
+  let plannerFetches = 0;
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-21T20:10:00.000Z", 1),
+      ids: domain.createDeterministicIdFactory("standard-no-quality-probe"),
+      planner: async ({ selectedFrontierEntries }) => ({
+        kind: "actions",
+        decisionSummary: "Use the standard planner path.",
+        actions: selectedFrontierEntries.map((entry) => {
+          if (entry.allowedTools[0] === "fetch_public_source") plannerFetches += 1;
+          return {
+            frontierEntryId: entry.id,
+            tool: entry.allowedTools[0],
+            purpose: "Execute the standard selected capability.",
+            arguments:
+              entry.allowedTools[0] === "search_web" ? { query: entry.queryHint } : { leadId: entry.queryHint },
+            ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
+          };
+        }),
+      }),
+      executeAction: async (action) => {
+        if (action.tool === "search_web" && !emittedLeads) {
+          emittedLeads = true;
+          return {
+            status: "succeeded",
+            candidates: [{ ref: "alex_standard_subject", displayName: "Alex Rivera" }],
+            evidence: [
+              {
+                candidateRef: "alex_standard_subject",
+                claim: "Public discovery surfaced an exact-name biography path.",
+                disposition: "discovery_only",
+                sourceUrl: "https://official.example/alex-rivera",
+                title: "Public source at official.example",
+                sourceType: "search_result",
+                canonicalSubset: { providerAttestedUrl: true },
+                verificationMethod: "search_discovery",
+                attributes: {
+                  leadId: "lead_standard_prioritized",
+                  classifiedSourceLaneId: "t6.candidate_public_source",
+                  classifiedSourceTier: 6,
+                  classifiedSourceType: "other",
+                  leadSchedulingDisposition: "prioritize",
+                  leadSchedulingReason: "exact_subject_slug_probe",
+                },
+              },
+            ],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        if (action.tool === "fetch_public_source") {
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        return {
+          status: "not_found",
+          evidence: [],
+          meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+        };
+      },
+    },
+    { availableTools: ["search_web", "fetch_public_source"], budget: { maxTurns: 6 } },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.ok(plannerFetches > 0, "standard traversal must keep its existing planner path");
+  assert.equal(completed.trace.events.filter((event) => event.name === "frontier.quality_probe_selected").length, 0);
+  assert.equal(completed.trace.events.filter((event) => event.name === "scheduler.quality_probe_routed").length, 0);
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+});
+
+test("deep runner spends the reserved final synthesis call after the last opaque lead settles", async () => {
+  const targetRaw = "Jordan Lee";
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: targetRaw,
+    requestedDepth: "deep",
+  });
+  const plan = search.compileOsintQueries(domain.parseTarget(input));
+  assert.equal(plan.status, "compiled");
+
+  let emittedLead = false;
+  let leadPlannerCalls = 0;
+  let fetchCalls = 0;
+  let synthesisCalls = 0;
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-21T10:30:00.000Z", 1),
+      ids: domain.createDeterministicIdFactory("deep-last-lead-final-synthesis"),
+      planner: async ({ selectedFrontierEntries, modelAccounting }) => {
+        leadPlannerCalls += 1;
+        assert.equal(modelAccounting.reserve(), true);
+        modelAccounting.settle({ networkRequests: 1 });
+        return {
+          kind: "actions",
+          decisionSummary: "Fetch the final exact opaque lead.",
+          actions: selectedFrontierEntries.map((entry) => ({
+            frontierEntryId: entry.id,
+            tool: "fetch_public_source",
+            purpose: "Fetch the final bounded public lead.",
+            arguments: { leadId: entry.queryHint },
+            candidateId: entry.candidateId,
+          })),
+        };
+      },
+      executeAction: async (action, context) => {
+        if (action.tool === "search_web") {
+          if (!emittedLead && action.sourceLaneId === "t1.first_party") {
+            emittedLead = true;
+            return {
+              status: "succeeded",
+              candidates: [{ ref: "jordan_query_subject", displayName: targetRaw }],
+              evidence: [
+                {
+                  candidateRef: "jordan_query_subject",
+                  claim: "Public discovery surfaced one canonical GitHub profile lead.",
+                  disposition: "discovery_only",
+                  sourceUrl: "https://github.com/jordan-lee",
+                  title: "Jordan Lee · GitHub",
+                  sourceType: "search_result",
+                  canonicalSubset: { providerAttestedUrl: true },
+                  verificationMethod: "search_discovery",
+                  attributes: {
+                    leadId: "lead_jordan_final",
+                    classifiedSourceLaneId: "t2.structured_professional",
+                    classifiedSourceTier: 2,
+                    classifiedSourceType: "code_profile",
+                    leadSchedulingDisposition: "neutral",
+                    leadSchedulingReason: "neutral",
+                  },
+                },
+              ],
+              meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+            };
+          }
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        if (action.tool === "fetch_public_source") {
+          fetchCalls += 1;
+          assert.equal(context.modelAccounting.reserve(), true);
+          context.modelAccounting.settle({ networkRequests: 1 });
+          return {
+            status: "not_found",
+            evidence: [],
+            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+          };
+        }
+        throw new Error(`Unexpected test action ${action.tool}`);
+      },
+      synthesize: async (_state, context) => {
+        synthesisCalls += 1;
+        assert.equal(context.modelAccounting.reserve(), true, "the post-last-lead synthesis call must remain callable");
+        context.modelAccounting.settle({ networkRequests: 1 });
+        return { decisionSummary: "The exhausted lead set was synthesized once.", findings: [], openQuestions: [] };
+      },
+    },
+    {
+      availableTools: ["search_web", "fetch_public_source"],
+      budget: { maxLlmCalls: 3 },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(leadPlannerCalls, 1);
+  assert.equal(fetchCalls, 1);
+  assert.equal(synthesisCalls, 1);
+  assert.equal(completed.report.usage.llmCalls, 3);
+  assert.equal(
+    completed.report.searchGraph.frontier.filter(
+      (entry) => entry.leadId && ["queued", "mutated", "selected", "running"].includes(entry.status),
+    ).length,
+    0,
+    "the regression must settle the last finite lead before synthesis",
+  );
+  const fetchEnd = completed.trace.events.find(
+    (event) => event.kind === "span_end" && event.name === "tool.fetch_public_source",
+  );
+  const synthesisStart = completed.trace.events.find(
+    (event) => event.kind === "span_start" && event.name === "synthesis.findings",
+  );
+  assert.ok(fetchEnd && synthesisStart && fetchEnd.seq < synthesisStart.seq);
+  assert.equal(completed.trace.events.filter((event) => event.name === "synthesis.final_call_reserved").length, 1);
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
 test("terminal exhaustion never claims an unexecuted compiler query ran", async () => {
   const input = domain.parseInvestigationInput({
     schemaVersion: domain.SCHEMA_VERSION,
@@ -1218,10 +2477,15 @@ test("terminal exhaustion never claims an unexecuted compiler query ran", async 
   assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
 });
 
-test("a synthesis outage continues canonical frontier work in unused calibrate capacity", async () => {
+test("a Deep synthesis outage is deferred until canonical frontier work is exhausted", async () => {
   const targetRaw = "Chinmay Bhat";
   const queryPlan = search.compileOsintQueries(domain.parseTarget(targetRaw));
   assert.equal(queryPlan.status, "compiled");
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: targetRaw,
+    requestedDepth: "deep",
+  });
   const executedQueries = [];
   let plannerCalls = 0;
   let synthesisCalls = 0;
@@ -1229,7 +2493,7 @@ test("a synthesis outage continues canonical frontier work in unused calibrate c
   const updates = [];
 
   for await (const update of agent.runResearch(
-    targetRaw,
+    input,
     {
       clock: domain.createSequenceClock("2026-08-20T20:27:30.000Z", 1),
       ids: domain.createDeterministicIdFactory("phase-cap-synthesis-outage"),
@@ -1253,7 +2517,17 @@ test("a synthesis outage continues canonical frontier work in unused calibrate c
           return {
             status: "succeeded",
             candidates: [{ ref: "chinmay", displayName: targetRaw, frontierExpansion: "none" }],
-            evidence: [],
+            evidence: [
+              {
+                candidateRef: "chinmay",
+                claim: "The canonical discovery query returned one bounded public profile lead.",
+                disposition: "discovery_only",
+                sourceUrl: "https://github.com/chinmay-bhat",
+                sourceType: "search_result",
+                canonicalSubset: { providerAttestedUrl: true },
+                verificationMethod: "search_discovery",
+              },
+            ],
             meta: { requests: 0, bytesRead: 0, incomplete: false, llmCalls: 0 },
           };
         }
@@ -1322,13 +2596,14 @@ test("a synthesis outage continues canonical frontier work in unused calibrate c
   );
   assert.equal(synthesisEnds.length, 1);
   assert.equal(synthesisEnds[0].status, "failed");
+  assert.ok(
+    Math.max(...toolStarts.map((event) => event.seq)) < synthesisEnds[0].seq,
+    "the first synthesis attempt must follow every finite canonical search adapter call",
+  );
   const capStops = completed.trace.events.filter(
     (event) => event.name === "phase.cap_reached" && event.payload.reason === "pending_frontier_continues_in_calibrate",
   );
-  assert.equal(capStops.length, 1);
-  assert.equal(capStops[0].payload.cappedPhase, "corroborate");
-  assert.equal(capStops[0].payload.nextPhase, "calibrate");
-  assert.ok(capStops[0].payload.pendingFrontierEntries >= t6CompilerEntries.length);
+  assert.equal(capStops.length, 0, "deferred synthesis no longer needs a calibrate-to-corroborate recovery loop");
 
   const { limits, usage } = completed.state.budget;
   for (const [phase, turns] of Object.entries(usage.phaseTurns)) {
@@ -1475,7 +2750,11 @@ test("runner opens and executes Keybase only after a GitHub handle is grounded, 
       actionRejected: completed.trace.events.filter((event) => event.name === "action.rejected"),
     }),
   );
-  assert.ok(plannerProviderCalls >= 1);
+  assert.equal(
+    plannerProviderCalls,
+    0,
+    "Deep canonical discovery and grounded lead/specialist dependencies require no model planner call",
+  );
   assert.equal(
     providerCallsAtKeybase,
     plannerProviderCalls,
@@ -1485,9 +2764,9 @@ test("runner opens and executes Keybase only after a GitHub handle is grounded, 
     completed.trace.events.filter(
       (event) => event.name === "planner.decision" && event.kind === "span_end" && event.usage.llmCalls === 1,
     ).length,
-    1,
-    "bounded retry exhaustion is one logical planner call before the run-scoped mechanical circuit opens",
+    0,
   );
+  assert.ok(completed.trace.events.some((event) => event.name === "scheduler.canonical_batch_routed"));
   assert.ok(specialist);
   assert.equal(specialist.queryHint, "chinmay-bhat");
   assert.equal(specialist.status, "exhausted");
@@ -1911,14 +3190,17 @@ test("source hierarchy is tiered and denies people-search, phonebook, property, 
     "https://openreview.net/profile?id=~Example_Person1",
     "https://www.semanticscholar.org/author/Example-Person/123456",
     "https://openalex.org/A123456789",
-    "https://api.crossref.org/works/10.5555%2Fexample",
   ]) {
     const sourceType = search.deterministicSourceTypeForUrl(source);
     const sourceTier = search.sourceTierForUrl(source, sourceType);
-    assert.equal(sourceType, "public_document", source);
+    assert.equal(sourceType, "professional_profile", source);
     assert.equal(sourceTier, 2, source);
     assert.equal(search.classifiedFetchLaneId(sourceType, sourceTier, true), "t2.structured_professional", source);
   }
+  const crossrefRecord = "https://api.crossref.org/works/10.5555%2Fexample";
+  assert.equal(search.deterministicSourceTypeForUrl(crossrefRecord), "public_document");
+  assert.equal(search.sourceTierForUrl(crossrefRecord, "public_document"), 3);
+  assert.equal(search.classifiedFetchLaneId("public_document", 3, true), "t3.institutional");
   assert.equal(search.deterministicSourceTypeForUrl("https://profiles.example/person"), "other");
   assert.equal(search.sourceTierForUrl("https://profiles.example/person", "other"), 6);
   assert.equal(search.sourceTierForUrl("https://example.edu/person", "public_document"), 3);
@@ -1936,7 +3218,11 @@ test("source hierarchy is tiered and denies people-search, phonebook, property, 
     "https://apps.apple.com/app/id123456789?platform=iphone",
   ]) {
     assert.equal(search.deterministicSourceTypeForUrl(listing), "public_document", listing);
-    assert.equal(search.sourceTierForUrl(listing, "public_document"), 2, listing);
+    assert.equal(
+      search.sourceTierForUrl(listing, "public_document"),
+      3,
+      `${listing} remains public metadata without outranking canonical person records`,
+    );
   }
   for (const nonListing of [
     "https://apps.apple.com/us/developer/example/id123456789",

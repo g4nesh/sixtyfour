@@ -45,6 +45,7 @@ import {
   admitGraphEdge,
   admitGraphNode,
   assertSearchGraph,
+  discoveryLeadSchedulingDecision,
   enqueueCandidateFrontier,
   enqueueCandidateLeadFetchFrontier,
   enqueueCandidateUrlFrontier,
@@ -63,6 +64,7 @@ import {
   sourceLaneForFrontierEntry,
   sourceTierContextForState,
   sourceTierForUrl,
+  type DiscoveryLeadSchedulingDecision,
   type SearchKernelEvent,
 } from "../search";
 import { compileFrontierHarness, initialFrontierHarnessState, type FrontierHarnessRoute } from "../harness";
@@ -84,6 +86,8 @@ export interface ResearchActionV1 {
   sourceLaneId: string;
   pathCost: number;
   mutated: boolean;
+  /** Server-owned traversal role; never copied from a planner proposal. */
+  executionRole?: "quality_probe";
 }
 
 export type ResearchAction = ResearchActionV1;
@@ -640,7 +644,10 @@ function mergeTokenUsage(left: Partial<TokenUsage>, right: Partial<TokenUsage>):
   return merged;
 }
 
-function createModelAccounting(engine: InvestigationEngine): InternalModelAccounting {
+function createModelAccounting(engine: InvestigationEngine, reservedLlmCalls = 0): InternalModelAccounting {
+  if (!Number.isInteger(reservedLlmCalls) || reservedLlmCalls < 0) {
+    throw new TypeError("reservedLlmCalls must be a non-negative integer");
+  }
   let attempts = 0;
   let outstanding = 0;
   let networkRequests = 0;
@@ -650,6 +657,8 @@ function createModelAccounting(engine: InvestigationEngine): InternalModelAccoun
   return {
     reserve() {
       if (!engine.canAttemptLlm()) return false;
+      const { limits, usage } = engine.snapshot().budget;
+      if (limits.maxLlmCalls - usage.llmCalls <= reservedLlmCalls) return false;
       engine.recordLlmCall();
       attempts += 1;
       outstanding += 1;
@@ -701,6 +710,91 @@ function createModelAccounting(engine: InvestigationEngine): InternalModelAccoun
       };
     },
   };
+}
+
+function isOpaqueCandidateLeadFetchEntry(entry: SearchFrontierEntry): boolean {
+  return (
+    entry.candidateId !== null &&
+    typeof entry.leadId === "string" &&
+    entry.leadId.length > 0 &&
+    entry.queryHint === entry.leadId &&
+    entry.mutation === null &&
+    entry.allowedTools.length === 1 &&
+    entry.allowedTools[0] === "fetch_public_source"
+  );
+}
+
+function isFiniteCanonicalOrLeadEntry(entry: SearchFrontierEntry): boolean {
+  return isCanonicalCompilerSearchEntry(entry) || isOpaqueCandidateLeadFetchEntry(entry);
+}
+
+function isUsefulDirectSupportingEvidence(evidence: EvidenceRecord): boolean {
+  return (
+    evidence.disposition === "supports" &&
+    evidence.sourceType !== "search_result" &&
+    !["search_discovery", "unverified"].includes(evidence.verificationMethod) &&
+    (evidence.contentHash !== null || evidence.excerpt !== null || evidence.canonicalSubset !== null)
+  );
+}
+
+function isInformativeQualityProbeEvidence(evidence: EvidenceRecord, state: InvestigationState): boolean {
+  if (!isUsefulDirectSupportingEvidence(evidence)) return false;
+  const candidate = state.candidates.find((item) => item.id === evidence.candidateId);
+  const subjectNames = new Set(
+    [state.target.normalizedName, candidate?.normalizedName]
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+      .map(normalizeComparable),
+  );
+  const exactAssertions = [evidence.claim, evidence.excerpt]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map(normalizeComparable)
+    .filter(Boolean);
+  // A direct, hash-bound bare-name quote remains valid evidence for audit and
+  // identity separation. It is not enough to spend the one useful-probe stop
+  // or trigger immediate synthesis; the backup probe may still recover a
+  // durable professional assertion.
+  return exactAssertions.some((assertion) => !subjectNames.has(assertion));
+}
+
+const DISCOVERY_LEAD_SCHEDULING_DISPOSITIONS = new Set<DiscoveryLeadSchedulingDecision["disposition"]>([
+  "reject",
+  "deprioritize",
+  "neutral",
+  "prioritize",
+]);
+const DISCOVERY_LEAD_SCHEDULING_REASONS = new Set<DiscoveryLeadSchedulingDecision["reason"]>([
+  "invalid_url",
+  "non_professional_navigation",
+  "resume_or_template",
+  "quote_content",
+  "stock_media",
+  "generic_person_homepage",
+  "candidate_bio_path",
+  "exact_subject_slug_probe",
+  "neutral",
+]);
+
+function persistedDiscoveryLeadSchedulingDecision(
+  evidence: EvidenceRecord,
+): [string, DiscoveryLeadSchedulingDecision] | null {
+  const leadId = evidence.attributes.leadId;
+  const disposition = evidence.attributes.leadSchedulingDisposition;
+  const reason = evidence.attributes.leadSchedulingReason;
+  if (
+    typeof leadId !== "string" ||
+    typeof disposition !== "string" ||
+    !DISCOVERY_LEAD_SCHEDULING_DISPOSITIONS.has(disposition as DiscoveryLeadSchedulingDecision["disposition"]) ||
+    typeof reason !== "string" ||
+    !DISCOVERY_LEAD_SCHEDULING_REASONS.has(reason as DiscoveryLeadSchedulingDecision["reason"])
+  )
+    return null;
+  return [
+    leadId,
+    {
+      disposition: disposition as DiscoveryLeadSchedulingDecision["disposition"],
+      reason: reason as DiscoveryLeadSchedulingDecision["reason"],
+    },
+  ];
 }
 
 function chargeLegacyModelTelemetry(
@@ -886,7 +980,10 @@ async function executeActions(
   proposals: ProposedResearchAction[],
   graphValue: SearchGraph,
   selectedEntries: SearchFrontierEntry[],
+  qualityProbeEntryIds: ReadonlySet<string>,
   availableTools: string[],
+  completeFiniteCanonicalSearches: boolean,
+  reserveFinalSynthesisCall: boolean,
   signal?: AbortSignal,
 ): Promise<ActionBatchExecution> {
   let graph = cloneJson(graphValue);
@@ -926,6 +1023,42 @@ async function executeActions(
     }
     claimedEntries.add(entry.id);
     bound.push({ proposal: { ...proposal, frontierEntryId: entry.id }, entry });
+  }
+  // Canonical compiler queries are finite, mechanically bound capabilities:
+  // their exact query is owned by the selected frontier rather than by the
+  // planner. In Deep mode, complete a partial or no-op planner batch with each
+  // omitted selected compiler query while action budget remains. This prevents
+  // repeated advance/stop decisions from spending the no-progress allowance
+  // while finite public discovery is still legal. Exact T0 inputs, opaque lead
+  // fetches, archive dependencies, specialists, and mutations retain their
+  // existing planner and dependency semantics.
+  let mechanicallyCompletedCanonicalSearches = 0;
+  if (completeFiniteCanonicalSearches) {
+    for (const entry of selectedEntries) {
+      if (bound.length >= batchLimit) break;
+      if (claimedEntries.has(entry.id) || !isCanonicalCompilerSearchEntry(entry)) continue;
+      claimedEntries.add(entry.id);
+      bound.push({
+        entry,
+        proposal: {
+          frontierEntryId: entry.id,
+          tool: "search_web",
+          purpose: `Execute the selected finite public discovery query in ${entry.sourceLaneId}.`,
+          arguments: { query: entry.queryHint },
+        },
+      });
+      mechanicallyCompletedCanonicalSearches += 1;
+    }
+  }
+  if (mechanicallyCompletedCanonicalSearches > 0) {
+    engine.trace.record("planner.canonical_batch_completed", {
+      phase: state.phase,
+      payload: {
+        selectedCanonicalSearches: selectedEntries.filter(isCanonicalCompilerSearchEntry).length,
+        plannerBoundActions: bound.length - mechanicallyCompletedCanonicalSearches,
+        mechanicallyCompletedCanonicalSearches,
+      },
+    });
   }
   const initialBatch = bound;
   let remainingSearchCalls = Math.max(0, state.budget.limits.maxSearchCalls - state.budget.usage.searchCalls);
@@ -986,6 +1119,7 @@ async function executeActions(
       sourceLaneId: entry.sourceLaneId,
       pathCost: entry.pathCost,
       mutated: entry.mutation !== null,
+      ...(qualityProbeEntryIds.has(entry.id) ? { executionRole: "quality_probe" as const } : {}),
     };
     const actionNodeAdmission = admitGraphNode(
       graph,
@@ -1048,7 +1182,10 @@ async function executeActions(
       action,
       actionNodeId: actionNodeAdmission.value.id,
       spanId,
-      modelAccounting: createModelAccounting(engine),
+      modelAccounting: createModelAccounting(
+        engine,
+        reserveFinalSynthesisCall && isOpaqueCandidateLeadFetchEntry(entry) ? 1 : 0,
+      ),
     });
   }
 
@@ -1652,6 +1789,12 @@ async function executeActions(
           const classifiedSourceLaneId = admission.evidence.attributes.classifiedSourceLaneId;
           const classifiedSourceTier = admission.evidence.attributes.classifiedSourceTier;
           const classifiedSourceType = admission.evidence.attributes.classifiedSourceType;
+          const leadSchedulingDisposition = admission.evidence.attributes.leadSchedulingDisposition;
+          const schedulingDecision = discoveryLeadSchedulingDecision(
+            admission.evidence.sourceUrl,
+            admission.evidence.title,
+            sourceTierContextForState(engine.snapshot(), admission.evidence.candidateId),
+          );
           const leadCandidate = engine
             .snapshot()
             .candidates.find((candidate) => candidate.id === admission.evidence?.candidateId);
@@ -1660,7 +1803,9 @@ async function executeActions(
             typeof leadId === "string" &&
             typeof classifiedSourceLaneId === "string" &&
             typeof classifiedSourceTier === "number" &&
-            typeof classifiedSourceType === "string"
+            typeof classifiedSourceType === "string" &&
+            leadSchedulingDisposition !== "reject" &&
+            schedulingDecision.disposition !== "reject"
           ) {
             const leadFrontier = enqueueCandidateLeadFetchFrontier(
               graph,
@@ -2108,7 +2253,14 @@ function admitDeterministicFallbackFinding(engine: InvestigationEngine): number 
         !usedEvidenceIds.has(evidence.id) &&
         assessConfidence([evidence]).score < 0.45,
     )
-    .sort((left, right) => left.id.localeCompare(right.id));
+    // Eligibility above remains unchanged. When more than one exact degraded
+    // observation survives it, prefer a durable assertion over a bare subject
+    // label, then retain the existing stable-ID tie break.
+    .sort(
+      (left, right) =>
+        Number(isInformativeQualityProbeEvidence(right, snapshot)) -
+          Number(isInformativeQualityProbeEvidence(left, snapshot)) || left.id.localeCompare(right.id),
+    );
 
   for (const evidence of eligible) {
     const category =
@@ -2331,6 +2483,11 @@ export async function* runResearch(
   let turnStarted = false;
   let traceCursor = 0;
   let synthesisUnavailable = false;
+  let finalSynthesisReservationRecorded = false;
+  let qualityProbeSynthesisAttempted = false;
+  let evidenceCountAtLastSynthesis = 0;
+  let selectedQualityProbeEntryIds = new Set<string>();
+  const attemptedQualityProbeEntryIds = new Set<string>();
 
   const emitPending = (): ResearchUpdate[] => {
     const pending = pendingUpdates(engine, traceCursor);
@@ -2342,6 +2499,99 @@ export async function* runResearch(
 
   const hasPendingFrontier = (): boolean =>
     graph.frontier.some((entry) => entry.status === "queued" || entry.status === "mutated");
+
+  const pendingFiniteEvidenceFrontier = (): SearchFrontierEntry[] =>
+    graph.frontier.filter(
+      (entry) => (entry.status === "queued" || entry.status === "mutated") && isFiniteCanonicalOrLeadEntry(entry),
+    );
+
+  const pendingDeepFiniteEvidenceFrontier = (): SearchFrontierEntry[] =>
+    engine.snapshot().input.requestedDepth === "deep" ? pendingFiniteEvidenceFrontier() : [];
+
+  const hasActiveCanonicalSearch = (): boolean =>
+    graph.frontier.some(
+      (entry) =>
+        ["queued", "mutated", "selected", "running"].includes(entry.status) && isCanonicalCompilerSearchEntry(entry),
+    );
+
+  const hasUsefulDirectEvidence = (): boolean => engine.snapshot().evidence.some(isUsefulDirectSupportingEvidence);
+
+  const hasUnsynthesizedEvidence = (): boolean => engine.snapshot().evidence.length > evidenceCountAtLastSynthesis;
+
+  const qualityProbeProducedUsefulDirectEvidence = (): boolean => {
+    if (attemptedQualityProbeEntryIds.size === 0) return false;
+    const actionIds = new Set(
+      graph.frontier.filter((entry) => attemptedQualityProbeEntryIds.has(entry.id)).map((entry) => entry.actionId),
+    );
+    const state = engine.snapshot();
+    return state.evidence.some(
+      (evidence) =>
+        evidence.toolCallId !== null &&
+        actionIds.has(evidence.toolCallId) &&
+        isInformativeQualityProbeEvidence(evidence, state),
+    );
+  };
+
+  const shouldUseReservedFinalSynthesisCall = (): boolean => {
+    if (
+      engine.snapshot().input.requestedDepth !== "deep" ||
+      synthesisUnavailable ||
+      !dependencies.synthesize ||
+      !engine.canAttemptLlm() ||
+      hasActiveCanonicalSearch()
+    )
+      return false;
+    const state = engine.snapshot();
+    if (state.evidence.length <= evidenceCountAtLastSynthesis) return false;
+    const remainingLlmCalls = Math.max(0, state.budget.limits.maxLlmCalls - state.budget.usage.llmCalls);
+    const pendingFinite = pendingFiniteEvidenceFrontier();
+    const pendingOpaqueLeadFetch = pendingFinite.some(isOpaqueCandidateLeadFetchEntry);
+    const noFiniteEvidenceFrontier = pendingFinite.length === 0;
+    const remainingTurns = Math.max(0, state.budget.limits.maxTurns - state.budget.usage.turns);
+    const remainingToolCalls = Math.max(0, state.budget.limits.maxToolCalls - state.budget.usage.toolCalls);
+    const remainingEvidenceAttempts = Math.max(
+      0,
+      state.budget.limits.maxEvidenceAttempts - state.budget.usage.evidenceAttempts,
+    );
+    const remainingNetworkRequests = Math.max(
+      0,
+      state.budget.limits.maxNetworkRequests - state.budget.usage.networkRequests,
+    );
+    const nextBatchCapacity = Math.min(state.budget.limits.maxActionsPerTurn, MAX_OUTBOUND_CONCURRENCY);
+    const synthesisCapacityAtRisk =
+      remainingLlmCalls === 1 ||
+      (hasUsefulDirectEvidence() &&
+        pendingOpaqueLeadFetch &&
+        (remainingTurns <= 1 ||
+          remainingToolCalls <= nextBatchCapacity ||
+          remainingEvidenceAttempts <= nextBatchCapacity ||
+          remainingNetworkRequests <= nextBatchCapacity * 2 + 1));
+    return synthesisCapacityAtRisk && state.evidence.length > 0 && (pendingOpaqueLeadFetch || noFiniteEvidenceFrontier);
+  };
+
+  const recordFinalSynthesisReservation = (): void => {
+    if (finalSynthesisReservationRecorded) return;
+    const state = engine.snapshot();
+    engine.trace.record("synthesis.final_call_reserved", {
+      phase: engine.phase,
+      payload: {
+        remainingLlmCalls: Math.max(0, state.budget.limits.maxLlmCalls - state.budget.usage.llmCalls),
+        remainingTurns: Math.max(0, state.budget.limits.maxTurns - state.budget.usage.turns),
+        remainingToolCalls: Math.max(0, state.budget.limits.maxToolCalls - state.budget.usage.toolCalls),
+        remainingEvidenceAttempts: Math.max(
+          0,
+          state.budget.limits.maxEvidenceAttempts - state.budget.usage.evidenceAttempts,
+        ),
+        remainingNetworkRequests: Math.max(
+          0,
+          state.budget.limits.maxNetworkRequests - state.budget.usage.networkRequests,
+        ),
+        pendingOpaqueLeadFetches: pendingFiniteEvidenceFrontier().filter(isOpaqueCandidateLeadFetchEntry).length,
+        usefulDirectEvidence: hasUsefulDirectEvidence(),
+      },
+    });
+    finalSynthesisReservationRecorded = true;
+  };
 
   const phaseTurnCapReached = (phase: ResearchPhase): boolean => {
     const { limits, usage } = engine.snapshot().budget;
@@ -2402,6 +2652,10 @@ export async function* runResearch(
           finish(evaluateStop(engine.snapshot(), { canceled: true }), { canceled: true });
           return { route: "terminal", selectedFrontierEntryIds: [] };
         }
+        if (shouldUseReservedFinalSynthesisCall() && advanceToCalibrate()) {
+          recordFinalSynthesisReservation();
+          return { route: "synthesize", selectedFrontierEntryIds: [] };
+        }
         const cappedPhases = new Set<ResearchPhase>();
         while (!engine.canStartTurn()) {
           const stop = evaluateStop(engine.snapshot(), completionStopOptions);
@@ -2418,7 +2672,9 @@ export async function* runResearch(
               payload: { cappedPhase, nextPhase: next },
             });
             engine.transition(next);
-            if (engine.phase === "calibrate" && !synthesisUnavailable) return { route: "synthesize" };
+            if (engine.phase === "calibrate" && !synthesisUnavailable && hasUnsynthesizedEvidence()) {
+              return { route: "synthesize" };
+            }
           } else {
             finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
             return { route: "terminal", selectedFrontierEntryIds: [] };
@@ -2428,6 +2684,18 @@ export async function* runResearch(
         const state = engine.snapshot();
         const remainingCalls = Math.max(0, state.budget.limits.maxToolCalls - state.budget.usage.toolCalls);
         const limit = Math.min(state.budget.limits.maxActionsPerTurn, remainingCalls, MAX_OUTBOUND_CONCURRENCY);
+        const discoveryLeadContexts = Object.fromEntries(
+          state.candidates.map((candidate) => [candidate.id, sourceTierContextForState(state, candidate.id)]),
+        );
+        const discoveryLeadSchedulingDecisions = Object.fromEntries(
+          state.evidence
+            .map(persistedDiscoveryLeadSchedulingDecision)
+            .filter((decision): decision is [string, DiscoveryLeadSchedulingDecision] => decision !== null),
+        );
+        const qualityProbeSelectionEnabled =
+          state.input.requestedDepth === "deep" &&
+          attemptedQualityProbeEntryIds.size < 2 &&
+          !qualityProbeProducedUsefulDirectEvidence();
         const selection = selectFrontierBatch(graph, limit, engine.clock.now(), {
           // Deep investigations reserve finite compiler breadth. Once a
           // provider search exposes many candidate links, hold those optional
@@ -2435,9 +2703,21 @@ export async function* runResearch(
           // the search adapter once. Exact T0 and exact-URL dependencies keep
           // their normal tier/dependency precedence in the kernel.
           reserveCanonicalCompilerBreadth: state.input.requestedDepth === "deep",
+          prioritizeDiscoveryLeadProbe: qualityProbeSelectionEnabled,
+          maxPrioritizedDiscoveryLeadProbes: 2,
+          attemptedPrioritizedDiscoveryLeadProbeEntryIds: attemptedQualityProbeEntryIds,
+          discoveryLeadContexts,
+          discoveryLeadSchedulingDecisions,
         });
         graph = selection.graph;
         selectedEntries = selection.value;
+        selectedQualityProbeEntryIds = new Set(
+          selection.events
+            .filter((event) => event.name === "frontier.quality_probe_selected")
+            .map((event) => event.payload.frontierEntryId)
+            .filter((entryId): entryId is string => typeof entryId === "string"),
+        );
+        for (const entryId of selectedQualityProbeEntryIds) attemptedQualityProbeEntryIds.add(entryId);
         recordSearchEvents(engine, selection.events);
 
         if (selectedEntries.length === 0) {
@@ -2462,7 +2742,7 @@ export async function* runResearch(
             });
           }
           engine.replaceSearchGraph(graph);
-          if (!synthesisUnavailable && engine.snapshot().evidence.length > 0 && advanceToCalibrate()) {
+          if (!synthesisUnavailable && hasUnsynthesizedEvidence() && advanceToCalibrate()) {
             return { route: "synthesize", selectedFrontierEntryIds: [] };
           }
           finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
@@ -2483,8 +2763,56 @@ export async function* runResearch(
       },
 
       planExpansion: async () => {
-        plannerDecision = await invokePlanner(engine, dependencies, availableTools, selectedEntries, options.signal);
-        if (plannerDecision.kind !== "actions") {
+        const deterministicCanonicalBatch =
+          engine.snapshot().input.requestedDepth === "deep" &&
+          selectedEntries.length > 0 &&
+          selectedEntries.every(isCanonicalCompilerSearchEntry);
+        const deterministicQualityProbeBatch =
+          engine.snapshot().input.requestedDepth === "deep" &&
+          selectedEntries.length > 0 &&
+          selectedEntries.every(
+            (entry) => selectedQualityProbeEntryIds.has(entry.id) && isOpaqueCandidateLeadFetchEntry(entry),
+          );
+        if (deterministicCanonicalBatch) {
+          plannerDecision = {
+            kind: "actions",
+            decisionSummary: "Atlas mechanically routed the selected finite canonical discovery batch.",
+            actions: selectedEntries.map((entry) => ({
+              frontierEntryId: entry.id,
+              tool: "search_web",
+              purpose: `Execute the selected finite public discovery query in ${entry.sourceLaneId}.`,
+              arguments: { query: entry.queryHint },
+            })),
+          };
+          engine.trace.record("scheduler.canonical_batch_routed", {
+            phase: engine.phase,
+            payload: { entryCount: selectedEntries.length },
+          });
+        } else if (deterministicQualityProbeBatch) {
+          plannerDecision = {
+            kind: "actions",
+            decisionSummary: "Atlas mechanically routed one bounded source-shape quality probe.",
+            actions: selectedEntries.map((entry) => ({
+              frontierEntryId: entry.id,
+              tool: "fetch_public_source",
+              purpose: "Fetch the exact candidate-scoped prioritized public discovery lead.",
+              arguments: { leadId: entry.queryHint },
+              ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
+            })),
+          };
+          engine.trace.record("scheduler.quality_probe_routed", {
+            phase: engine.phase,
+            payload: {
+              entryCount: selectedEntries.length,
+              frontierEntryIds: selectedEntries.map((entry) => entry.id),
+            },
+          });
+        } else {
+          plannerDecision = await invokePlanner(engine, dependencies, availableTools, selectedEntries, options.signal);
+        }
+        const completeFiniteCanonicalSearches =
+          engine.snapshot().input.requestedDepth === "deep" && selectedEntries.some(isCanonicalCompilerSearchEntry);
+        if (plannerDecision.kind !== "actions" && !completeFiniteCanonicalSearches) {
           graph = requeueFrontier(
             graph,
             selectedEntries.map((entry) => entry.id),
@@ -2492,7 +2820,8 @@ export async function* runResearch(
           );
           engine.replaceSearchGraph(graph);
         }
-        const route: FrontierHarnessRoute = plannerDecision.kind === "actions" ? "execute_expansion" : "assess";
+        const route: FrontierHarnessRoute =
+          plannerDecision.kind === "actions" || completeFiniteCanonicalSearches ? "execute_expansion" : "assess";
         return {
           route,
           decision: cloneJson(plannerDecision) as unknown as JsonObject,
@@ -2500,17 +2829,28 @@ export async function* runResearch(
       },
 
       executeExpansion: async () => {
-        if (!plannerDecision || plannerDecision.kind !== "actions") {
+        if (!plannerDecision) {
+          return { route: "admit_expand", mutations: 0 };
+        }
+        const completeFiniteCanonicalSearches = engine.snapshot().input.requestedDepth === "deep";
+        if (plannerDecision.kind !== "actions" && !selectedEntries.some(isCanonicalCompilerSearchEntry)) {
           return { route: "admit_expand", mutations: 0 };
         }
         if (engine.phase === "plan") engine.transition("discover");
         const batch = await executeActions(
           engine,
           dependencies,
-          plannerDecision.actions,
+          plannerDecision.kind === "actions" ? plannerDecision.actions : [],
           graph,
           selectedEntries,
+          selectedQualityProbeEntryIds,
           availableTools,
+          completeFiniteCanonicalSearches,
+          completeFiniteCanonicalSearches &&
+            !synthesisUnavailable &&
+            Boolean(dependencies.synthesize) &&
+            engine.snapshot().evidence.length > 0 &&
+            !hasActiveCanonicalSearch(),
           options.signal,
         );
         graph = batch.graph;
@@ -2551,15 +2891,47 @@ export async function* runResearch(
         }
 
         const stop = evaluateStop(engine.snapshot(), completionStopOptions);
+        if (stop.allowed && stop.reason === "goal_satisfied" && completeIfSatisfied()) {
+          return { route: "terminal" };
+        }
+        if (
+          !qualityProbeSynthesisAttempted &&
+          !synthesisUnavailable &&
+          dependencies.synthesize &&
+          qualityProbeProducedUsefulDirectEvidence() &&
+          engine.canAttemptLlm() &&
+          advanceToCalibrate()
+        ) {
+          qualityProbeSynthesisAttempted = true;
+          engine.trace.record("synthesis.quality_probe_ready", {
+            phase: engine.phase,
+            payload: {
+              qualityProbeEntryIds: [...selectedQualityProbeEntryIds].sort(),
+              usefulDirectEvidence: true,
+            },
+          });
+          return { route: "synthesize" };
+        }
+        // A final reserved model call is still useful after the last opaque
+        // lead settles. Route it before a no-progress or adjacent budget stop;
+        // otherwise a run can end with one callable synthesis opportunity and
+        // no finding attempt merely because the finite frontier became empty.
+        if (!synthesisUnavailable && shouldUseReservedFinalSynthesisCall() && advanceToCalibrate()) {
+          recordFinalSynthesisReservation();
+          return { route: "synthesize" };
+        }
         if (stop.allowed && stop.reason !== "goal_satisfied") {
           finish(stop, completionStopOptions);
           return { route: "terminal" };
         }
-        if (stop.allowed && stop.reason === "goal_satisfied" && completeIfSatisfied()) {
-          return { route: "terminal" };
-        }
         if (engine.phase === "calibrate") {
-          if (!synthesisUnavailable) return { route: "synthesize" };
+          const pendingFinite = pendingDeepFiniteEvidenceFrontier();
+          if (!synthesisUnavailable && shouldUseReservedFinalSynthesisCall()) {
+            recordFinalSynthesisReservation();
+            return { route: "synthesize" };
+          }
+          if (pendingFinite.length > 0) return { route: "select_frontier" };
+          if (!synthesisUnavailable && hasUnsynthesizedEvidence()) return { route: "synthesize" };
           if (hasPendingFrontier()) return { route: "select_frontier" };
           finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
           return { route: "terminal" };
@@ -2572,8 +2944,17 @@ export async function* runResearch(
             : naturalNextPhase(engine.snapshot());
         if (next && canTransitionPhase(engine.phase, next)) {
           engine.transition(next);
+          const pendingFinite = pendingDeepFiniteEvidenceFrontier();
+          const reservedFinalSynthesis = shouldUseReservedFinalSynthesisCall();
+          if (next === "calibrate" && reservedFinalSynthesis) recordFinalSynthesisReservation();
           return {
-            route: next === "calibrate" && !synthesisUnavailable ? "synthesize" : "select_frontier",
+            route:
+              next === "calibrate" &&
+              !synthesisUnavailable &&
+              hasUnsynthesizedEvidence() &&
+              (pendingFinite.length === 0 || reservedFinalSynthesis)
+                ? "synthesize"
+                : "select_frontier",
           };
         }
         if (engine.phase === "report") {
@@ -2591,6 +2972,7 @@ export async function* runResearch(
         const synthesis = synthesisUnavailable
           ? ({ mutations: 0, outcome: "unavailable" } as const)
           : await synthesizeFindings(engine, dependencies, options.signal);
+        evidenceCountAtLastSynthesis = engine.snapshot().evidence.length;
         if (synthesis.outcome !== "succeeded") synthesisUnavailable = true;
         const deterministic = synthesis.outcome === "unavailable" ? admitDeterministicFallbackFinding(engine) : 0;
         graph = admitMissingFindingNodes(engine, graph);

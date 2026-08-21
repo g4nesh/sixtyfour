@@ -524,12 +524,46 @@ test("abort during in-flight synthesis closes the model span as canceled", async
     {
       clock,
       ids,
-      planner: async ({ state }) => ({
-        kind: "advance",
-        nextPhase: nextPhase[state.phase],
-        decisionSummary: `Advance from ${state.phase} within the bounded graph.`,
+      planner: async ({ state, selectedFrontierEntries }) => {
+        if (state.phase === "plan") {
+          const entry = selectedFrontierEntries[0];
+          assert.ok(entry);
+          return {
+            kind: "actions",
+            decisionSummary: "Admit one bounded discovery lead before synthesis.",
+            actions: [
+              {
+                frontierEntryId: entry.id,
+                tool: "public_search",
+                purpose: "Find one bounded public source.",
+                arguments: { query: entry.queryHint },
+                budgetClass: "search",
+              },
+            ],
+          };
+        }
+        return {
+          kind: "advance",
+          nextPhase: nextPhase[state.phase],
+          decisionSummary: `Advance from ${state.phase} within the bounded graph.`,
+        };
+      },
+      executeAction: async () => ({
+        status: "succeeded",
+        candidates: [{ ref: "grace", displayName: "Grace Hopper", frontierExpansion: "none" }],
+        evidence: [
+          {
+            candidateRef: "grace",
+            claim: "The public search returned one bounded Grace Hopper source.",
+            disposition: "discovery_only",
+            sourceUrl: "https://example.com/grace-hopper",
+            sourceType: "search_result",
+            canonicalSubset: { providerAttestedUrl: true },
+            verificationMethod: "search_discovery",
+          },
+        ],
+        meta: { requests: 1 },
       }),
-      executeAction: async () => ({ status: "skipped" }),
       synthesize: async (_state, context) => {
         synthesisStarted = true;
         return new Promise((_resolve, reject) => {

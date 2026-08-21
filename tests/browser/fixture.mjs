@@ -197,6 +197,97 @@ export async function denseReplayFixture() {
   };
 }
 
+/**
+ * Exercise the live-dashboard scale that previously saturated React Flow's
+ * shared node ResizeObserver. The synthetic nodes carry no evidence or person
+ * claims; this fixture exists only to stress graph rendering and viewport work.
+ */
+export async function highNodeCountGraphFixture(nodeCount = 249, snapshotNodeCounts = [121, 185]) {
+  if (!Number.isSafeInteger(nodeCount) || nodeCount < 2) {
+    throw new Error("The high-node-count browser fixture needs at least two nodes.");
+  }
+  if (
+    !Array.isArray(snapshotNodeCounts) ||
+    snapshotNodeCounts.some(
+      (count, index) =>
+        !Number.isSafeInteger(count) ||
+        count < 2 ||
+        count >= nodeCount ||
+        (index > 0 && count <= snapshotNodeCounts[index - 1]),
+    )
+  ) {
+    throw new Error("High-node-count snapshot sizes must be unique ascending integers below the terminal size.");
+  }
+  const fixture = await denseReplayFixture();
+  const report = structuredClone(fixture.report);
+  const baseGraph = fixture.graph;
+  const seed = structuredClone(baseGraph.nodes.find((node) => node.id === baseGraph.seedNodeId));
+  const template = structuredClone(baseGraph.nodes.find((node) => node.kind !== "seed"));
+  const edgeTemplate = structuredClone(baseGraph.edges[0]);
+  if (!seed || !template || !edgeTemplate) {
+    throw new Error("The high-node-count browser fixture needs seed, node, and edge templates.");
+  }
+  const nodes = [seed];
+  const edges = [];
+  for (let index = 1; index < nodeCount; index += 1) {
+    const id = `high_density_graph_node_${String(index + 1).padStart(4, "0")}`;
+    nodes.push({
+      ...structuredClone(template),
+      id,
+      label: `Bounded public-source branch ${index}`,
+      status: index % 11 === 0 ? "rejected" : index % 7 === 0 ? "exhausted" : "verified",
+      frontierEntryId: null,
+      actionId: null,
+      candidateId: null,
+      evidenceId: null,
+      findingId: null,
+      ordinal: index * 2 + 1,
+      data: { renderStressFixture: true },
+    });
+    edges.push({
+      ...structuredClone(edgeTemplate),
+      id: `high_density_graph_edge_${String(index).padStart(4, "0")}`,
+      fromNodeId: nodes[Math.floor((index - 1) / 3)].id,
+      toNodeId: id,
+      status: "verified",
+      frontierEntryId: null,
+      actionId: null,
+      edgeCost: 1,
+      pathCost: 1,
+      ordinal: index * 2 + 2,
+    });
+  }
+  const graph = {
+    ...structuredClone(baseGraph),
+    status: "completed",
+    nodes,
+    edges,
+    frontier: [],
+    selectedFrontierEntryIds: [],
+    nextOrdinal: nodeCount * 2 + 1,
+    telemetry: {
+      ...baseGraph.telemetry,
+      enqueued: nodeCount - 1,
+      selected: nodeCount - 1,
+      expanded: nodeCount - 1,
+    },
+  };
+  report.searchGraph = graph;
+  const terminal = structuredClone(fixture.events.at(-1));
+  const snapshots = snapshotNodeCounts.map((count, index) => {
+    const event = structuredClone(fixture.events[0]);
+    event.seq = index + 1;
+    event.eventId = `browser_high_density_snapshot_${index + 1}`;
+    event.payload.searchGraph = prefixGraph(graph, count);
+    return event;
+  });
+  terminal.seq = snapshots.length + 1;
+  terminal.eventId = "browser_high_density_terminal";
+  terminal.payload.searchGraph = graph;
+  terminal.payload.report = report;
+  return { graph, report, events: [...snapshots, terminal] };
+}
+
 export function intersectingRectangles(rectangles, tolerance = 0.75) {
   const collisions = [];
   for (let leftIndex = 0; leftIndex < rectangles.length; leftIndex += 1) {

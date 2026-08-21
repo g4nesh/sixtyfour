@@ -7,6 +7,7 @@ import {
   chromeSelectors,
   denseReplayFixture,
   graphChromeCollisions,
+  highNodeCountGraphFixture,
   intersectingRectangles,
   reportEvidenceContextFixture,
 } from "./fixture.mjs";
@@ -342,6 +343,115 @@ function assertLayout(layout, graph, viewport) {
 }
 
 test(
+  "235-node paced live graph crosses the dense threshold without resize loops or intermediate refits",
+  { timeout: 120_000 },
+  async () => {
+    await assertServerReady();
+    const fixture = await highNodeCountGraphFixture(235, [87, 198]);
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: viewports[0] });
+    const pageErrors = [];
+    const consoleIssues = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("console", (message) => {
+      if (["warning", "error"].includes(message.type())) consoleIssues.push(`${message.type()}: ${message.text()}`);
+    });
+    try {
+      await page.route("**/api/health", (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ status: "ok", liveConfigured: true }),
+        }),
+      );
+      const healthResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/health");
+      await page.goto(baseUrl.href, { waitUntil: "domcontentloaded" });
+      await healthResponse;
+      await page.evaluate(installStreamedResearchFixture, { events: fixture.events, delayMs: 120 });
+      await page.getByRole("searchbox", { name: "Public-professional research input" }).fill("Chris Anderson, TED");
+      await page.evaluate(() => {
+        window.__atlasViewportTransforms = [];
+        window.__atlasMaxMountedFlowNodes = 0;
+        window.__atlasFlowNodeObserver = new MutationObserver(() => {
+          window.__atlasMaxMountedFlowNodes = Math.max(
+            window.__atlasMaxMountedFlowNodes,
+            document.querySelectorAll(".react-flow__node").length,
+          );
+        });
+        window.__atlasFlowNodeObserver.observe(document.body, { childList: true, subtree: true });
+        const sample = () => {
+          const transform = document.querySelector(".react-flow__viewport")?.style.transform;
+          if (transform && !window.__atlasViewportTransforms.includes(transform)) {
+            window.__atlasViewportTransforms.push(transform);
+          }
+          window.__atlasViewportTransformFrame = window.requestAnimationFrame(sample);
+        };
+        sample();
+      });
+      await page.getByRole("button", { name: "Research", exact: true }).click();
+      for (let index = 0; index < fixture.events.length; index += 1) {
+        const checkpoint = searchGraphFromEvent(fixture.events[index]);
+        await page.waitForFunction((emitted) => window.__atlasFixtureEmitted === emitted, index + 1);
+        await page.waitForFunction(
+          (expected) =>
+            document.querySelector('.graph-workspace [role="status"]')?.textContent?.includes(`${expected} nodes`),
+          checkpoint.nodes.length,
+          { timeout: 20_000 },
+        );
+        assert.equal(
+          await page.locator(".graph-canvas").getAttribute("data-render-mode"),
+          "virtualized",
+          `the ${checkpoint.nodes.length}-node snapshot left the stable dense render mode`,
+        );
+        await page.waitForFunction(
+          () => document.querySelector(".graph-canvas")?.getAttribute("data-layout-source") === "elk",
+          undefined,
+          { timeout: 60_000 },
+        );
+        // Pace each update beyond the layout debounce and viewport rAF. The
+        // old implementation therefore exposed every redundant intermediate
+        // fit instead of hiding it in one zero-delay event burst.
+        await page.waitForTimeout(180);
+        if (index < fixture.events.length - 1) await page.evaluate(() => window.__atlasFixtureAdvance());
+      }
+      await page.waitForTimeout(1_000);
+      const renderedNodeCount = await page.locator(".react-flow__node").count();
+      const renderWork = await page.evaluate(() => {
+        window.cancelAnimationFrame(window.__atlasViewportTransformFrame);
+        window.__atlasFlowNodeObserver.disconnect();
+        return {
+          viewportTransforms: window.__atlasViewportTransforms,
+          maxMountedFlowNodes: window.__atlasMaxMountedFlowNodes,
+        };
+      });
+      assert.ok(renderedNodeCount > 0, "large graph virtualization hid every node");
+      assert.ok(
+        renderedNodeCount < fixture.graph.nodes.length,
+        `large graph mounted all ${renderedNodeCount} nodes instead of bounding observer work`,
+      );
+      const firstSnapshotNodeCount = searchGraphFromEvent(fixture.events[0]).nodes.length;
+      assert.ok(
+        renderWork.maxMountedFlowNodes < firstSnapshotNodeCount,
+        `dense graph mounted ${renderWork.maxMountedFlowNodes} nodes in one observer wave`,
+      );
+      assert.ok(
+        renderWork.viewportTransforms.length <= 3,
+        `streaming graph triggered redundant automatic viewport fits: ${JSON.stringify(renderWork.viewportTransforms)}`,
+      );
+      assert.deepEqual(pageErrors, [], `large graph raised uncaught browser errors: ${JSON.stringify(pageErrors)}`);
+      assert.deepEqual(
+        consoleIssues,
+        [],
+        `large graph logged browser warnings/errors: ${JSON.stringify(consoleIssues)}`,
+      );
+    } finally {
+      await page.close();
+      await browser.close();
+    }
+  },
+);
+
+test(
   "dense intercepted NDJSON has collision-free desktop and mobile graph geometry",
   { timeout: 240_000 },
   async () => {
@@ -434,6 +544,11 @@ test(
             researchRequest?.requestedDepth,
             "deep",
             "interactive research must execute the full bounded operator program",
+          );
+          assert.deepEqual(
+            researchRequest?.requestedCategories,
+            ["identity", "employment", "online_presence", "project", "publication", "education"],
+            "interactive name research must default to all six public-professional report categories",
           );
           if (viewport.name === "mobile") {
             const ladder = page.locator(".source-ladder");

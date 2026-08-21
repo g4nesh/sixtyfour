@@ -27,7 +27,7 @@ after(async () => {
   await vite.close();
 });
 
-const PROVIDER_URL = "https://profile.example/chris?ref=provider&utm_source=search";
+const PROVIDER_URL = "https://www.linkedin.com/in/chris-anderson";
 const PUBLIC_IP = "93.184.216.34";
 
 function jsonResponse(value, init = {}) {
@@ -235,7 +235,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
         }
         throw new Error("unexpected provider request");
       }
-      if (url.hostname === "profile.example") {
+      if (url.hostname === "www.linkedin.com") {
         fetchedSourceUrls.push(url.href);
         return new Response(
           "<html><title>Chris at TED</title><p>Chris Anderson leads TED public programs.</p></html>",
@@ -279,7 +279,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.equal(searchResult.evidence[0].sourceType, "search_result");
   assert.equal(
     searchResult.evidence[0].title,
-    "Public source at profile.example",
+    "Public source at www.linkedin.com",
     "provider titles must be policy-checked in full before display truncation",
   );
   assert.deepEqual(searchAccounting.counts(), { reservations: 1, settlements: 1 });
@@ -309,7 +309,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
       frontierEntryId: "action-variant",
       tool: "fetch_public_source",
       purpose: "Try a rewritten query variant without the opaque lead.",
-      arguments: { url: "https://profile.example/chris?ref=rewritten" },
+      arguments: { url: "https://www.linkedin.com/in/chris-anderson?ref=rewritten" },
       candidateId: primary.id,
       budgetClass: "fetch",
       sourceTier: 6,
@@ -353,13 +353,13 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
       purpose: "Fetch the exact provider-authorized lead.",
       arguments: {
         leadId,
-        url: "https://profile.example/chris?ref=model-rewrite",
+        url: "https://www.linkedin.com/in/chris-anderson?ref=model-rewrite",
         claimFocus: "Public professional role",
       },
       candidateId: primary.id,
       budgetClass: "fetch",
-      sourceTier: 6,
-      sourceLaneId: "t6.candidate_public_source",
+      sourceTier: 2,
+      sourceLaneId: "t2.structured_professional",
       pathCost: 1,
       mutated: false,
     },
@@ -371,7 +371,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.equal(fetched.evidence[0].candidateId, primary.id);
   assert.equal(fetched.evidence[0].reliability, 0.55);
   assert.equal(fetched.evidence[0].spoofable, true);
-  assert.equal(fetched.evidence[0].sourceType, "other");
+  assert.equal(fetched.evidence[0].sourceType, "professional_profile");
   assert.equal(fetched.evidence[0].attributes.ownershipVerified, false);
   assert.ok(fetched.candidateSignals[0].signals.every((signal) => signal.assurance === "spoofable"));
   assert.deepEqual(fetchAccounting.counts(), { reservations: 1, settlements: 1 });
