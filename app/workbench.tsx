@@ -3,11 +3,21 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { FindingCategory, InvestigationReport } from "../lib/domain/types";
 import type { Report, RunStatus, TraceEvent } from "./atlas-types";
-import { eventType, formatDuration, formatUsage, humanize, traceDuration, traceUsage } from "./atlas-types";
+import {
+  eventType,
+  formatDuration,
+  formatUsage,
+  humanize,
+  traceDiagnostics,
+  traceDuration,
+  traceSearchTransportAttempts,
+  traceUsage,
+} from "./atlas-types";
 import {
   eventStableId,
   graphFromReport,
   mergeGraphEvent,
+  mergeGraphSnapshot,
   stableNodeForEvent,
   type CanonicalSearchGraph,
 } from "./graph-model";
@@ -30,7 +40,7 @@ const MODALITIES: ReadonlyArray<{ id: FindingCategory; label: string }> = [
   { id: "education", label: "Education" },
 ];
 
-const DEFAULT_MODALITIES: readonly FindingCategory[] = ["identity", "employment", "online_presence"];
+const DEFAULT_MODALITIES: readonly FindingCategory[] = MODALITIES.map((modality) => modality.id);
 
 const EXAMPLE_QUERIES: readonly string[] = [
   "torvalds@linux-foundation.org",
@@ -41,6 +51,19 @@ const EXAMPLE_QUERIES: readonly string[] = [
 interface AtlasWorkbenchProps {
   onDownloadMarkdown?: (report: Report) => void | Promise<void>;
   onDownloadPdf?: (report: Report) => void | Promise<void>;
+}
+
+type ResearchExecutionMode = "live" | "replay" | "local_demo";
+
+function executionModeFromResponse(response: Response): ResearchExecutionMode | null {
+  const value = response.headers.get("x-atlas-execution-mode")?.trim().toLocaleLowerCase("en-US");
+  if (value === "live" || value === "replay" || value === "local_demo") return value;
+  return null;
+}
+
+function executionModeLabel(mode: ResearchExecutionMode): string {
+  if (mode === "local_demo") return "Local demo replay";
+  return mode === "replay" ? "Replay" : "Live";
 }
 
 function terminalReport(event: TraceEvent): Report | null {
@@ -57,11 +80,46 @@ function terminalStatusFor(event: TraceEvent, report: Report | null): string | u
   return report?.status ?? event.status;
 }
 
-function runMessage(status: string | undefined): string {
-  if (status === "configuration_error") return "Live mode needs an enabled server-side provider and protected ingress.";
+function runMessage(
+  status: string | undefined,
+  diagnosticCodes: ReadonlySet<string> = new Set(),
+  hasDirectEvidence = false,
+  configuredProviderReturnedLeads = false,
+): string {
+  if (status === "configuration_error")
+    return "Live mode is not configured on this server. Enable live mode and configure a server-side provider key.";
   if (status === "blocked") return "The request was refused by the public-professional safety policy.";
   if (status === "failed") return "The run ended early. Inspect the terminal trace for the recorded boundary.";
   if (status === "canceled") return "The run was canceled. Its partial graph and trace remain inspectable.";
+  const providerUnavailable =
+    !configuredProviderReturnedLeads &&
+    (diagnosticCodes.has("search_provider_quota_exhausted") ||
+      diagnosticCodes.has("search_provider_unavailable") ||
+      diagnosticCodes.has("search_provider_circuit_open"));
+  const providerUngrounded =
+    !configuredProviderReturnedLeads &&
+    (diagnosticCodes.has("search_provider_sources_not_observed") ||
+      diagnosticCodes.has("search_provider_sources_unqualified"));
+  const googleAttempted = [...diagnosticCodes].some((code) => code.startsWith("google_"));
+  const duckDuckGoAttempted = [...diagnosticCodes].some((code) => code.startsWith("duckduckgo_"));
+  const githubAttempted = [...diagnosticCodes].some(
+    (code) => code.startsWith("github_public_user_") || code.startsWith("github_exact_name_"),
+  );
+  const retainedSourceMessage = hasDirectEvidence
+    ? "A directly fetched citation is in the report."
+    : "No directly fetched citation was admitted before the run stopped.";
+  const providerBoundary = providerUnavailable ? "was unavailable" : "returned no usable source annotations";
+  const fallbackAttempts = [
+    duckDuckGoAttempted ? "DuckDuckGo HTML" : null,
+    googleAttempted ? "Google HTML" : null,
+    githubAttempted ? "GitHub exact-name" : null,
+  ].filter((label): label is string => Boolean(label));
+  if ((providerUnavailable || providerUngrounded) && fallbackAttempts.length > 0) {
+    return `${status === "partial" ? "Partial coverage" : "Run complete"} — provider search ${providerBoundary}. Atlas then attempted ${fallbackAttempts.join(" and ")} fallback discovery. ${retainedSourceMessage}`;
+  }
+  if (providerUnavailable || providerUngrounded) {
+    return `Partial coverage — the configured web-search provider ${providerBoundary} and no fallback source was verified. Inspect the trace for the recorded boundary.`;
+  }
   if (status === "partial")
     return "Stopped with partial coverage — the cited sources gathered so far are in the report.";
   if (status === "ambiguous") return "Identity remained ambiguous; competing candidate branches were not merged.";
@@ -113,7 +171,8 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
   const [trace, setTrace] = useState<TraceEvent[]>([]);
   const [graph, setGraph] = useState<CanonicalSearchGraph | null>(null);
   const [runStatus, setRunStatus] = useState<RunStatus>("idle");
-  const [message, setMessage] = useState("Enter a name, email, organization, or public identifier to research.");
+  const [message, setMessage] = useState("Describe the person with any public-professional context you have.");
+  const [executionMode, setExecutionMode] = useState<ResearchExecutionMode | null>(null);
   const [liveConfigured, setLiveConfigured] = useState<boolean | null>(null);
   const [graphView, setGraphView] = useState<GraphView>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -135,13 +194,13 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     setSelectedNodeId(null);
     setFocusedStableId(null);
     setReportOpen(false);
+    setExecutionMode(null);
   }, []);
 
   const applyReport = useCallback((nextReport: Report | null) => {
     setReport(nextReport);
     const nextGraph = graphFromReport(nextReport);
-    setGraph(nextGraph);
-    setSelectedNodeId((current) => (current && nextGraph?.nodes.some((node) => node.id === current) ? current : null));
+    setGraph((current) => mergeGraphSnapshot(current, nextGraph));
   }, []);
 
   const toggleModality = useCallback((id: FindingCategory) => {
@@ -190,7 +249,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     event.preventDefault();
     const trimmed = query.trim();
     if (!trimmed) {
-      setMessage("Enter a name, role, organization, work email, public URL, handle, or publication.");
+      setMessage("Describe the person with a name or other public-professional context.");
       queryRef.current?.focus();
       return;
     }
@@ -201,17 +260,30 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
     setRunStatus("running");
     setMessage("Searching public professional sources…");
     let terminalStatus: string | undefined;
+    let completedReport: Report | null = null;
+    let configuredProviderReturnedLeads = false;
+    const diagnosticCodes = new Set<string>();
     try {
       const response = await fetch("/api/research", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/x-ndjson" },
-        body: JSON.stringify({ query: trimmed, mode: "live", requestedCategories: [...categories] }),
+        body: JSON.stringify({
+          query: trimmed,
+          mode: "live",
+          requestedDepth: "deep",
+          requestedCategories: [...categories],
+        }),
         signal: controller.signal,
       });
       if (abortRef.current !== controller || controller.signal.aborted) return;
       if (!response.ok || !response.body) {
         const detail = await response.text();
         throw new Error(detail || `Research failed (${response.status})`);
+      }
+      const responseExecutionMode = executionModeFromResponse(response);
+      setExecutionMode(responseExecutionMode);
+      if (responseExecutionMode === "local_demo") {
+        setMessage("Local demo replay — streaming a captured, zero-network investigation.");
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -224,14 +296,38 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         for (const line of lines) {
           if (!line.trim()) continue;
           if (abortRef.current !== controller || controller.signal.aborted) return;
-          terminalStatus = ingestEvent(JSON.parse(line) as TraceEvent) ?? terminalStatus;
+          const streamed = JSON.parse(line) as TraceEvent;
+          traceDiagnostics(streamed).forEach((diagnostic) => diagnosticCodes.add(diagnostic.code));
+          configuredProviderReturnedLeads ||= traceSearchTransportAttempts([streamed]).some(
+            (attempt) => attempt.id === "configured_provider" && attempt.outcome === "returned_leads",
+          );
+          completedReport = terminalReport(streamed) ?? completedReport;
+          terminalStatus = ingestEvent(streamed) ?? terminalStatus;
         }
         if (done) break;
       }
-      if (buffered.trim()) terminalStatus = ingestEvent(JSON.parse(buffered) as TraceEvent) ?? terminalStatus;
+      if (buffered.trim()) {
+        const streamed = JSON.parse(buffered) as TraceEvent;
+        traceDiagnostics(streamed).forEach((diagnostic) => diagnosticCodes.add(diagnostic.code));
+        configuredProviderReturnedLeads ||= traceSearchTransportAttempts([streamed]).some(
+          (attempt) => attempt.id === "configured_provider" && attempt.outcome === "returned_leads",
+        );
+        completedReport = terminalReport(streamed) ?? completedReport;
+        terminalStatus = ingestEvent(streamed) ?? terminalStatus;
+      }
       if (abortRef.current !== controller || controller.signal.aborted) return;
       setRunStatus((current) => (current === "running" ? "complete" : current));
-      setMessage(runMessage(terminalStatus));
+      const hasDirectEvidence =
+        completedReport?.evidence?.some((evidence) => evidence.verificationMethod === "direct_fetch") ?? false;
+      const completionMessage = runMessage(
+        terminalStatus,
+        diagnosticCodes,
+        hasDirectEvidence,
+        configuredProviderReturnedLeads,
+      );
+      setMessage(
+        responseExecutionMode === "local_demo" ? `Local demo replay — ${completionMessage}` : completionMessage,
+      );
     } catch (error) {
       if (abortRef.current !== controller) return;
       if (controller.signal.aborted) {
@@ -334,7 +430,6 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       </a>
       <header className="command-header">
         <a className="atlas-wordmark" href="#graph-workspace" aria-label="Atlas home">
-          <span aria-hidden="true">A</span>
           <strong>Atlas</strong>
         </a>
         <form className="command-search" onSubmit={startResearch} role="search">
@@ -349,7 +444,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Name, role, organization, work email, URL, handle, or publication"
+            placeholder="Any public context: name, role, company, city/region, adult school, URL, or handle"
             autoComplete="off"
             spellCheck="false"
             aria-describedby="research-scope-note"
@@ -376,11 +471,12 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
           type="button"
           onClick={() => setReportOpen(true)}
           disabled={!report}
+          aria-label="Report"
           title="Open intelligence report (R)"
         >
           <ReportIcon />
           <span>Report</span>
-          {exporting ? <i aria-label={`Exporting ${exporting}`} /> : null}
+          {exporting ? <i role="status" aria-label={`Exporting ${exporting}`} /> : null}
         </button>
       </header>
 
@@ -388,8 +484,9 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         <div className="workspace-status" role="status" aria-live="polite">
           <span className={`run-status-pip status-${runStatus}`} aria-hidden="true" />
           <strong>{humanize(reportStatus)}</strong>
-          <span>{message}</span>
-          <div>
+          <span className="workspace-message">{message}</span>
+          <div className="workspace-metrics">
+            {executionMode ? <span className="execution-mode">{executionModeLabel(executionMode)}</span> : null}
             <span>{graphStatusLabel(graph, runStatus)}</span>
             <span>{formatDuration(elapsed)}</span>
             <span>{formatUsage(usage)}</span>
@@ -398,6 +495,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
 
         <div className="scope-row">
           <fieldset className="modality-toggles" aria-label="Research modalities">
+            <legend className="sr-only">Research modalities</legend>
             {MODALITIES.map((modality) => {
               const active = categories.has(modality.id);
               return (
@@ -414,8 +512,8 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
             })}
           </fieldset>
           <p id="research-scope-note" className="scope-note">
-            <span aria-hidden="true">●</span> Public-professional sources only. Home address, personal phone, and
-            data-broker records are out of scope.
+            <span aria-hidden="true">●</span> Free-form public context is welcome: role, company, city/region, and adult
+            school. Home addresses, personal phones, data-broker records, and research about minors are refused.
           </p>
         </div>
 
@@ -457,11 +555,14 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
         {graph ? (
           <SourceLadder
             graph={graph}
+            trace={trace}
             collapsed={sourceLadderCollapsed}
             onToggle={() => setSourceLadderPreference(!sourceLadderCollapsed)}
           />
         ) : null}
-        {graph ? <NodeInspector graph={graph} node={activeNode} onClose={() => setSelectedNodeId(null)} /> : null}
+        {graph ? (
+          <NodeInspector graph={graph} node={activeNode} trace={trace} onClose={() => setSelectedNodeId(null)} />
+        ) : null}
         <TraceRail
           trace={trace}
           expanded={traceExpanded}

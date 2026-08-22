@@ -178,6 +178,8 @@ export type Candidate = CandidateV1;
 export interface CandidateDraft {
   /** Optional tool-local reference used to link evidence from the same result. */
   ref?: string;
+  /** Conservative tool-local scope; `none` prevents derived candidate frontier expansion. */
+  frontierExpansion?: "default" | "none";
   displayName: string;
   signals?: IdentitySignal[];
 }
@@ -499,6 +501,8 @@ export interface SearchFrontierEntryV2 {
   allowedTools: string[];
   intent: string;
   queryHint: string;
+  /** Opaque discovery capability bound to one candidate-scoped fetch pivot. */
+  leadId?: string;
   candidateId: string | null;
   depth: number;
   ordinal: number;

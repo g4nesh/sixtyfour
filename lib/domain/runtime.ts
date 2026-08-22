@@ -86,12 +86,19 @@ export function normalizeWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
+export const SEARCH_GRAPH_NODE_LABEL_MAX_LENGTH = 320;
+
+/** Canonical bounded projection used by both graph admission and integrity. */
+export function projectSearchGraphNodeLabel(value: string): string {
+  return normalizeWhitespace(value).slice(0, SEARCH_GRAPH_NODE_LABEL_MAX_LENGTH);
+}
+
 export function normalizeComparable(value: string): string {
   return normalizeWhitespace(value)
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLocaleLowerCase("en-US")
-    .replace(/[^a-z0-9@.+-]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}@.+-]+/gu, " ")
     .trim();
 }
 

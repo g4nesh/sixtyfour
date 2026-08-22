@@ -7,6 +7,7 @@ const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const vite = await createServer({
   root: projectRoot,
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -56,9 +57,173 @@ test("target parsing distinguishes names, exact user identifiers, and role-only 
   assert.equal(domain.parseTarget("Chris Public").name, "Chris Public");
 });
 
+test("target and identity normalization preserve non-Latin public names deterministically", () => {
+  for (const [raw, expectedName, expectedNormalized] of [
+    ["张伟", "张伟", "张伟"],
+    ["Ольга Иванова", "Ольга Иванова", "ольга иванова"],
+    ["अनन्या शर्मा", "अनन्या शर्मा", "अनन्या शर्मा"],
+  ]) {
+    const target = domain.parseTarget(raw);
+    assert.equal(target.kind, "named_person", raw);
+    assert.equal(target.name, expectedName, raw);
+    assert.equal(target.normalizedName, expectedNormalized, raw);
+    assert.equal(domain.normalizeComparable(raw), expectedNormalized, raw);
+  }
+
+  const cjkEvidence = {
+    id: "evidence-cjk-name",
+    candidateId: "candidate-cjk-name",
+    disposition: "supports",
+    sourceType: "official_profile",
+    sourceFamily: "example.edu",
+    claim: "张伟",
+    excerpt: "张伟",
+    title: "张伟",
+    publisher: "Example University",
+    sourceUrl: "https://example.edu/people/zhang-wei",
+    canonicalUrl: "https://example.edu/people/zhang-wei",
+    canonicalSubset: null,
+    attributes: {},
+  };
+  assert.equal(
+    domain.identitySignalGroundedByEvidence(
+      {
+        kind: "name",
+        value: "张伟",
+        normalizedValue: "张伟",
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: "example.edu",
+        sourceEvidenceId: cjkEvidence.id,
+      },
+      cjkEvidence,
+    ),
+    true,
+  );
+  assert.equal(
+    domain.identitySignalGroundedByEvidence(
+      {
+        kind: "social_handle",
+        value: "张伟",
+        normalizedValue: "张伟",
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: "example.edu",
+        sourceEvidenceId: cjkEvidence.id,
+      },
+      cjkEvidence,
+    ),
+    false,
+    "short non-Latin names must not weaken the minimum for unrelated signal kinds",
+  );
+});
+
+test("target parsing retains bounded public-professional context for mononyms, roles, affiliations, and locations", () => {
+  const mononym = domain.parseTarget("Usher");
+  assert.equal(mononym.kind, "named_person");
+  assert.equal(mononym.name, "Usher");
+  assert.deepEqual(mononym.organizationHints, []);
+
+  const explicitOrganization = domain.parseTarget("organization Microsoft");
+  assert.equal(explicitOrganization.kind, "organization");
+  assert.equal(explicitOrganization.name, undefined);
+  assert.equal(explicitOrganization.organizationHints[0].name, "Microsoft");
+  assert.equal(domain.parseTarget("Example Labs").kind, "organization");
+
+  const professor = domain.parseTarget("Michael Jordan, professor at UC Berkeley");
+  assert.equal(professor.kind, "named_person");
+  assert.equal(professor.name, "Michael Jordan");
+  assert.deepEqual(professor.roleHints, ["Professor"]);
+  assert.deepEqual(professor.organizationHints, [
+    { name: "UC Berkeley", normalizedName: "uc berkeley", relationship: "current" },
+  ]);
+
+  for (const [query, location] of [
+    ["Ganesh Talluri based in Peoria", "Peoria"],
+    ["Ganesh Talluri from Phoenix", "Phoenix"],
+    ["Ganesh Talluri in Tempe", "Tempe"],
+  ]) {
+    const target = domain.parseTarget(query);
+    assert.equal(target.kind, "named_person", query);
+    assert.equal(target.name, "Ganesh Talluri", query);
+    assert.deepEqual(target.locationHints, [location], query);
+  }
+
+  for (const [query, organization] of [
+    ["Ganesh Talluri at Arizona State University", "Arizona State University"],
+    ["Ganesh Talluri with Example Labs", "Example Labs"],
+  ]) {
+    const target = domain.parseTarget(query);
+    assert.equal(target.kind, "named_person", query);
+    assert.equal(target.name, "Ganesh Talluri", query);
+    assert.deepEqual(target.organizationHints, [
+      { name: organization, normalizedName: organization.toLocaleLowerCase("en-US"), relationship: "current" },
+    ]);
+  }
+
+  for (const [query, organization, relationship] of [
+    ["Chinmay Bhat studies at Arizona State University", "Arizona State University", "current"],
+    ["Chinmay Bhat attends ASU", "ASU", "current"],
+    ["Chinmay Bhat student at ASU", "ASU", "current"],
+    ["Chinmay Bhat school Arizona State University", "Arizona State University", "current"],
+    ["Chinmay Bhat went to Arizona State University", "Arizona State University", "former"],
+    ["Chinmay Bhat, school: Arizona State University", "Arizona State University", "current"],
+  ]) {
+    const target = domain.parseTarget(query);
+    assert.equal(target.kind, "named_person", query);
+    assert.equal(target.name, "Chinmay Bhat", query);
+    assert.deepEqual(
+      target.organizationHints,
+      [
+        {
+          name: organization,
+          normalizedName: organization.toLocaleLowerCase("en-US"),
+          relationship,
+        },
+      ],
+      query,
+    );
+    assert.notEqual(domain.classifySafety(query).level, "block", query);
+  }
+
+  for (const query of [
+    "Alex Kim attends Central High School",
+    "Alex Kim student at Central High School",
+    "Alex Kim, school: Central Middle School",
+  ]) {
+    const target = domain.parseTarget(query);
+    assert.deepEqual(target.organizationHints, [], query);
+    const safety = domain.classifySafety(query);
+    assert.equal(safety.level, "block", query);
+    assert.ok(
+      safety.reasons.some((reason) => reason.code === "minor_or_vulnerable_person"),
+      query,
+    );
+  }
+
+  for (const query of [
+    "Alex Kim student at Lincoln",
+    "Alex Kim student at Lincoln Academy",
+    "Alex Kim student at HS",
+    "Alex Kim student at asu",
+  ]) {
+    const ambiguousSchool = domain.parseTarget(query);
+    assert.equal(ambiguousSchool.kind, "unknown", query);
+    assert.equal(ambiguousSchool.name, undefined, query);
+    assert.deepEqual(ambiguousSchool.organizationHints, [], query);
+  }
+
+  for (const query of ["Ada Lovelace based in 123 Main Street", "Ada Lovelace based in 6025550199"]) {
+    const target = domain.parseTarget(query);
+    assert.equal(target.name, "Ada Lovelace", query);
+    assert.deepEqual(target.locationHints, [], query);
+  }
+});
+
 test("safety policy permits public professional research and blocks dangerous scope expansions", () => {
   assert.equal(domain.classifySafety("Henry Wang, Sixtyfour AI").level, "allow");
   assert.equal(domain.classifySafety("andrew.goering@ramp.com").level, "caution");
+  assert.equal(domain.classifySafety("Ganesh Talluri based in Peoria").level, "allow");
 
   const blocked = [
     ["Henry's phone number", "precise_location_or_contact"],
@@ -200,6 +365,28 @@ test("evidence admission preserves complete audit metadata and deduplicates sour
     domain.assessConfidence([first.evidence, copiedRecord]).score,
     domain.assessConfidence([first.evidence]).score,
   );
+});
+
+test("evidence admission rejects exact durable URLs that the final report content policy restricts", () => {
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("restricted-crossref-url");
+  const candidateId = "candidate_crossref";
+  const restrictedUrl = "https://api.crossref.org/works/10.5555%2F602-555-0199";
+  assert.equal(domain.containsRestrictedPublicContent(restrictedUrl), true);
+
+  const admission = domain.admitEvidence(
+    {
+      candidateId,
+      claim: "Crossref surfaced a possible authored-work record; it is a discovery lead only.",
+      sourceUrl: restrictedUrl,
+      sourceType: "search_result",
+      canonicalSubset: { officialApiObservedUrl: true },
+      verificationMethod: "search_discovery",
+    },
+    { candidateIds: new Set([candidateId]), existing: [], ids, clock },
+  );
+
+  assert.deepEqual(admission, { admitted: false, reason: "sensitive_content" });
 });
 
 test("search snippets cannot support findings and spoofable-only evidence is confidence capped", () => {

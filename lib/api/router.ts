@@ -8,12 +8,14 @@ import {
   SCHEMA_VERSION,
   type FindingCategory,
   type InvestigationInput,
+  type InvestigationReport,
   type JsonObject,
   type ResearchDepth,
   type TerminalStatus,
 } from "../domain/types";
 import { isInvestigationReport, parseInvestigationInput } from "../domain/validation";
 import { streamLiveResearch } from "../live/orchestrator";
+import { localDemoFixtures, resolveLocalDemo } from "./local-demo";
 import { createDohResolver } from "../tools/doh-resolver";
 import { findReplayForQuery, getReplayExample, listReplayExamples } from "../replay/catalog";
 
@@ -23,14 +25,18 @@ export interface ApiEnvironment {
   ATLAS_API_TOKEN?: string;
   /** Local development escape hatch. Never enable on public ingress. */
   ATLAS_ALLOW_UNAUTHENTICATED_LOCAL?: string;
-  /** Force a provider: "gemini" | "openai" | "openrouter" (otherwise auto-detected). */
+  /** Prefer a provider: "openai" | "gemini" | "anthropic"/"claude" | "openrouter". */
   LIVE_PROVIDER?: string;
+  /** Explicitly delegate grounded web discovery to OpenAI while keeping the selected reasoning provider. */
+  LIVE_SEARCH_PROVIDER?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
   OPENAI_SEARCH_MODEL?: string;
   OPENAI_BASE_URL?: string;
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
+  ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_MODEL?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODEL?: string;
   OPENROUTER_SITE_URL?: string;
@@ -81,7 +87,7 @@ async function liveRequestAuthorized(request: Request, url: URL, environment: Ap
 }
 
 interface ResolvedLiveProvider {
-  provider: "openai" | "openrouter" | "gemini";
+  provider: "openai" | "openrouter" | "gemini" | "anthropic";
   apiKey: string;
   model: string;
   searchModel?: string;
@@ -97,19 +103,39 @@ interface ResolvedLiveProvider {
  * Resolve the live model provider from the environment.
  *
  * Selection: an explicit LIVE_PROVIDER wins; otherwise Gemini is used when its
- * key is present (its generous free per-minute limits suit the many
- * planner/extraction calls), then OpenAI, then OpenRouter.
+ * key is present, then OpenAI, Anthropic, and OpenRouter. Health reports only
+ * whether a usable server-side configuration exists; it never discloses this
+ * selection.
  *
- * Gemini has no free web-search grounding, so its web-discovery turn is
- * delegated to OpenAI's web_search when an OpenAI key is also present (a hybrid
- * run: Gemini reasoning + OpenAI discovery).
+ * Gemini uses its native Google Search grounding path by default. A separate
+ * OpenAI search surface is activated only by LIVE_SEARCH_PROVIDER=openai, so
+ * merely configuring a second key never creates an implicit billing path.
  */
 function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider | null {
   const openaiKey = environment.OPENAI_API_KEY?.trim();
   const geminiKey = environment.GEMINI_API_KEY?.trim();
+  const anthropicKey = environment.ANTHROPIC_API_KEY?.trim();
   const openrouterKey = environment.OPENROUTER_API_KEY?.trim();
   const forced = environment.LIVE_PROVIDER?.trim().toLowerCase();
   const openaiSearchModel = environment.OPENAI_SEARCH_MODEL?.trim() || "gpt-4o-mini";
+  const forcedSearchProvider = environment.LIVE_SEARCH_PROVIDER?.trim().toLowerCase();
+
+  const withSearchProvider = (config: ResolvedLiveProvider | null): ResolvedLiveProvider | null => {
+    if (!config || !forcedSearchProvider) return config;
+    // Cross-provider search is deliberately opt-in: it can consume a second
+    // provider's budget and must never happen merely because another key is
+    // present. An invalid or unconfigured explicit choice fails closed.
+    if (forcedSearchProvider !== "openai" || !openaiKey) return null;
+    if (config.provider === "openai") return config;
+    const base = environment.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1";
+    return {
+      ...config,
+      searchModel: openaiSearchModel,
+      searchProvider: "openai",
+      searchApiKey: openaiKey,
+      searchEndpoint: `${base.replace(/\/+$/, "")}/chat/completions`,
+    };
+  };
 
   const openaiConfig = (): ResolvedLiveProvider | null => {
     if (!openaiKey) return null;
@@ -130,15 +156,16 @@ function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider 
       apiKey: geminiKey,
       model: environment.GEMINI_MODEL?.trim() || "gemini-3.6-flash",
       endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      // Gemini grounding needs billing; delegate discovery to OpenAI when available.
-      ...(openaiKey
-        ? {
-            searchProvider: "openai" as const,
-            searchApiKey: openaiKey,
-            searchModel: openaiSearchModel,
-            searchEndpoint: "https://api.openai.com/v1/chat/completions",
-          }
-        : {}),
+    };
+  };
+
+  const anthropicConfig = (): ResolvedLiveProvider | null => {
+    if (!anthropicKey) return null;
+    return {
+      provider: "anthropic",
+      apiKey: anthropicKey,
+      model: environment.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514",
+      endpoint: "https://api.anthropic.com/v1/messages",
     };
   };
 
@@ -153,10 +180,16 @@ function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider 
     };
   };
 
-  if (forced === "gemini") return geminiConfig() ?? openaiConfig() ?? openrouterConfig();
-  if (forced === "openai") return openaiConfig() ?? geminiConfig() ?? openrouterConfig();
-  if (forced === "openrouter") return openrouterConfig() ?? openaiConfig() ?? geminiConfig();
-  return geminiConfig() ?? openaiConfig() ?? openrouterConfig();
+  const fallbacks = () => geminiConfig() ?? openaiConfig() ?? anthropicConfig() ?? openrouterConfig();
+  if (forced === "gemini")
+    return withSearchProvider(geminiConfig() ?? openaiConfig() ?? anthropicConfig() ?? openrouterConfig());
+  if (forced === "openai")
+    return withSearchProvider(openaiConfig() ?? geminiConfig() ?? anthropicConfig() ?? openrouterConfig());
+  if (forced === "anthropic" || forced === "claude")
+    return withSearchProvider(anthropicConfig() ?? openaiConfig() ?? geminiConfig() ?? openrouterConfig());
+  if (forced === "openrouter")
+    return withSearchProvider(openrouterConfig() ?? openaiConfig() ?? geminiConfig() ?? anthropicConfig());
+  return withSearchProvider(fallbacks());
 }
 
 const FINDING_CATEGORIES: readonly FindingCategory[] = [
@@ -219,10 +252,14 @@ function parseResearchBody(value: unknown): ResearchRequestBody {
     if (!Array.isArray(record.requestedCategories)) {
       throw new TypeError("requestedCategories must be an array of report categories.");
     }
-    const filtered = [...new Set(record.requestedCategories)].filter((item): item is FindingCategory =>
-      FINDING_CATEGORIES.includes(item as FindingCategory),
-    );
-    if (filtered.length > 0) requestedCategories = filtered;
+    const unique = [...new Set(record.requestedCategories)];
+    if (
+      unique.length === 0 ||
+      unique.some((item) => typeof item !== "string" || !FINDING_CATEGORIES.includes(item as FindingCategory))
+    ) {
+      throw new TypeError(`requestedCategories must contain only: ${FINDING_CATEGORIES.join(", ")}.`);
+    }
+    requestedCategories = unique as FindingCategory[];
   }
   return {
     query,
@@ -394,16 +431,74 @@ function fallbackTerminalEvents(
   return events;
 }
 
+function reportMatchesRequest(report: InvestigationReport, input: InvestigationInput): boolean {
+  if (report.status === "blocked" && classifySafety(input).level === "block") {
+    return (
+      report.input.query === "[redacted: restricted personal content]" &&
+      report.target.rawInput === "[redacted: restricted personal content]"
+    );
+  }
+  const leftCategories = report.input.requestedCategories ?? [];
+  const rightCategories = input.requestedCategories ?? [];
+  return (
+    report.input.schemaVersion === input.schemaVersion &&
+    report.input.query === input.query &&
+    report.input.objective === input.objective &&
+    report.input.requestedDepth === input.requestedDepth &&
+    report.input.locale === input.locale &&
+    leftCategories.length === rightCategories.length &&
+    leftCategories.every((category, index) => category === rightCategories[index]) &&
+    JSON.stringify(report.target) === JSON.stringify(parseTarget(input))
+  );
+}
+
+function preservedTerminalEvents(
+  last: TraceEvent | null,
+  openSpans: readonly StreamSpan[],
+  terminal: TraceEvent,
+): TraceEvent[] {
+  const ids = runtimeIds();
+  const clock = runtimeClock();
+  let sequence = last?.seq ?? 0;
+  const elapsedMs = Math.max(last?.elapsedMs ?? 0, terminal.elapsedMs);
+  const events: TraceEvent[] = [...openSpans].reverse().map((span) => ({
+    schemaVersion: SCHEMA_VERSION,
+    seq: ++sequence,
+    eventId: ids.next("event"),
+    runId: terminal.runId,
+    timestamp: clock.now(),
+    elapsedMs,
+    kind: "span_end",
+    name: span.name,
+    phase: span.phase,
+    spanId: span.spanId,
+    parentSpanId: span.parentSpanId,
+    attempt: span.attempt,
+    status: "failed",
+    payload: { code: "stream_envelope_failure" },
+    usage: unavailableUsage("stream_envelope_failed_after_a_valid_terminal_report"),
+  }));
+  events.push({
+    ...terminal,
+    seq: ++sequence,
+    eventId: ids.next("event"),
+    elapsedMs,
+  });
+  return events;
+}
+
 export function traceNdjsonResponse(
   source: (signal: AbortSignal) => AsyncIterable<TraceEvent>,
   requestSignal: AbortSignal,
   input: InvestigationInput,
+  executionMode: "live" | "replay" | "local_demo" = "live",
 ): Response {
   const localAbort = new AbortController();
   const combined = AbortSignal.any([requestSignal, localAbort.signal]);
   const encoder = new TextEncoder();
   let last: TraceEvent | null = null;
   let terminalSeen = false;
+  let preservedTerminal: TraceEvent | null = null;
   const openSpans = new Map<string, StreamSpan>();
   const allowedEmails = new Set(
     parseTarget(input)
@@ -421,6 +516,16 @@ export function traceNdjsonResponse(
           if (last && (event.runId !== last.runId || event.seq !== last.seq + 1)) {
             throw new TypeError("trace source violated run or sequence ordering");
           }
+          if (event.name === "result.terminal") {
+            const report = event.payload.report;
+            if (!isInvestigationReport(report) || report.runId !== event.runId) {
+              throw new TypeError("terminal event did not contain a valid report for its run");
+            }
+            if (!reportMatchesRequest(report, input)) {
+              throw new TypeError("terminal report did not match the requested investigation input");
+            }
+            preservedTerminal = event;
+          }
           if (event.kind === "span_start" && event.spanId) {
             if (openSpans.has(event.spanId)) throw new TypeError("trace source started a duplicate span");
             openSpans.set(event.spanId, {
@@ -436,12 +541,6 @@ export function traceNdjsonResponse(
           if (event.name === "result.terminal" && openSpans.size > 0) {
             throw new TypeError("trace source reached terminal with open spans");
           }
-          if (event.name === "result.terminal") {
-            const report = event.payload.report;
-            if (!isInvestigationReport(report) || report.runId !== event.runId) {
-              throw new TypeError("terminal event did not contain a valid report for its run");
-            }
-          }
           last = event;
           controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
           if (event.name === "result.terminal") {
@@ -452,7 +551,11 @@ export function traceNdjsonResponse(
         if (!terminalSeen) throw new Error("trace source ended without a terminal event");
       } catch {
         if (!terminalSeen && !localAbort.signal.aborted) {
-          for (const event of fallbackTerminalEvents(last, [...openSpans.values()], input, combined.aborted)) {
+          const recovered =
+            preservedTerminal && !combined.aborted
+              ? preservedTerminalEvents(last, [...openSpans.values()], preservedTerminal)
+              : fallbackTerminalEvents(last, [...openSpans.values()], input, combined.aborted);
+          for (const event of recovered) {
             controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
           }
         }
@@ -474,6 +577,7 @@ export function traceNdjsonResponse(
       "cache-control": "no-store",
       "x-accel-buffering": "no",
       "x-content-type-options": "nosniff",
+      "x-atlas-execution-mode": executionMode,
     },
   });
 }
@@ -540,11 +644,20 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
       "blocked",
       "The request is outside Atlas's public-professional safety scope.",
     );
-    return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
+    return traceNdjsonResponse(() => replayEvents(events), request.signal, input, body.mode);
   }
   if (request.signal.aborted) {
     const events = immediateTerminalTrace(input, "canceled", "The caller canceled the investigation before it began.");
-    return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
+    return traceNdjsonResponse(() => replayEvents(events), request.signal, input, body.mode);
+  }
+
+  // Local-only demo fixtures let the app show a captured run when live
+  // providers are unavailable. They may intercept only through the explicit
+  // loopback development bypass; bearer-protected/public ingress always falls
+  // through to the requested replay/live path.
+  const localDemo = localBypassEnabled(url, environment) ? resolveLocalDemo(localDemoFixtures(), input) : null;
+  if (localDemo) {
+    return traceNdjsonResponse((signal) => localDemo.source(signal), request.signal, localDemo.input, "local_demo");
   }
 
   if (body.mode === "replay") {
@@ -563,7 +676,7 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
         422,
       );
     }
-    return traceNdjsonResponse(() => replayEvents(example.trace), request.signal, input);
+    return traceNdjsonResponse(() => replayEvents(example.trace), request.signal, example.input, "replay");
   }
 
   const liveEnabled = environment.ATLAS_LIVE_ENABLED?.trim() === "true";
@@ -574,7 +687,7 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
       "configuration_error",
       "Live HTTP research requires explicit enablement, a server-side model key, and protected ingress.",
     );
-    return traceNdjsonResponse(() => replayEvents(events), request.signal, input);
+    return traceNdjsonResponse(() => replayEvents(events), request.signal, input, "live");
   }
   if (!(await liveRequestAuthorized(request, url, environment))) {
     return jsonResponse({ error: "unauthorized", message: "Valid live research authorization is required." }, 401, {
@@ -601,5 +714,6 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
       }),
     request.signal,
     input,
+    "live",
   );
 }

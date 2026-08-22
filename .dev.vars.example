@@ -8,9 +8,14 @@ ATLAS_LIVE_ENABLED=false
 # never set ATLAS_ALLOW_UNAUTHENTICATED_LOCAL on public ingress.
 # ATLAS_API_TOKEN=
 
-# Provider selection: gemini | openai | openrouter. Auto-detects if unset
-# (gemini, then openai, then openrouter).
+# Provider selection: openai | gemini | anthropic (or claude) | openrouter.
+# Auto-detects if unset (gemini, then openai, anthropic, and openrouter).
 # LIVE_PROVIDER=openai
+
+# Optional cross-provider discovery. This is never enabled merely because an
+# OpenAI key is present: set it explicitly to use OpenAI Responses web_search
+# while Gemini, Anthropic, or OpenRouter handles planning/extraction turns.
+# LIVE_SEARCH_PROVIDER=openai
 
 # OpenAI. A small, low-cost model drives the local tool-calling harness; web
 # discovery uses the OpenAI Responses web_search tool.
@@ -21,16 +26,20 @@ OPENAI_MODEL=gpt-4o-mini
 OPENAI_SEARCH_MODEL=gpt-4o-mini
 # OPENAI_BASE_URL=https://api.openai.com/v1
 
-# Google Gemini (reasoning via the OpenAI-compat endpoint). Gemini's own search
-# grounding needs billing, so in gemini mode web discovery is delegated to
-# OpenAI's web_search when OPENAI_API_KEY is also set (hybrid: Gemini reasoning
-# + OpenAI discovery). Gemini's free per-minute limits suit the many
-# planner/extraction calls.
+# Google Gemini uses the OpenAI-compatible endpoint for structured reasoning
+# turns and the native Interactions API with Google Search for grounded web
+# discovery. Google Search grounding can be billable; configure account limits
+# before enabling live mode on shared ingress.
 # GEMINI_API_KEY=
 # GEMINI_MODEL=gemini-3.6-flash
+
+# Anthropic Claude uses the native Messages API for structured tool calls and
+# the versioned web_search_20250305 server tool for bounded discovery.
+# ANTHROPIC_API_KEY=
+# ANTHROPIC_MODEL=claude-sonnet-4-20250514
 
 # OpenRouter (optional fallback).
 # OPENROUTER_API_KEY=
 # OPENROUTER_MODEL=openai/gpt-5.4
 # OPENROUTER_SITE_URL=https://your-deployment.example
-# OPENROUTER_APP_NAME=Atlas People Intelligence
+# OPENROUTER_APP_NAME=Atlas

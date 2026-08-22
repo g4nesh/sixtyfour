@@ -1,4 +1,4 @@
-import { handleApiRequest } from "../lib/api/router";
+import { handleApiRequest, type ApiEnvironment } from "../lib/api/router";
 import type { TraceEvent } from "../lib/agent/trace";
 import { canonicalJson, getReplayExample, listReplayExamples } from "../lib/replay/catalog";
 import type { JsonValue } from "../lib/domain/types";
@@ -13,7 +13,7 @@ interface ParsedArguments {
   depth?: "quick" | "standard" | "deep";
 }
 
-const help = `Atlas People Intelligence CLI
+const help = `Atlas CLI
 
 Usage:
   npm run atlas -- examples
@@ -22,10 +22,42 @@ Usage:
   npm run atlas -- research [--mode replay|live] [--example <id>] [--depth quick|standard|deep] [--ndjson] <query>
 
 Replay is the default and performs zero network requests. Live mode requires
-a configured provider key (OPENAI_API_KEY, GEMINI_API_KEY, or
-OPENROUTER_API_KEY) in the process environment. Ctrl-C propagates cancellation
-to the same engine used by the HTTP API.
+a server-side OpenAI, Gemini, Anthropic Claude, or OpenRouter key in the process environment.
+Use LIVE_PROVIDER=openai|gemini|anthropic|openrouter to prefer one when its key is configured
+(claude is accepted as an alias for anthropic);
+otherwise Atlas selects the first configured provider in its documented order.
+Set LIVE_SEARCH_PROVIDER=openai to explicitly use OpenAI Responses web_search
+while keeping Gemini, Anthropic, or OpenRouter for reasoning turns.
+Ctrl-C propagates cancellation to the same engine used by the HTTP API.
 `;
+
+export const CLI_RESEARCH_URL = "http://localhost/api/research";
+
+export function cliApiEnvironment(
+  mode: ParsedArguments["mode"],
+  environment: NodeJS.ProcessEnv = process.env,
+): ApiEnvironment {
+  return {
+    // An explicit CLI `--mode live` is the local operator opt-in. Public
+    // HTTP ingress remains disabled unless its server binding is enabled.
+    ATLAS_LIVE_ENABLED: mode === "live" ? "true" : undefined,
+    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    LIVE_PROVIDER: environment.LIVE_PROVIDER,
+    LIVE_SEARCH_PROVIDER: environment.LIVE_SEARCH_PROVIDER,
+    OPENAI_API_KEY: environment.OPENAI_API_KEY,
+    OPENAI_MODEL: environment.OPENAI_MODEL,
+    OPENAI_SEARCH_MODEL: environment.OPENAI_SEARCH_MODEL,
+    OPENAI_BASE_URL: environment.OPENAI_BASE_URL,
+    GEMINI_API_KEY: environment.GEMINI_API_KEY,
+    GEMINI_MODEL: environment.GEMINI_MODEL,
+    ANTHROPIC_API_KEY: environment.ANTHROPIC_API_KEY,
+    ANTHROPIC_MODEL: environment.ANTHROPIC_MODEL,
+    OPENROUTER_API_KEY: environment.OPENROUTER_API_KEY,
+    OPENROUTER_MODEL: environment.OPENROUTER_MODEL,
+    OPENROUTER_SITE_URL: environment.OPENROUTER_SITE_URL,
+    OPENROUTER_APP_NAME: environment.OPENROUTER_APP_NAME,
+  };
+}
 
 function parseArguments(arguments_: string[]): ParsedArguments {
   if (arguments_.length === 0 || ["help", "--help", "-h"].includes(arguments_[0])) {
@@ -138,7 +170,7 @@ async function research(arguments_: ParsedArguments): Promise<number> {
   process.once("SIGINT", onInterrupt);
   try {
     const response = await handleApiRequest(
-      new Request("http://atlas.local/api/research", {
+      new Request(CLI_RESEARCH_URL, {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/x-ndjson" },
         body: JSON.stringify({
@@ -149,23 +181,7 @@ async function research(arguments_: ParsedArguments): Promise<number> {
         }),
         signal: abort.signal,
       }),
-      {
-        // An explicit CLI `--mode live` is the local operator opt-in. Public
-        // HTTP ingress remains disabled unless its server binding is enabled.
-        ATLAS_LIVE_ENABLED: arguments_.mode === "live" ? "true" : undefined,
-        ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
-        LIVE_PROVIDER: process.env.LIVE_PROVIDER,
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-        OPENAI_MODEL: process.env.OPENAI_MODEL,
-        OPENAI_SEARCH_MODEL: process.env.OPENAI_SEARCH_MODEL,
-        OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
-        GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-        GEMINI_MODEL: process.env.GEMINI_MODEL,
-        OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
-        OPENROUTER_MODEL: process.env.OPENROUTER_MODEL,
-        OPENROUTER_SITE_URL: process.env.OPENROUTER_SITE_URL,
-        OPENROUTER_APP_NAME: process.env.OPENROUTER_APP_NAME,
-      },
+      cliApiEnvironment(arguments_.mode),
     );
     if (!response) throw new Error("API router did not handle the research request");
     if (!response.ok) {

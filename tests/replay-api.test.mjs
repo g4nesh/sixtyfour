@@ -5,6 +5,7 @@ import { createServer } from "vite";
 
 const vite = await createServer({
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -994,6 +995,44 @@ test("health and example APIs expose replay readiness without leaking configurat
     OPENROUTER_API_KEY: "server-secret",
   });
   assert.equal((await localHealth.json()).liveConfigured, true);
+  const missingDelegatedSearchKey = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    LIVE_PROVIDER: "gemini",
+    LIVE_SEARCH_PROVIDER: "openai",
+    GEMINI_API_KEY: "reasoning-secret",
+  });
+  assert.equal((await missingDelegatedSearchKey.json()).liveConfigured, false);
+  const configuredDelegatedSearch = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    LIVE_PROVIDER: "gemini",
+    LIVE_SEARCH_PROVIDER: "openai",
+    GEMINI_API_KEY: "reasoning-secret",
+    OPENAI_API_KEY: "search-secret",
+  });
+  assert.equal((await configuredDelegatedSearch.json()).liveConfigured, true);
+  for (const provider of ["anthropic", "claude"]) {
+    const anthropicHealth = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+      ATLAS_LIVE_ENABLED: "true",
+      ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+      LIVE_PROVIDER: provider,
+      ANTHROPIC_API_KEY: "claude-secret",
+      ANTHROPIC_MODEL: "claude-test-model",
+    });
+    const anthropicPayload = await anthropicHealth.json();
+    assert.equal(anthropicPayload.liveConfigured, true);
+    assert.equal("provider" in anthropicPayload, false);
+    assert.equal("model" in anthropicPayload, false);
+  }
+  const anthropicMissingDelegatedSearch = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    LIVE_PROVIDER: "anthropic",
+    LIVE_SEARCH_PROVIDER: "openai",
+    ANTHROPIC_API_KEY: "claude-secret",
+  });
+  assert.equal((await anthropicMissingDelegatedSearch.json()).liveConfigured, false);
   const response = await api.handleApiRequest(new Request("https://atlas.test/api/examples/python-creator"), {});
   const payload = await response.json();
   assert.equal(payload.id, "python-creator");
@@ -1011,12 +1050,55 @@ test("POST replay streams byte-stable NDJSON ending in one terminal report", asy
   const first = await api.handleApiRequest(request(), {});
   const second = await api.handleApiRequest(request(), {});
   assert.match(first.headers.get("content-type"), /^application\/x-ndjson/);
+  assert.equal(first.headers.get("x-atlas-execution-mode"), "replay");
   const [firstText, secondText] = await Promise.all([first.text(), second.text()]);
   assert.equal(firstText, secondText);
   const events = parseNdjson(firstText);
   assert.equal(events.at(-1).name, "result.terminal");
   assert.equal(events.filter((event) => event.name === "result.terminal").length, 1);
   assert.equal(terminalReport(events).status, "completed");
+});
+
+test("local demo fixtures can intercept only the explicit loopback development bypass", async () => {
+  const example = replay.getReplayExample("python-creator");
+  const input = structuredClone(example.input);
+  const trace = api.immediateTerminalTrace(input, "configuration_error", "Synthetic local demo terminal.");
+  const globalKey = "__ATLAS_LOCAL_DEMO_FIXTURES__";
+  const previous = globalThis[globalKey];
+  globalThis[globalKey] = [{ query: input.query, input, trace }];
+  const body = JSON.stringify({
+    query: input.query,
+    objective: input.objective,
+    requestedDepth: input.requestedDepth,
+    requestedCategories: input.requestedCategories,
+    locale: input.locale,
+    mode: "live",
+  });
+  const request = (url) =>
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+
+  try {
+    const local = await api.handleApiRequest(request("http://localhost/api/research"), {
+      ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    });
+    assert.equal(local.headers.get("x-atlas-execution-mode"), "local_demo");
+    assert.equal(terminalReport(parseNdjson(await local.text())).input.query, input.query);
+
+    const localWithoutBypass = await api.handleApiRequest(request("http://localhost/api/research"), {});
+    assert.equal(localWithoutBypass.headers.get("x-atlas-execution-mode"), "live");
+
+    const publicIngress = await api.handleApiRequest(request("https://atlas.test/api/research"), {
+      ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    });
+    assert.equal(publicIngress.headers.get("x-atlas-execution-mode"), "live");
+  } finally {
+    if (previous === undefined) delete globalThis[globalKey];
+    else globalThis[globalKey] = previous;
+  }
 });
 
 test("NDJSON wrapper closes open spans and emits a consumable failed report after source failure", async () => {
@@ -1044,6 +1126,70 @@ test("NDJSON wrapper closes open spans and emits a consumable failed report afte
   assert.doesNotMatch(JSON.stringify(events), /private upstream detail/);
 });
 
+test("FNV-backed partial terminals survive sanitation and preserve their graph through the NDJSON wrapper", async () => {
+  const example = replay.getReplayExample("python-creator");
+  const report = structuredClone(example.output);
+  report.status = "partial";
+  report.searchGraph.status = "exhausted";
+  report.stop = {
+    reason: "diminishing_returns",
+    detail: "No additional bounded source improved the report.",
+    at: report.generatedAt,
+  };
+  report.evidence[0].contentHash = "fnv1a32:deadbeef";
+  const sanitized = traceContract.sanitizeTraceValue({ report });
+  assert.equal(sanitized.report.evidence[0].contentHash, "fnv1a32:deadbeef");
+  assert.equal(validation.isInvestigationReport(sanitized.report), true);
+
+  const started = structuredClone(example.trace.find((event) => event.kind === "span_start"));
+  assert.ok(started);
+  started.seq = 1;
+  started.runId = report.runId;
+  started.eventId = "event_fnv_start";
+  const sourceTerminal = {
+    ...structuredClone(example.trace.at(-1)),
+    seq: 2,
+    runId: report.runId,
+    eventId: "event_fnv_terminal",
+    payload: traceContract.sanitizeTraceValue({
+      status: report.status,
+      stopReason: report.stop.reason,
+      report,
+    }),
+  };
+  async function* sourceWithOpenSpan() {
+    yield started;
+    yield sourceTerminal;
+  }
+  const response = api.traceNdjsonResponse(() => sourceWithOpenSpan(), new AbortController().signal, example.input);
+  const events = parseNdjson(await response.text());
+  assert.deepEqual(
+    events.map((event) => event.seq),
+    [1, 2, 3],
+  );
+  assert.equal(events[1].kind, "span_end");
+  assert.equal(events[2].name, "result.terminal");
+  assert.equal(events[2].payload.report.status, "partial");
+  assert.equal(events[2].payload.report.stop.reason, "diminishing_returns");
+  assert.equal(events[2].payload.report.searchGraph.nodes.length, report.searchGraph.nodes.length);
+  assert.equal(events[2].payload.report.evidence[0].contentHash, "fnv1a32:deadbeef");
+});
+
+test("NDJSON wrapper rejects a valid terminal report belonging to another input", async () => {
+  const example = replay.getReplayExample("python-creator");
+  const terminal = structuredClone(example.trace.at(-1));
+  terminal.seq = 1;
+  terminal.eventId = "event_wrong_input_terminal";
+  terminal.payload.report.input.query = "A different public subject";
+  async function* mismatchedSource() {
+    yield terminal;
+  }
+  const response = api.traceNdjsonResponse(() => mismatchedSource(), new AbortController().signal, example.input);
+  const events = parseNdjson(await response.text());
+  assert.equal(events.at(-1).payload.report.status, "failed");
+  assert.equal(events.at(-1).payload.report.searchGraph.nodes.length, 0);
+});
+
 test("safety refusal precedes replay lookup and missing live key is an honest configuration terminal", async () => {
   const unsafe = await api.handleApiRequest(
     new Request("https://atlas.test/api/research", {
@@ -1054,6 +1200,7 @@ test("safety refusal precedes replay lookup and missing live key is an honest co
     {},
   );
   const unsafeEvents = parseNdjson(await unsafe.text());
+  assert.equal(unsafe.headers.get("x-atlas-execution-mode"), "replay");
   assert.equal(terminalReport(unsafeEvents).status, "blocked");
   assert.equal(terminalReport(unsafeEvents).stop.reason, "unsafe_request");
 
@@ -1066,6 +1213,7 @@ test("safety refusal precedes replay lookup and missing live key is an honest co
     {},
   );
   const unconfiguredEvents = parseNdjson(await unconfigured.text());
+  assert.equal(unconfigured.headers.get("x-atlas-execution-mode"), "live");
   assert.equal(terminalReport(unconfiguredEvents).status, "configuration_error");
   assert.equal(terminalReport(unconfiguredEvents).stop.reason, "configuration_error");
   assert.match(terminalReport(unconfiguredEvents).stop.detail, /server-side model key/);
@@ -1124,6 +1272,21 @@ test("API rejects malformed and unmatched requests without starting synthetic re
     {},
   );
   assert.equal(malformed.status, 400);
+
+  for (const requestedCategories of [[], ["identity", "employer", "profiles"], ["identity", 42]]) {
+    const invalidCategories = await api.handleApiRequest(
+      new Request("https://atlas.test/api/research", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: "Ada Lovelace", mode: "replay", requestedCategories }),
+      }),
+      {},
+    );
+    assert.equal(invalidCategories.status, 400);
+    const payload = await invalidCategories.json();
+    assert.equal(payload.error, "invalid_request");
+    assert.match(payload.message, /requestedCategories must contain only/);
+  }
 
   const unmatched = await api.handleApiRequest(
     new Request("https://atlas.test/api/research", {

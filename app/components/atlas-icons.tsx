@@ -12,6 +12,7 @@ function IconBase({ children, ...props }: IconProps) {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
+      focusable="false"
       {...props}
     >
       {children}

@@ -1,7 +1,17 @@
-import { cloneJson, isJsonValue, normalizeComparable, normalizeWhitespace } from "../domain/runtime";
+import { urlContainsRestrictedParameters } from "../domain/content-policy";
+import {
+  cloneJson,
+  isJsonValue,
+  normalizeComparable,
+  normalizeWhitespace,
+  projectSearchGraphNodeLabel,
+} from "../domain/runtime";
 import type { IdFactory } from "../domain/runtime";
+import { parseTarget } from "../domain/target";
 import {
   SEARCH_GRAPH_SCHEMA_VERSION,
+  type Candidate,
+  type EvidenceSourceType,
   type FrontierMutationMetadata,
   type JsonObject,
   type ParsedTarget,
@@ -16,13 +26,19 @@ import {
   type SourceTier,
 } from "../domain/types";
 import {
+  compiledQueriesForLane,
+  deterministicSourceTypeForUrl,
+  discoveryLeadSchedulingDecision,
   isDeniedResearchSource,
   isDeniedResearchTool,
   sourceLaneById,
   sourceLaneForFrontierEntry,
   sourceLaneQueryHint,
   sourceLanesForTarget,
+  githubHandleFromCanonicalProfileUrl,
+  type DiscoveryLeadSchedulingDecision,
   type SourceLane,
+  type SourceTierContext,
 } from "./source-hierarchy";
 
 const MINIMUM_COST = 0.000001;
@@ -37,6 +53,7 @@ export interface SearchKernelEvent {
     | "frontier.pruned"
     | "frontier.expanded"
     | "frontier.exhausted"
+    | "frontier.quality_probe_selected"
     | "source.tier_advanced"
     | "mutation.proposed"
     | "mutation.accepted"
@@ -61,6 +78,7 @@ export interface FrontierEnqueueOptions {
   candidateLabel?: string | null;
   intent?: string;
   queryHint?: string;
+  leadId?: string | null;
   status?: Extract<SearchGraphStatus, "queued" | "mutated" | "rejected">;
   mutation?: FrontierMutationMetadata | null;
   utility?: Partial<SearchUtilityComponents>;
@@ -101,6 +119,17 @@ function positiveCost(value: number, label: string): number {
 
 function canonicalDedupe(value: string): string {
   return normalizeComparable(value).replace(/\s+/g, " ").slice(0, 500);
+}
+
+/** Preserve deliberate accents/punctuation that distinguish compiler variants. */
+function canonicalQueryDedupe(value: string): string {
+  return normalizeWhitespace(value).normalize("NFC").toLocaleLowerCase("en-US").replaceAll("|", "%7c").slice(0, 360);
+}
+
+function canonicalOpaqueLeadId(value: string | null | undefined): string | null {
+  if (!value || value !== value.trim() || value.length > 180 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value))
+    return null;
+  return value;
 }
 
 function graphTimestamp(graph: SearchGraph, timestamp: string): SearchGraph {
@@ -222,7 +251,7 @@ export function admitGraphNode(
     schemaVersion: SEARCH_GRAPH_SCHEMA_VERSION,
     id: ids.next("graph_node"),
     kind: admission.kind,
-    label: normalizeWhitespace(admission.label).slice(0, 320),
+    label: projectSearchGraphNodeLabel(admission.label),
     status: admission.status,
     sourceTier: admission.sourceTier ?? null,
     sourceLaneId: admission.sourceLaneId ?? null,
@@ -312,9 +341,18 @@ export function enqueueFrontier(
     320,
   );
   const candidateId = options.candidateId ?? null;
-  const dedupeKey = canonicalDedupe(
-    [options.lane.id, candidateId ?? "unbound", queryHint, options.mutation?.strategy ?? "base"].join("|"),
-  );
+  const leadId = canonicalOpaqueLeadId(options.leadId);
+  if (options.leadId !== undefined && options.leadId !== null && !leadId) {
+    throw new TypeError("frontier leadId must be one bounded opaque discovery capability");
+  }
+  const dedupeParts = [
+    canonicalDedupe(options.lane.id),
+    canonicalDedupe(candidateId ?? "unbound"),
+    canonicalQueryDedupe(queryHint),
+  ];
+  if (leadId) dedupeParts.push(canonicalDedupe(leadId));
+  dedupeParts.push(canonicalDedupe(options.mutation?.strategy ?? "base"));
+  const dedupeKey = dedupeParts.join("|").slice(0, 500);
   const dominant = graph.frontier.find(
     (entry) =>
       entry.dedupeKey === dedupeKey &&
@@ -357,6 +395,7 @@ export function enqueueFrontier(
       data: {
         intent: normalizeWhitespace(options.intent ?? options.lane.description).slice(0, 320),
         queryHint,
+        ...(leadId ? { leadId } : {}),
         admission: options.lane.admission,
       },
     },
@@ -379,6 +418,7 @@ export function enqueueFrontier(
     allowedTools: [...options.lane.allowedTools].sort(),
     intent: normalizeWhitespace(options.intent ?? options.lane.description).slice(0, 320),
     queryHint,
+    ...(leadId ? { leadId } : {}),
     candidateId,
     depth,
     ordinal: graph.nextOrdinal,
@@ -420,6 +460,7 @@ export function enqueueFrontier(
         nodeId: entry.nodeId,
         sourceTier: entry.sourceTier,
         sourceLaneId: entry.sourceLaneId,
+        leadId: entry.leadId ?? null,
         edgeCost: entry.edgeCost,
         pathCost: entry.pathCost,
         depth: entry.depth,
@@ -428,6 +469,16 @@ export function enqueueFrontier(
     },
   ];
   return { graph: graphTimestamp(graph, timestamp), value: entry, events };
+}
+
+function compilerQueryIntent(query: ReturnType<typeof compiledQueriesForLane>[number], lane: SourceLane): string {
+  return normalizeWhitespace(
+    `OSINT query ${query.id}: ${query.kind}; refinement=${query.refinement}; ${lane.description}`,
+  ).slice(0, 320);
+}
+
+function laneWithTools(lane: SourceLane, allowedTools: readonly string[]): SourceLane {
+  return { ...lane, allowedTools: [...allowedTools] };
 }
 
 export function seedFrontier(
@@ -459,7 +510,29 @@ export function seedFrontier(
   graph.status = "active";
   const events = [...seedAdmission.events];
   const seeded: SearchFrontierEntry[] = [];
-  for (const lane of sourceLanesForTarget(target, availableTools)) {
+  for (const lane of sourceLanesForTarget(target, availableTools, { includeCompilerDiscovery: true })) {
+    const compilerQueries = compiledQueriesForLane(target, lane);
+    if (compilerQueries.length > 0) {
+      const searchLane = laneWithTools(lane, ["search_web"]);
+      for (const query of compilerQueries) {
+        const enqueued = enqueueFrontier(
+          graph,
+          {
+            lane: searchLane,
+            target,
+            parentNodeId: seedAdmission.value.id,
+            queryHint: query.query,
+            intent: compilerQueryIntent(query, lane),
+          },
+          ids,
+          timestamp,
+        );
+        graph = enqueued.graph;
+        events.push(...enqueued.events);
+        if (enqueued.value) seeded.push(enqueued.value);
+      }
+      continue;
+    }
     if (lane.requiresCandidate) continue;
     const enqueued = enqueueFrontier(
       graph,
@@ -490,7 +563,7 @@ export function seedFrontier(
 export function enqueueCandidateFrontier(
   graphValue: SearchGraph,
   target: ParsedTarget,
-  candidate: { id: string; displayName: string },
+  candidate: Pick<Candidate, "id" | "displayName" | "signals">,
   parentEntry: SearchFrontierEntry,
   parentNodeId: string,
   availableTools: readonly string[],
@@ -500,12 +573,236 @@ export function enqueueCandidateFrontier(
   let graph = cloneJson(graphValue);
   const entries: SearchFrontierEntry[] = [];
   const events: SearchKernelEvent[] = [];
+  const githubHandle = groundedGithubHandleForCandidate(candidate);
   for (const lane of sourceLanesForTarget(target, availableTools, { candidateId: candidate.id })) {
     if (!lane.requiresCandidate) continue;
     // Lanes that require an exact candidate-linked URL (e.g. Wayback) cannot be
     // enqueued from a name/org query hint; they are opened later, only once an
     // admitted source has bound a concrete HTTPS URL to this candidate.
     if (lane.requiresExactCandidateUrl) continue;
+    const compilerQueries = compiledQueriesForLane(target, lane);
+    if (compilerQueries.length > 0) {
+      // Canonical compiler searches are seeded once, before any candidate is
+      // known. Candidate admission may open only non-fetch specialist tools;
+      // every hardened fetch is opened later by one admitted opaque discovery
+      // lead. Re-enqueuing an exhausted compiler query here would rerun the
+      // same candidate-independent search after a late candidate discovery.
+      const remainingTools = lane.allowedTools.filter(
+        (tool) => tool !== "search_web" && tool !== "fetch_public_source",
+      );
+      const eligibleTools = remainingTools.filter(
+        (tool) => tool !== "keybase_identity_proofs" || githubHandle !== null,
+      );
+      if (eligibleTools.length > 0) {
+        const enqueued = enqueueFrontier(
+          graph,
+          {
+            lane: laneWithTools(lane, eligibleTools),
+            target,
+            parentNodeId,
+            parentFrontierEntry: parentEntry,
+            candidateId: candidate.id,
+            candidateLabel: candidate.displayName,
+            queryHint:
+              eligibleTools.length === 1 && eligibleTools[0] === "keybase_identity_proofs" && githubHandle
+                ? githubHandle
+                : `${candidate.displayName} ${target.organizationHints.map((item) => item.name).join(" ")}`,
+          },
+          ids,
+          timestamp,
+        );
+        graph = enqueued.graph;
+        events.push(...enqueued.events);
+        if (enqueued.value) entries.push(enqueued.value);
+      }
+      continue;
+    }
+    const remainingTools = lane.allowedTools.filter((tool) => tool !== "search_web" && tool !== "fetch_public_source");
+    const eligibleTools = remainingTools.filter((tool) => tool !== "keybase_identity_proofs" || githubHandle !== null);
+    if (eligibleTools.length === 0) continue;
+    const enqueued = enqueueFrontier(
+      graph,
+      {
+        lane: laneWithTools(lane, eligibleTools),
+        target,
+        parentNodeId,
+        parentFrontierEntry: parentEntry,
+        candidateId: candidate.id,
+        candidateLabel: candidate.displayName,
+        queryHint:
+          eligibleTools.length === 1 && eligibleTools[0] === "keybase_identity_proofs" && githubHandle
+            ? githubHandle
+            : `${candidate.displayName} ${target.organizationHints.map((item) => item.name).join(" ")}`,
+      },
+      ids,
+      timestamp,
+    );
+    graph = enqueued.graph;
+    events.push(...enqueued.events);
+    if (enqueued.value) entries.push(enqueued.value);
+  }
+  return { graph, value: entries, events };
+}
+
+/**
+ * Return one unambiguous GitHub login only after the candidate ledger has
+ * bound a social-handle signal to admitted GitHub evidence. Name-only,
+ * self-asserted, provisional, malformed, and conflicting handles fail closed.
+ */
+export function groundedGithubHandleForCandidate(candidate: Pick<Candidate, "signals">): string | null {
+  const handles = new Set<string>();
+  for (const signal of candidate.signals ?? []) {
+    if (
+      signal.kind !== "social_handle" ||
+      signal.sourceFamily?.toLocaleLowerCase("en-US") !== "github.com" ||
+      !signal.sourceEvidenceId ||
+      signal.assurance === "self_asserted"
+    )
+      continue;
+    const handle = githubHandleFromCanonicalProfileUrl(`https://github.com/${signal.value}`);
+    if (!handle || signal.normalizedValue !== handle) continue;
+    handles.add(handle);
+  }
+  return handles.size === 1 ? [...handles][0] : null;
+}
+
+export interface CandidateLeadFetchBinding {
+  leadId: string;
+  sourceUrl: string;
+  sourceEvidenceId: string;
+  classifiedSourceLaneId: string;
+  classifiedSourceTier: SourceTier;
+  classifiedSourceType: EvidenceSourceType;
+}
+
+/**
+ * Open exactly one candidate-scoped hardened-fetch pivot for one admitted
+ * opaque discovery lead. The classified lane is kernel-checked here so a
+ * generic candidate pivot can never consume a lead from another source tier.
+ */
+export function enqueueCandidateLeadFetchFrontier(
+  graphValue: SearchGraph,
+  target: ParsedTarget,
+  candidate: { id: string; displayName: string },
+  binding: CandidateLeadFetchBinding,
+  parentEntry: SearchFrontierEntry,
+  parentNodeId: string,
+  availableTools: readonly string[],
+  ids: IdFactory,
+  timestamp: string,
+): SearchKernelResult<SearchFrontierEntry | null> {
+  const leadId = canonicalOpaqueLeadId(binding.leadId);
+  const sourceUrl = exactCandidateLinkedUrl(binding.sourceUrl);
+  const lane = sourceLaneById(binding.classifiedSourceLaneId);
+  const legalLane = sourceLanesForTarget(target, availableTools, { candidateId: candidate.id }).find(
+    (candidateLane) => candidateLane.id === binding.classifiedSourceLaneId,
+  );
+  if (
+    !leadId ||
+    !sourceUrl ||
+    !binding.sourceEvidenceId ||
+    !lane ||
+    !legalLane ||
+    lane.tier !== binding.classifiedSourceTier ||
+    !lane.requiresCandidate ||
+    lane.requiresExactCandidateUrl ||
+    !lane.allowedTools.includes("fetch_public_source") ||
+    !lane.sourceTypes.includes(binding.classifiedSourceType) ||
+    !availableTools.includes("fetch_public_source")
+  ) {
+    return { graph: cloneJson(graphValue), value: null, events: [] };
+  }
+  const priorLeadIdsForSource = new Set(
+    graphValue.nodes
+      .filter(
+        (node) =>
+          node.kind === "source" &&
+          node.candidateId === candidate.id &&
+          node.evidenceId !== binding.sourceEvidenceId &&
+          typeof node.data.sourceUrl === "string" &&
+          exactCandidateLinkedUrl(node.data.sourceUrl) === sourceUrl &&
+          typeof node.data.leadId === "string",
+      )
+      .map((node) => node.data.leadId as string),
+  );
+  if (
+    graphValue.frontier.some(
+      (entry) => entry.candidateId === candidate.id && entry.leadId && priorLeadIdsForSource.has(entry.leadId),
+    )
+  ) {
+    return { graph: cloneJson(graphValue), value: null, events: [] };
+  }
+  return enqueueFrontier(
+    graphValue,
+    {
+      lane: laneWithTools(lane, ["fetch_public_source"]),
+      target,
+      parentNodeId,
+      parentFrontierEntry: parentEntry,
+      candidateId: candidate.id,
+      candidateLabel: candidate.displayName,
+      leadId,
+      queryHint: leadId,
+      intent: `Fetch only opaque discovery lead ${leadId} in its classified ${lane.id} lane.`,
+    },
+    ids,
+    timestamp,
+  );
+}
+
+function exactCandidateLinkedUrl(value: string): string | null {
+  if (value.length > 2_048 || isDeniedResearchSource(value)) return null;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      (url.port && url.port !== "443") ||
+      urlContainsRestrictedParameters(url.href)
+    )
+      return null;
+    url.hash = "";
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+function isExactCandidateUrlDependency(entry: SearchFrontierEntry): boolean {
+  const lane = sourceLaneById(entry.sourceLaneId);
+  return (
+    lane?.requiresExactCandidateUrl === true &&
+    entry.candidateId !== null &&
+    entry.mutation === null &&
+    entry.allowedTools.includes("wayback_profile_history") &&
+    exactCandidateLinkedUrl(entry.queryHint) !== null
+  );
+}
+
+/**
+ * Open exact-URL dependency lanes only after a source has already been
+ * admitted for the same candidate. This is deliberately separate from the
+ * name-based candidate frontier so an archive can never bootstrap identity.
+ */
+export function enqueueCandidateUrlFrontier(
+  graphValue: SearchGraph,
+  target: ParsedTarget,
+  candidate: { id: string; displayName: string },
+  exactUrlValue: string,
+  parentEntry: SearchFrontierEntry,
+  parentNodeId: string,
+  availableTools: readonly string[],
+  ids: IdFactory,
+  timestamp: string,
+): SearchKernelResult<SearchFrontierEntry[]> {
+  const exactUrl = exactCandidateLinkedUrl(exactUrlValue);
+  if (!exactUrl) return { graph: cloneJson(graphValue), value: [], events: [] };
+  let graph = cloneJson(graphValue);
+  const entries: SearchFrontierEntry[] = [];
+  const events: SearchKernelEvent[] = [];
+  for (const lane of sourceLanesForTarget(target, availableTools, { candidateId: candidate.id })) {
+    if (!lane.requiresExactCandidateUrl) continue;
     const enqueued = enqueueFrontier(
       graph,
       {
@@ -515,7 +812,8 @@ export function enqueueCandidateFrontier(
         parentFrontierEntry: parentEntry,
         candidateId: candidate.id,
         candidateLabel: candidate.displayName,
-        queryHint: `${candidate.displayName} ${target.organizationHints.map((item) => item.name).join(" ")}`,
+        queryHint: exactUrl,
+        intent: `Compare bounded archived captures of the exact candidate-linked URL ${exactUrl}`,
       },
       ids,
       timestamp,
@@ -535,12 +833,258 @@ function mutationSelectionLegal(graph: SearchGraph): boolean {
   return projectedTools > 0 && projectedMutations / projectedTools <= MUTATION_SHARE_CAP + Number.EPSILON;
 }
 
+export function isCanonicalCompilerSearchEntry(entry: SearchFrontierEntry): boolean {
+  return (
+    entry.candidateId === null &&
+    entry.mutation === null &&
+    entry.intent.startsWith("OSINT query ") &&
+    entry.allowedTools.length === 1 &&
+    entry.allowedTools[0] === "search_web"
+  );
+}
+
+function isCandidateLeadFetchEntry(entry: SearchFrontierEntry): boolean {
+  return (
+    entry.candidateId !== null &&
+    canonicalOpaqueLeadId(entry.leadId) !== null &&
+    entry.queryHint === entry.leadId &&
+    entry.mutation === null &&
+    entry.allowedTools.length === 1 &&
+    entry.allowedTools[0] === "fetch_public_source" &&
+    !isCanonicalCompilerSearchEntry(entry)
+  );
+}
+
+function isKeybaseSpecialistEntry(entry: SearchFrontierEntry): boolean {
+  return (
+    entry.mutation === null && entry.allowedTools.length === 1 && entry.allowedTools[0] === "keybase_identity_proofs"
+  );
+}
+
+function isClassifiedLeadDependency(graph: SearchGraph, entry: SearchFrontierEntry): boolean {
+  if (!isCandidateLeadFetchEntry(entry) || entry.candidateId === null) return false;
+  return graph.nodes.some(
+    (node) =>
+      node.kind === "source" &&
+      node.candidateId === entry.candidateId &&
+      node.evidenceId !== null &&
+      node.data.sourceType === "search_result" &&
+      node.data.classifiedSourceLaneId === entry.sourceLaneId &&
+      node.data.leadId === entry.leadId,
+  );
+}
+
+const LEAD_SCHEDULING_DISPOSITIONS = new Set<DiscoveryLeadSchedulingDecision["disposition"]>([
+  "reject",
+  "deprioritize",
+  "neutral",
+  "prioritize",
+]);
+
+function discoveryLeadNode(graph: SearchGraph, entry: SearchFrontierEntry): SearchGraphNode | null {
+  if (!isClassifiedLeadDependency(graph, entry) || entry.candidateId === null) return null;
+  return (
+    graph.nodes.find(
+      (node) =>
+        node.kind === "source" &&
+        node.candidateId === entry.candidateId &&
+        node.evidenceId !== null &&
+        node.data.sourceType === "search_result" &&
+        node.data.leadId === entry.leadId,
+    ) ?? null
+  );
+}
+
+function schedulingDecisionForLead(
+  graph: SearchGraph,
+  entry: SearchFrontierEntry,
+  contexts: Readonly<Record<string, SourceTierContext>> | undefined,
+  persistedDecisions: Readonly<Record<string, DiscoveryLeadSchedulingDecision>> | undefined,
+): DiscoveryLeadSchedulingDecision | null {
+  const node = discoveryLeadNode(graph, entry);
+  if (!node || entry.candidateId === null || typeof node.data.sourceUrl !== "string") return null;
+  const deterministic = discoveryLeadSchedulingDecision(
+    node.data.sourceUrl,
+    node.label,
+    contexts?.[entry.candidateId] ?? {},
+  );
+  const persisted = entry.leadId ? persistedDecisions?.[entry.leadId] : undefined;
+  // The exact-subject slug probe is stamped only by the server-side citation
+  // qualifier after it verifies the exact T1 baseline query and bounded path
+  // grammar. The general URL/title classifier intentionally remains neutral
+  // for a generic result title, so this one persisted scheduling hint cannot
+  // be reproduced here. It changes traversal order only; source tier, type,
+  // trust, candidate binding, and fetch admission remain unchanged.
+  if (persisted?.disposition === "prioritize" && persisted.reason === "exact_subject_slug_probe") {
+    return persisted;
+  }
+  return persisted &&
+    LEAD_SCHEDULING_DISPOSITIONS.has(persisted.disposition) &&
+    persisted.disposition === deterministic.disposition &&
+    persisted.reason === deterministic.reason
+    ? persisted
+    : deterministic;
+}
+
+const CANONICAL_PERSON_PROFILE_SOURCE_TYPES = new Set<EvidenceSourceType>([
+  "official_profile",
+  "company_page",
+  "professional_profile",
+]);
+
+function normalizedPersonSlug(value: string): string {
+  return normalizeComparable(value)
+    .replace(/[@.+_-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function oneSegmentExactPersonSlug(value: string, context: SourceTierContext): boolean {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      (url.port && url.port !== "443") ||
+      url.search ||
+      url.hash
+    )
+      return false;
+    const segments = url.pathname.split("/").filter(Boolean);
+    if (segments.length !== 1) return false;
+    const decoded = decodeURIComponent(segments[0]);
+    if (decoded.includes("/") || decoded.includes("\\")) return false;
+    const slug = normalizedPersonSlug(decoded);
+    if (!slug) return false;
+    return (context.personNames ?? []).some((name) => normalizedPersonSlug(name) === slug);
+  } catch {
+    return false;
+  }
+}
+
+function canonicalPersonProfileRoute(value: string, context: SourceTierContext): boolean {
+  const deterministicType = deterministicSourceTypeForUrl(value, context);
+  if (deterministicType && CANONICAL_PERSON_PROFILE_SOURCE_TYPES.has(deterministicType)) return true;
+  if (githubHandleFromCanonicalProfileUrl(value)) return true;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname.toLocaleLowerCase("en-US") !== "scholar.google.com" ||
+      url.pathname !== "/citations" ||
+      url.username ||
+      url.password ||
+      (url.port && url.port !== "443")
+    )
+      return false;
+    const user = url.searchParams.get("user") ?? "";
+    const allowedParameters = new Set(["user", "hl"]);
+    return (
+      /^[A-Za-z0-9_-]{4,64}$/.test(user) && [...url.searchParams.keys()].every((key) => allowedParameters.has(key))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function qualityProbeRank(
+  graph: SearchGraph,
+  entry: SearchFrontierEntry,
+  context: SourceTierContext,
+  persistedDecisions: Readonly<Record<string, DiscoveryLeadSchedulingDecision>> | undefined,
+  decision: DiscoveryLeadSchedulingDecision | null,
+): number {
+  const persisted = entry.leadId ? persistedDecisions?.[entry.leadId] : undefined;
+  if (persisted?.disposition === "prioritize" && persisted.reason === "exact_subject_slug_probe") return 0;
+  const sourceUrl = discoveryLeadNode(graph, entry)?.data.sourceUrl;
+  if (typeof sourceUrl !== "string") return 4;
+  if (canonicalPersonProfileRoute(sourceUrl, context)) return 1;
+  if (oneSegmentExactPersonSlug(sourceUrl, context)) return 2;
+  if (decision?.disposition === "prioritize" && decision.reason === "candidate_bio_path") return 3;
+  return 4;
+}
+
+/**
+ * Order only one optional quality-probe selection at a time. The rank is
+ * deliberately trust-neutral: it never changes path cost, source tier,
+ * candidate scope, fetch authorization, evidence admission, or confidence.
+ */
+function compareQualityProbeEntries(
+  graph: SearchGraph,
+  left: SearchFrontierEntry,
+  right: SearchFrontierEntry,
+  contexts: Readonly<Record<string, SourceTierContext>> | undefined,
+  persistedDecisions: Readonly<Record<string, DiscoveryLeadSchedulingDecision>> | undefined,
+  decisionForLead: (entry: SearchFrontierEntry) => DiscoveryLeadSchedulingDecision | null,
+): number {
+  const leftContext = (left.candidateId ? contexts?.[left.candidateId] : undefined) ?? {};
+  const rightContext = (right.candidateId ? contexts?.[right.candidateId] : undefined) ?? {};
+  return (
+    qualityProbeRank(graph, left, leftContext, persistedDecisions, decisionForLead(left)) -
+      qualityProbeRank(graph, right, rightContext, persistedDecisions, decisionForLead(right)) ||
+    compareFrontierEntries(left, right)
+  );
+}
+
+function isGroundedKeybaseDependency(graph: SearchGraph, entry: SearchFrontierEntry): boolean {
+  if (
+    !isKeybaseSpecialistEntry(entry) ||
+    entry.candidateId === null ||
+    githubHandleFromCanonicalProfileUrl(`https://github.com/${entry.queryHint}`) !== entry.queryHint ||
+    entry.parentFrontierEntryId === null
+  )
+    return false;
+  const parent = graph.frontier.find((candidate) => candidate.id === entry.parentFrontierEntryId);
+  return Boolean(
+    parent &&
+    parent.candidateId === entry.candidateId &&
+    parent.status === "verified" &&
+    isClassifiedLeadDependency(graph, parent),
+  );
+}
+
+export interface FrontierSelectionOptions {
+  /** Defer only optional candidate-link fetches until finite compiler searches have run once. */
+  reserveCanonicalCompilerBreadth?: boolean;
+  /**
+   * Run a bounded trust-neutral, source-shape-prioritized discovery lead
+   * before ordinary candidate fanout. This changes traversal order only:
+   * source tier, evidence admission, and candidate scope remain immutable.
+   */
+  prioritizeDiscoveryLeadProbe?: boolean;
+  /** Hard cap for prioritized probe selections. Defaults to one and may never exceed two. */
+  maxPrioritizedDiscoveryLeadProbes?: number;
+  /**
+   * Entry IDs previously selected through the explicit quality-probe route.
+   * When supplied, this server-owned run state is authoritative; ordinary
+   * rejected/exhausted prioritized leads are not probe attempts.
+   */
+  attemptedPrioritizedDiscoveryLeadProbeEntryIds?: ReadonlySet<string>;
+  discoveryLeadContexts?: Readonly<Record<string, SourceTierContext>>;
+  discoveryLeadSchedulingDecisions?: Readonly<Record<string, DiscoveryLeadSchedulingDecision>>;
+}
+
 export function selectFrontierBatch(
   graphValue: SearchGraph,
   limit: number,
   timestamp: string,
+  options: FrontierSelectionOptions = {},
 ): SearchKernelResult<SearchFrontierEntry[]> {
   if (!Number.isInteger(limit) || limit < 0) throw new TypeError("frontier batch limit must be a non-negative integer");
+  const maximumPrioritizedDiscoveryLeadProbes = options.maxPrioritizedDiscoveryLeadProbes ?? 1;
+  if (
+    !Number.isInteger(maximumPrioritizedDiscoveryLeadProbes) ||
+    maximumPrioritizedDiscoveryLeadProbes < 0 ||
+    maximumPrioritizedDiscoveryLeadProbes > 2
+  )
+    throw new TypeError("prioritized discovery lead probe limit must be an integer from zero to two");
+  if (
+    options.prioritizeDiscoveryLeadProbe === true &&
+    options.attemptedPrioritizedDiscoveryLeadProbeEntryIds === undefined
+  ) {
+    throw new TypeError("prioritized discovery lead probes require explicit attempted entry IDs");
+  }
   const graph = cloneJson(graphValue);
   const queued = graph.frontier
     .filter((entry) => entry.status === "queued" || entry.status === "mutated")
@@ -549,12 +1093,36 @@ export function selectFrontierBatch(
   // batch may expand only the lowest tier that has an action executable now;
   // this prevents broad discovery from racing an unexhausted exact/official
   // lane while still allowing mutation-cap-deferred entries to wait safely.
-  // The cursor is monotonic: entries below the current tier (e.g. a candidate
-  // lane opened after the run already advanced) are not revisited downward.
+  // The breadth cursor is monotonic, but an exact candidate dependency may be
+  // admitted only after a later search query exposes it. Such a dependency is
+  // allowed to run in its deterministically classified lane without reopening
+  // arbitrary lower-tier breadth.
   const tierFloor = graph.currentSourceTier ?? 0;
-  const initiallyExecutable = queued.filter(
-    (entry) => entry.sourceTier >= tierFloor && (entry.mutation === null || mutationSelectionLegal(graph)),
-  );
+  const initiallyExecutable = queued.filter((entry) => {
+    const exactUrlDependency = sourceLaneById(entry.sourceLaneId)?.requiresExactCandidateUrl === true;
+    return (
+      (entry.sourceTier >= tierFloor ||
+        exactUrlDependency ||
+        isClassifiedLeadDependency(graph, entry) ||
+        isGroundedKeybaseDependency(graph, entry)) &&
+      (entry.mutation === null || mutationSelectionLegal(graph))
+    );
+  });
+  const leadSchedulingDecisions = new Map<string, DiscoveryLeadSchedulingDecision | null>();
+  const leadSchedulingDecision = (entry: SearchFrontierEntry): DiscoveryLeadSchedulingDecision | null => {
+    if (!leadSchedulingDecisions.has(entry.id)) {
+      leadSchedulingDecisions.set(
+        entry.id,
+        schedulingDecisionForLead(
+          graph,
+          entry,
+          options.discoveryLeadContexts,
+          options.discoveryLeadSchedulingDecisions,
+        ),
+      );
+    }
+    return leadSchedulingDecisions.get(entry.id) ?? null;
+  };
   const minimumEligibleTier =
     initiallyExecutable.length > 0
       ? initiallyExecutable.reduce<SourceTier>(
@@ -562,8 +1130,116 @@ export function selectFrontierBatch(
           initiallyExecutable[0].sourceTier,
         )
       : null;
-  const eligible =
-    minimumEligibleTier === null ? [] : queued.filter((entry) => entry.sourceTier === minimumEligibleTier);
+  const minimumTierEntries =
+    minimumEligibleTier === null ? [] : initiallyExecutable.filter((entry) => entry.sourceTier === minimumEligibleTier);
+  const minimumTierFetches = minimumTierEntries.filter(isCandidateLeadFetchEntry);
+  const pendingHigherTierFetches =
+    minimumEligibleTier !== null &&
+    minimumTierEntries.length > 0 &&
+    minimumTierEntries.every(isCanonicalCompilerSearchEntry)
+      ? initiallyExecutable.filter(
+          (entry) => entry.sourceTier > minimumEligibleTier && isClassifiedLeadDependency(graph, entry),
+        )
+      : [];
+  const pendingCanonicalSearches = initiallyExecutable.filter(isCanonicalCompilerSearchEntry);
+  const nextCanonicalTier =
+    pendingCanonicalSearches.length > 0
+      ? pendingCanonicalSearches.reduce<SourceTier>(
+          (value, entry) => Math.min(value, entry.sourceTier) as SourceTier,
+          pendingCanonicalSearches[0].sourceTier,
+        )
+      : null;
+  const dependencyTier =
+    pendingHigherTierFetches.length > 0
+      ? pendingHigherTierFetches.reduce<SourceTier>(
+          (value, entry) => Math.min(value, entry.sourceTier) as SourceTier,
+          pendingHigherTierFetches[0].sourceTier,
+        )
+      : null;
+  // Candidate creation means a provider-attested lead may already be waiting
+  // for a hardened fetch. Normal traversal consumes that lane-compatible pivot
+  // before additional compiler breadth. Deep traversal may explicitly reserve
+  // finite canonical breadth; in that mode only this optional lead fanout is
+  // deferred. T0, exact-URL, grounded specialist, mutation, and ordinary tier
+  // eligibility remain unchanged. The monotonic breadth cursor deliberately
+  // stays put when a higher-tier fetch dependency runs.
+  const normallyEligible =
+    minimumTierFetches.length > 0
+      ? minimumTierFetches
+      : dependencyTier !== null
+        ? pendingHigherTierFetches.filter((entry) => entry.sourceTier === dependencyTier)
+        : minimumTierEntries;
+  const reserveCanonicalBreadth =
+    options.reserveCanonicalCompilerBreadth === true &&
+    nextCanonicalTier !== null &&
+    normallyEligible.some(isCandidateLeadFetchEntry);
+  const qualitySchedulingEnabled = options.prioritizeDiscoveryLeadProbe === true;
+  const pendingMandatoryDependency = initiallyExecutable.some(
+    (entry) => isExactCandidateUrlDependency(entry) || isGroundedKeybaseDependency(graph, entry),
+  );
+  const attemptedPriorityProbeCount = options.attemptedPrioritizedDiscoveryLeadProbeEntryIds?.size ?? 0;
+  const priorityProbeEntries =
+    qualitySchedulingEnabled &&
+    pendingCanonicalSearches.length === 0 &&
+    !pendingMandatoryDependency &&
+    normallyEligible.length > 0 &&
+    normallyEligible.every(isCandidateLeadFetchEntry) &&
+    attemptedPriorityProbeCount < maximumPrioritizedDiscoveryLeadProbes
+      ? initiallyExecutable
+          .filter((entry) => leadSchedulingDecision(entry)?.disposition === "prioritize")
+          .sort((left, right) =>
+            compareQualityProbeEntries(
+              graph,
+              left,
+              right,
+              options.discoveryLeadContexts,
+              options.discoveryLeadSchedulingDecisions,
+              leadSchedulingDecision,
+            ),
+          )
+          .slice(0, 1)
+      : [];
+  const normallyEligibleNonDeprioritizedLeads = qualitySchedulingEnabled
+    ? normallyEligible.filter(
+        (entry) =>
+          isCandidateLeadFetchEntry(entry) &&
+          !["deprioritize", "reject"].includes(leadSchedulingDecision(entry)?.disposition ?? "neutral"),
+      )
+    : [];
+  const normallyEligibleAreOnlyDeprioritizedLeads =
+    qualitySchedulingEnabled &&
+    normallyEligible.length > 0 &&
+    normallyEligible.every(
+      (entry) =>
+        isCandidateLeadFetchEntry(entry) &&
+        ["deprioritize", "reject"].includes(leadSchedulingDecision(entry)?.disposition ?? "neutral"),
+    );
+  const nonDeprioritizedLeadDependencies = initiallyExecutable.filter(
+    (entry) =>
+      qualitySchedulingEnabled &&
+      isClassifiedLeadDependency(graph, entry) &&
+      !["deprioritize", "reject"].includes(leadSchedulingDecision(entry)?.disposition ?? "neutral"),
+  );
+  const nextNonDeprioritizedTier =
+    nonDeprioritizedLeadDependencies.length > 0
+      ? nonDeprioritizedLeadDependencies.reduce<SourceTier>(
+          (value, entry) => Math.min(value, entry.sourceTier) as SourceTier,
+          nonDeprioritizedLeadDependencies[0].sourceTier,
+        )
+      : null;
+  const deferredQualityEntries =
+    normallyEligibleAreOnlyDeprioritizedLeads && nextNonDeprioritizedTier !== null
+      ? nonDeprioritizedLeadDependencies.filter((entry) => entry.sourceTier === nextNonDeprioritizedTier)
+      : [];
+  const eligible = reserveCanonicalBreadth
+    ? pendingCanonicalSearches.filter((entry) => entry.sourceTier === nextCanonicalTier)
+    : priorityProbeEntries.length > 0
+      ? priorityProbeEntries
+      : normallyEligibleNonDeprioritizedLeads.length > 0 && normallyEligible.every(isCandidateLeadFetchEntry)
+        ? normallyEligibleNonDeprioritizedLeads
+        : deferredQualityEntries.length > 0
+          ? deferredQualityEntries
+          : normallyEligible;
   const selected: SearchFrontierEntry[] = [];
   let selectedMutations = 0;
   const selectedIds = new Set<string>();
@@ -596,14 +1272,43 @@ export function selectFrontierBatch(
       actionId: entry.actionId,
       sourceTier: entry.sourceTier,
       sourceLaneId: entry.sourceLaneId,
+      leadId: entry.leadId ?? null,
       edgeCost: entry.edgeCost,
       pathCost: entry.pathCost,
       depth: entry.depth,
       mutated: Boolean(entry.mutation),
     },
   }));
+  const selectedQualityProbe = selected.find((entry) => priorityProbeEntries.some((probe) => probe.id === entry.id));
+  if (selectedQualityProbe) {
+    const decision = leadSchedulingDecision(selectedQualityProbe);
+    events.push({
+      name: "frontier.quality_probe_selected",
+      payload: {
+        frontierEntryId: selectedQualityProbe.id,
+        actionId: selectedQualityProbe.actionId,
+        sourceTier: selectedQualityProbe.sourceTier,
+        sourceLaneId: selectedQualityProbe.sourceLaneId,
+        leadId: selectedQualityProbe.leadId ?? null,
+        schedulingDisposition: decision?.disposition ?? "neutral",
+        schedulingReason: decision?.reason ?? "neutral",
+        probeOrdinal: attemptedPriorityProbeCount + 1,
+      },
+    });
+  }
   const selectedTier = selected[0]?.sourceTier ?? null;
-  if (selectedTier !== null && (graph.currentSourceTier === null || selectedTier > graph.currentSourceTier)) {
+  const selectedHigherTierDependency =
+    dependencyTier !== null &&
+    selectedTier === dependencyTier &&
+    minimumEligibleTier !== null &&
+    dependencyTier > minimumEligibleTier;
+  if (
+    selectedTier !== null &&
+    !selectedHigherTierDependency &&
+    !selectedQualityProbe &&
+    deferredQualityEntries.length === 0 &&
+    (graph.currentSourceTier === null || selectedTier > graph.currentSourceTier)
+  ) {
     const previousTier = graph.currentSourceTier;
     graph.currentSourceTier = selectedTier;
     events.push({
@@ -910,7 +1615,15 @@ export function deriveMutationProposal(
   proposalIndex: number,
 ): DerivedMutationProposal | null {
   const lane = sourceLaneById(parent.sourceLaneId);
-  if (!lane || parent.mutation || !Number.isInteger(proposalIndex) || proposalIndex < 0) return null;
+  if (
+    !lane ||
+    parent.mutation ||
+    parent.leadId != null ||
+    isKeybaseSpecialistEntry(parent) ||
+    !Number.isInteger(proposalIndex) ||
+    proposalIndex < 0
+  )
+    return null;
   const strategies = mutationStrategies(parent, target);
   if (strategies.length === 0) return null;
   const selector = deterministicSha256UnitSync(`${graph.runId}|${graph.seed}|${parent.id}|${proposalIndex}|strategy`);
@@ -970,7 +1683,7 @@ export async function proposeBoundedMutation(
   timestamp: string,
 ): Promise<SearchKernelResult<SearchFrontierEntry | null>> {
   let graph = cloneJson(graphValue);
-  if (parent.mutation || graph.telemetry.toolCalls < 1) {
+  if (parent.mutation || parent.leadId != null || isKeybaseSpecialistEntry(parent) || graph.telemetry.toolCalls < 1) {
     return { graph, value: null, events: [] };
   }
   const proposalIndex = graph.mutationStep;
@@ -1117,6 +1830,7 @@ const GRAPH_EDGE_ENDPOINTS: Readonly<Record<SearchGraphEdgeKind, ReadonlySet<str
     "action->source",
     "action->gap",
     "candidate->pivot",
+    "source->pivot",
   ]),
   mutates: new Set(["pivot->pivot", "pivot->action"]),
   supports: new Set(["source->evidence", "evidence->candidate", "candidate->finding"]),
@@ -1276,6 +1990,7 @@ function canonicalFrontierEntryShape(value: unknown): boolean {
     value.allowedTools.every(graphNonEmptyString) &&
     graphNonEmptyString(value.intent) &&
     graphNonEmptyString(value.queryHint) &&
+    (value.leadId === undefined || graphNonEmptyString(value.leadId)) &&
     graphNullableString(value.candidateId) &&
     graphNonNegativeInteger(value.depth) &&
     graphNonNegativeInteger(value.ordinal) &&
@@ -1461,6 +2176,12 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
   });
   const frontierIds = new Set<string>();
   const activeDedupe = new Set<string>();
+  let parsedGraphTarget: ParsedTarget | null = null;
+  try {
+    parsedGraphTarget = parseTarget(graph.seed);
+  } catch {
+    // The seed-shape checks below remain authoritative for malformed graphs.
+  }
   graph.frontier.forEach((entry, index) => {
     if (frontierIds.has(entry.id))
       issues.push({ code: "duplicate_frontier", path: `frontier[${index}].id`, message: entry.id });
@@ -1494,6 +2215,27 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         message: `${entry.sourceLaneId} does not match its tier, tool, or candidate scope`,
       });
     }
+    if (parsedGraphTarget && resolvedLane && entry.mutation === null && entry.allowedTools.includes("search_web")) {
+      const compiledQueries = compiledQueriesForLane(parsedGraphTarget, resolvedLane);
+      const canonicalQuery = compiledQueries.find(
+        (query) => normalizeWhitespace(query.query).slice(0, 320) === entry.queryHint,
+      );
+      const candidateIndependentCompilerSearch =
+        resolvedLane.requiresCandidate &&
+        entry.candidateId === null &&
+        entry.allowedTools.length === 1 &&
+        entry.allowedTools[0] === "search_web";
+      const declaresCompilerBinding = entry.intent.startsWith("OSINT query ") || Boolean(canonicalQuery);
+      if (candidateIndependentCompilerSearch || (compiledQueries.length > 0 && declaresCompilerBinding)) {
+        if (!canonicalQuery || entry.intent !== compilerQueryIntent(canonicalQuery, resolvedLane)) {
+          issues.push({
+            code: "compiler_query_binding_mismatch",
+            path: `frontier[${index}].queryHint`,
+            message: `${entry.sourceLaneId} is not bound to one canonical compiler query`,
+          });
+        }
+      }
+    }
     if (resolvedLane?.requiresExactCandidateUrl) {
       try {
         const url = new URL(entry.queryHint);
@@ -1505,6 +2247,23 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
           message: `${entry.sourceLaneId} requires an exact candidate-linked HTTPS URL`,
         });
       }
+    }
+    if (
+      entry.leadId !== undefined &&
+      (canonicalOpaqueLeadId(entry.leadId) === null ||
+        entry.queryHint !== entry.leadId ||
+        entry.candidateId === null ||
+        entry.mutation !== null ||
+        entry.allowedTools.length !== 1 ||
+        entry.allowedTools[0] !== "fetch_public_source" ||
+        resolvedLane?.requiresCandidate !== true ||
+        resolvedLane.requiresExactCandidateUrl)
+    ) {
+      issues.push({
+        code: "lead_frontier_binding_mismatch",
+        path: `frontier[${index}].leadId`,
+        message: `${entry.id} is not one canonical candidate-scoped lead fetch`,
+      });
     }
     if (
       entry.mutation !== null &&
@@ -1606,7 +2365,8 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       pivotNode.candidateId !== entry.candidateId ||
       pivotNode.status !== entry.status ||
       pivotNode.data.intent !== entry.intent ||
-      pivotNode.data.queryHint !== entry.queryHint
+      pivotNode.data.queryHint !== entry.queryHint ||
+      (pivotNode.data.leadId ?? null) !== (entry.leadId ?? null)
     ) {
       issues.push({
         code: "frontier_pivot_mismatch",
@@ -1808,6 +2568,19 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     });
   }
 
+  const candidatesExplicitlySeparated = (leftCandidateId: string, rightCandidateId: string): boolean => {
+    if (leftCandidateId === rightCandidateId) return false;
+    const leftNode = graph.nodes.find((node) => node.kind === "candidate" && node.candidateId === leftCandidateId);
+    const rightNode = graph.nodes.find((node) => node.kind === "candidate" && node.candidateId === rightCandidateId);
+    if (!leftNode || !rightNode) return false;
+    return graph.edges.some(
+      (edge) =>
+        edge.kind === "separates" &&
+        ((edge.fromNodeId === leftNode.id && edge.toNodeId === rightNode.id) ||
+          (edge.fromNodeId === rightNode.id && edge.toNodeId === leftNode.id)),
+    );
+  };
+
   graph.nodes.forEach((node, index) => {
     if (node.frontierEntryId === null && node.actionId === null) return;
     const entry = node.frontierEntryId ? frontierById.get(node.frontierEntryId) : undefined;
@@ -1826,7 +2599,12 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         message: `${node.id} disagrees with frontier ${entry.id}`,
       });
     }
-    if (entry.candidateId !== null && node.candidateId !== entry.candidateId) {
+    const quarantinedCandidateScope =
+      entry.candidateId !== null &&
+      node.candidateId !== null &&
+      (node.kind === "source" || node.kind === "evidence") &&
+      candidatesExplicitlySeparated(entry.candidateId, node.candidateId);
+    if (entry.candidateId !== null && node.candidateId !== entry.candidateId && !quarantinedCandidateScope) {
       issues.push({
         code: "node_candidate_scope_mismatch",
         path: `nodes[${index}].candidateId`,
@@ -1852,7 +2630,8 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
     if (
       actionNode?.candidateId !== null &&
       actionNode?.candidateId !== undefined &&
-      node.candidateId !== actionNode.candidateId
+      node.candidateId !== actionNode.candidateId &&
+      !(node.candidateId !== null && candidatesExplicitlySeparated(actionNode.candidateId, node.candidateId))
     ) {
       issues.push({
         code: "action_evidence_candidate_mismatch",
@@ -1906,11 +2685,18 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
         message: `${edge.id} joins action-bound endpoints without an action ID`,
       });
     }
+    const quarantinedCandidateEdge =
+      from.candidateId !== null &&
+      to.candidateId !== null &&
+      candidatesExplicitlySeparated(from.candidateId, to.candidateId) &&
+      from.kind === "action" &&
+      (to.kind === "candidate" || to.kind === "source");
     if (
       edge.kind !== "separates" &&
       from.candidateId !== null &&
       to.candidateId !== null &&
-      from.candidateId !== to.candidateId
+      from.candidateId !== to.candidateId &&
+      !quarantinedCandidateEdge
     ) {
       issues.push({
         code: "edge_candidate_scope_mismatch",
@@ -2019,7 +2805,19 @@ export function validateSearchGraph(graphValue: unknown): SearchGraphInvariantIs
       message: "one frontier batch cannot span source tiers",
     });
   }
-  if (selectedTiers.size === 1 && graph.currentSourceTier !== [...selectedTiers][0]) {
+  if (
+    selectedTiers.size === 1 &&
+    graph.currentSourceTier !== [...selectedTiers][0] &&
+    !graph.selectedFrontierEntryIds.every((id) => {
+      const entry = graph.frontier.find((item) => item.id === id);
+      return Boolean(
+        entry &&
+        (isClassifiedLeadDependency(graph, entry) ||
+          isExactCandidateUrlDependency(entry) ||
+          isGroundedKeybaseDependency(graph, entry)),
+      );
+    })
+  ) {
     issues.push({
       code: "current_source_tier_mismatch",
       path: "currentSourceTier",
@@ -2072,6 +2870,7 @@ function immutableFrontierFingerprint(entry: SearchFrontierEntry): string {
     allowedTools: entry.allowedTools,
     intent: entry.intent,
     queryHint: entry.queryHint,
+    leadId: entry.leadId ?? null,
     candidateId: entry.candidateId,
     depth: entry.depth,
     ordinal: entry.ordinal,

@@ -7,6 +7,7 @@ examples/
 node_modules/
 output/
 public/
+README.md
 tmp/
 package-lock.json
 *.tsbuildinfo

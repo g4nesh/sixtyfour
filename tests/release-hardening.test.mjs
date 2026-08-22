@@ -7,6 +7,7 @@ const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const vite = await createServer({
   root: projectRoot,
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -15,6 +16,10 @@ const vite = await createServer({
 const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 const agent = await vite.ssrLoadModule("/lib/agent/index.ts");
 const search = await vite.ssrLoadModule("/lib/search/index.ts");
+const reportExport = await vite.ssrLoadModule("/lib/report-export/index.ts");
+const { ReportSheet } = await vite.ssrLoadModule("/app/components/report-sheet.tsx");
+const React = await import("react");
+const { renderToStaticMarkup } = await import("react-dom/server");
 const { createLiveDependencies, establishedSourceForCandidate, gateExtractedCandidate, sourceAllowedForCandidate } =
   await vite.ssrLoadModule("/lib/live/orchestrator.ts");
 
@@ -22,7 +27,7 @@ after(async () => {
   await vite.close();
 });
 
-const PROVIDER_URL = "https://profile.example/chris?ref=provider&utm_source=search";
+const PROVIDER_URL = "https://www.linkedin.com/in/chris-anderson";
 const PUBLIC_IP = "93.184.216.34";
 
 function jsonResponse(value, init = {}) {
@@ -176,7 +181,10 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
               annotations: [
                 {
                   type: "url_citation",
-                  url_citation: { url: PROVIDER_URL, title: "Chris at TED" },
+                  url_citation: {
+                    url: PROVIDER_URL,
+                    title: `${"A".repeat(313)} ghp_${"G".repeat(36)}`,
+                  },
                 },
               ],
               id: "generation-search-annotation",
@@ -227,12 +235,25 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
         }
         throw new Error("unexpected provider request");
       }
-      if (url.hostname === "profile.example") {
+      if (url.hostname === "www.linkedin.com") {
         fetchedSourceUrls.push(url.href);
         return new Response(
           "<html><title>Chris at TED</title><p>Chris Anderson leads TED public programs.</p></html>",
           { headers: { "content-type": "text/html" } },
         );
+      }
+      if (url.hostname === "html.duckduckgo.com") {
+        return new Response("<html><body>No safe result links.</body></html>", {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (url.hostname === "www.google.com") {
+        return new Response("<html><body>No safe result links.</body></html>", {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (url.hostname === "api.github.com" && url.pathname === "/search/users") {
+        return jsonResponse({ total_count: 0, incomplete_results: false, items: [] });
       }
       throw new Error(`unexpected outbound host ${url.hostname}`);
     },
@@ -256,6 +277,11 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.equal(searchResult.evidence.length, 1);
   assert.equal(searchResult.evidence[0].disposition, "discovery_only");
   assert.equal(searchResult.evidence[0].sourceType, "search_result");
+  assert.equal(
+    searchResult.evidence[0].title,
+    "Public source at www.linkedin.com",
+    "provider titles must be policy-checked in full before display truncation",
+  );
   assert.deepEqual(searchAccounting.counts(), { reservations: 1, settlements: 1 });
   const leadId = searchResult.evidence[0].attributes.leadId;
   assert.equal(typeof leadId, "string");
@@ -280,11 +306,16 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
     {
       schemaVersion: domain.SCHEMA_VERSION,
       id: "action-variant",
+      frontierEntryId: "action-variant",
       tool: "fetch_public_source",
       purpose: "Try a rewritten query variant without the opaque lead.",
-      arguments: { url: "https://profile.example/chris?ref=rewritten" },
+      arguments: { url: "https://www.linkedin.com/in/chris-anderson?ref=rewritten" },
       candidateId: primary.id,
       budgetClass: "fetch",
+      sourceTier: 6,
+      sourceLaneId: "t6.candidate_public_source",
+      pathCost: 1,
+      mutated: false,
     },
     contextFor(engine, modelAccounting().value),
   );
@@ -295,11 +326,16 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
     {
       schemaVersion: domain.SCHEMA_VERSION,
       id: "action-cross-candidate",
+      frontierEntryId: "action-cross-candidate",
       tool: "fetch_public_source",
       purpose: "Try to reuse another candidate's discovery lead.",
       arguments: { leadId },
       candidateId: other.id,
       budgetClass: "fetch",
+      sourceTier: 6,
+      sourceLaneId: "t6.candidate_public_source",
+      pathCost: 1,
+      mutated: false,
     },
     contextFor(engine, modelAccounting().value),
   );
@@ -312,15 +348,20 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
     {
       schemaVersion: domain.SCHEMA_VERSION,
       id: "action-fetch",
+      frontierEntryId: "action-fetch",
       tool: "fetch_public_source",
       purpose: "Fetch the exact provider-authorized lead.",
       arguments: {
         leadId,
-        url: "https://profile.example/chris?ref=model-rewrite",
+        url: "https://www.linkedin.com/in/chris-anderson?ref=model-rewrite",
         claimFocus: "Public professional role",
       },
       candidateId: primary.id,
       budgetClass: "fetch",
+      sourceTier: 2,
+      sourceLaneId: "t2.structured_professional",
+      pathCost: 1,
+      mutated: false,
     },
     contextFor(engine, fetchAccounting.value),
   );
@@ -330,7 +371,7 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
   assert.equal(fetched.evidence[0].candidateId, primary.id);
   assert.equal(fetched.evidence[0].reliability, 0.55);
   assert.equal(fetched.evidence[0].spoofable, true);
-  assert.equal(fetched.evidence[0].sourceType, "public_document");
+  assert.equal(fetched.evidence[0].sourceType, "professional_profile");
   assert.equal(fetched.evidence[0].attributes.ownershipVerified, false);
   assert.ok(fetched.candidateSignals[0].signals.every((signal) => signal.assurance === "spoofable"));
   assert.deepEqual(fetchAccounting.counts(), { reservations: 1, settlements: 1 });
@@ -347,12 +388,21 @@ test("provider annotations authorize only their opaque candidate-scoped lead, wh
     },
     contextFor(engine, modelAccounting().value),
   );
-  assert.equal(contentOnly.status, "not_found");
+  assert.equal(contentOnly.status, "not_found", JSON.stringify(contentOnly));
   assert.equal(contentOnly.data.citationCount, 0);
   assert.deepEqual(contentOnly.evidence, []);
+  assert.equal(contentOnly.meta.requests, 2);
+  assert.equal(contentOnly.data.provider, "google:html_search");
+  assert.ok(contentOnly.diagnostics.some((item) => item.code === "search_provider_sources_not_observed"));
+  assert.ok(contentOnly.diagnostics.some((item) => item.code === "duckduckgo_results_not_observed"));
+  assert.ok(contentOnly.diagnostics.some((item) => item.code === "google_results_not_observed"));
+  assert.equal(
+    contentOnly.diagnostics.some((item) => item.code === "github_exact_name_not_observed"),
+    false,
+  );
 });
 
-test("extracted pages must name the candidate and satisfy every known organization constraint", () => {
+test("extracted pages must name the candidate and satisfy bounded organization, role, and location context", () => {
   const targetEngine = createEngine("Chris Anderson, TED", "candidate-gate-target");
   const targetCandidate = addCandidate(targetEngine, "Chris Anderson");
   const state = targetEngine.snapshot();
@@ -423,6 +473,96 @@ test("extracted pages must name the candidate and satisfy every known organizati
     allowed: false,
     reason: "organization_mismatch",
   });
+
+  const contextualEngine = createEngine(
+    "Michael Jordan, Professor, at UC Berkeley, in Berkeley California",
+    "candidate-gate-context",
+  );
+  const contextualCandidate = addCandidate(contextualEngine, "Michael Jordan");
+  const contextualState = contextualEngine.snapshot();
+  assert.deepEqual(contextualState.target.roleHints, ["Professor"]);
+  assert.deepEqual(
+    contextualState.target.organizationHints.map((item) => item.name),
+    ["UC Berkeley"],
+  );
+  assert.deepEqual(contextualState.target.locationHints, ["Berkeley California"]);
+  assert.deepEqual(
+    gateExtractedCandidate(
+      contextualState,
+      contextualCandidate.id,
+      "Michael Jordan",
+      null,
+      "https://berkeley.example/michael-jordan",
+      "Michael Jordan is an Associate Professor at UC Berkeley in Berkeley California.",
+    ),
+    { allowed: true, reason: "matched" },
+    "exact context near the named subject can bind a page without model-inferred fields",
+  );
+  assert.deepEqual(
+    gateExtractedCandidate(
+      contextualState,
+      contextualCandidate.id,
+      "Michael Jordan",
+      null,
+      "https://berkeley.example/michael-jordan",
+      "Michael Jordan is listed by UC Berkeley in Berkeley California.",
+    ),
+    { allowed: false, reason: "role_missing" },
+  );
+  assert.deepEqual(
+    gateExtractedCandidate(
+      contextualState,
+      contextualCandidate.id,
+      "Michael Jordan",
+      null,
+      "https://berkeley.example/michael-jordan",
+      "Michael Jordan is a Professor at UC Berkeley.",
+    ),
+    { allowed: false, reason: "location_missing" },
+  );
+  assert.deepEqual(
+    gateExtractedCandidate(
+      contextualState,
+      contextualCandidate.id,
+      "Michael Jordan",
+      null,
+      "https://berkeley.example/michael-jordan",
+      `Michael Jordan profile. ${"unrelated ".repeat(120)}Professor at UC Berkeley in Berkeley California.`,
+    ),
+    { allowed: false, reason: "organization_missing" },
+    "context elsewhere on a long page cannot bind an unrelated same-name section",
+  );
+
+  const organizationEngine = createEngine("Sixtyfour AI", "candidate-gate-organization");
+  const organizationCandidate = addCandidate(organizationEngine, "Sixtyfour AI");
+  assert.deepEqual(
+    gateExtractedCandidate(
+      organizationEngine.snapshot(),
+      organizationCandidate.id,
+      null,
+      "Sixtyfour AI",
+      "https://sixtyfour.ai/about",
+    ),
+    { allowed: true, reason: "matched" },
+    "an exact organization target can bind an organization-only extraction without inventing a person",
+  );
+
+  for (const [index, [query, sourceUrl]] of [
+    ["example.org", "https://research.example.org/about"],
+    ["https://github.com/langchain-ai/langgraphjs", "https://github.com/langchain-ai/langgraphjs"],
+    ["DOI: 10.1145/1234.5678", "https://doi.org/10.1145/1234.5678"],
+    ["ORCID: 0000-0002-1825-0097", "https://orcid.org/0000-0002-1825-0097"],
+    ["npm:react", "https://www.npmjs.com/package/react"],
+    ["github:torvalds", "https://github.com/torvalds"],
+  ].entries()) {
+    const identifierEngine = createEngine(query, `candidate-gate-identifier-${index}`);
+    const identifierCandidate = addCandidate(identifierEngine, query);
+    assert.deepEqual(
+      gateExtractedCandidate(identifierEngine.snapshot(), identifierCandidate.id, null, null, sourceUrl),
+      { allowed: true, reason: "matched" },
+      query,
+    );
+  }
 
   const nameOnlyEngine = createEngine("Chris Anderson public professional background", "candidate-gate-name-only");
   const unbound = addCandidate(nameOnlyEngine, "Chris Anderson");
@@ -1193,6 +1333,8 @@ test("shared safety concepts block ordinary paraphrases at intake, action, outpu
     "Research an under-18 founder",
     "Research a grade-schooler",
     "Research a secondary school pupil",
+    "Alex Kim attends Central High School",
+    "Alex Kim student at Central Middle School",
     "Find Alex Kim mailing address",
     "Where does Alex Kim stay at night?",
     "Get Alex Kim mobile",
@@ -1646,6 +1788,8 @@ test("sensitive content is rejected at both evidence and finding admission bound
     ["attributes", { nested: { ｐｈｏｎｅ: "６０２－５５５－０１９９" } }],
     ["canonicalSubset", { nested: { ｈｏｍｅａｄｄｒｅｓｓ: "１２３ Main St" } }],
     ["attributes", { nested: { address: "123 Main Street, Phoenix, AZ 85001" } }],
+    ["canonicalSubset", { nested: { buildToken: `sk-proj-${"z".repeat(48)}` } }],
+    ["attributes", { nested: { registryToken: `npm_${"q".repeat(48)}` } }],
   ]) {
     const nested = domain.admitEvidence(
       {
@@ -1751,11 +1895,16 @@ test("cancellation during model extraction returns canceled and admits no fetche
     {
       schemaVersion: domain.SCHEMA_VERSION,
       id: "action-cancel-extraction",
+      frontierEntryId: "action-cancel-extraction",
       tool: "fetch_public_source",
       purpose: "Extract one public professional fact.",
       arguments: { url: sourceUrl },
       candidateId: candidate.id,
       budgetClass: "fetch",
+      sourceTier: 6,
+      sourceLaneId: "t6.candidate_public_source",
+      pathCost: 1,
+      mutated: false,
     },
     contextFor(engine, accounting.value, controller.signal),
   );
@@ -1767,6 +1916,267 @@ test("cancellation during model extraction returns canceled and admits no fetche
   assert.equal(result.evidence, undefined);
   assert.ok(result.diagnostics.some((item) => item.code === "evidence_extraction_canceled"));
   assert.deepEqual(accounting.counts(), { reservations: 1, settlements: 1 });
+});
+
+test("successful authorized HTML metadata survives extraction provider 503 without evidence authority", async () => {
+  const engine = createEngine("Chris Anderson public professional background", "metadata-extraction-503");
+  const sourceUrl = "https://profile.example/chris";
+  const candidate = addCandidate(engine, "Chris Anderson", [
+    {
+      kind: "profile_url",
+      value: sourceUrl,
+      normalizedValue: sourceUrl,
+      strength: "strong",
+      assurance: "self_asserted",
+    },
+  ]);
+  const candidateBefore = engine.snapshot().candidates.find((item) => item.id === candidate.id);
+  let providerRequests = 0;
+  const dependencies = createLiveDependencies(engine.snapshot().input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => [PUBLIC_IP],
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      if (url.href === sourceUrl) {
+        return new Response(
+          `<html lang="en"><head><title>Chris Anderson — Public programs</title><meta name="description" content="Public programs and talks"><link rel="canonical" href="${sourceUrl}"><meta property="og:type" content="profile"><meta name="generator" content="Next.js"><script src="https://cdn.jsdelivr.net/npm/example.js"></script></head><body><p>UNSAFE_RAW_PAYLOAD_SENTINEL</p></body></html>`,
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.hostname === "openrouter.ai") {
+        providerRequests += 1;
+        return jsonResponse(
+          { error: { message: "temporary extraction outage" } },
+          {
+            status: 503,
+            headers: { "retry-after": "0" },
+          },
+        );
+      }
+      throw new Error(`unexpected outbound host ${url.hostname}`);
+    },
+  });
+
+  const result = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-metadata-extraction-503",
+      frontierEntryId: "action-metadata-extraction-503",
+      tool: "fetch_public_source",
+      purpose: "Extract one public professional fact.",
+      arguments: { url: sourceUrl },
+      candidateId: candidate.id,
+      budgetClass: "fetch",
+      sourceTier: 6,
+      sourceLaneId: "t6.candidate_public_source",
+      pathCost: 1,
+      mutated: false,
+    },
+    contextFor(engine, modelAccounting().value),
+  );
+
+  assert.equal(result.status, "partial");
+  assert.ok(providerRequests >= 1);
+  assert.ok(result.diagnostics.some((item) => item.code === "evidence_extraction_invalid"));
+  assert.equal(result.candidates, undefined);
+  assert.equal(result.candidateBranches, undefined);
+  assert.equal(result.candidateSignals, undefined);
+  assert.equal(result.evidence.length, 1);
+
+  const observationDraft = result.evidence[0];
+  assert.equal(observationDraft.candidateId, candidate.id);
+  assert.equal(observationDraft.disposition, "discovery_only");
+  assert.equal(observationDraft.verificationMethod, "unverified");
+  assert.equal(observationDraft.sourceType, "other");
+  assert.equal(observationDraft.sourceUrl, sourceUrl);
+  assert.equal(observationDraft.title, "Chris Anderson — Public programs");
+  assert.equal(observationDraft.excerpt, undefined);
+  assert.equal(observationDraft.attributes.metadataObservation, true);
+  assert.equal(observationDraft.attributes.findingAuthority, false);
+  assert.equal(observationDraft.attributes.identityBinding, false);
+  assert.equal(observationDraft.attributes.ownershipVerified, false);
+  assert.equal(observationDraft.canonicalSubset.pageFootprint.schemaVersion, "public_page_footprint_v1");
+  assert.match(observationDraft.canonicalSubset.pageFootprintHash, /^sha256:[a-f0-9]{64}$/);
+  assert.deepEqual(observationDraft.canonicalSubset.pageFootprint.declaredApplications.generators, ["Next.js"]);
+  assert.deepEqual(observationDraft.canonicalSubset.pageFootprint.observedProviderFamilies, ["jsdelivr"]);
+  assert.equal(JSON.stringify(result).includes("UNSAFE_RAW_PAYLOAD_SENTINEL"), false);
+  assert.equal(JSON.stringify(result).includes("normalizedText"), false);
+
+  const promotedObservation = engine.admitEvidence({
+    ...observationDraft,
+    disposition: "supports",
+  });
+  assert.deepEqual(
+    { admitted: promotedObservation.admitted, reason: promotedObservation.reason },
+    { admitted: false, reason: "discovery_only_source" },
+    "metadata observations must fail closed if a tool attempts to promote them",
+  );
+  const admission = engine.admitEvidence(observationDraft);
+  assert.equal(admission.admitted, true);
+  assert.equal(admission.evidence.disposition, "discovery_only");
+  const candidateAfter = engine.snapshot().candidates.find((item) => item.id === candidate.id);
+  assert.equal(engine.snapshot().candidates.length, 1, "metadata cannot create or merge candidates");
+  assert.deepEqual(candidateAfter.score, candidateBefore.score, "metadata cannot affect candidate confidence");
+  assert.deepEqual(candidateAfter.signals, candidateBefore.signals, "metadata cannot create identity signals");
+  assert.throws(
+    () =>
+      engine.addFinding({
+        candidateId: candidate.id,
+        title: "Unsupported identity claim",
+        description: "This must not materialize.",
+        category: "identity",
+        evidenceIds: [admission.evidence.id],
+      }),
+    /discovery-only evidence/,
+  );
+
+  engine.stopExternal("fatal_error", "Extraction provider remained unavailable.");
+  const report = engine.report();
+  const retained = report.evidence.find((item) => item.id === admission.evidence.id);
+  assert.ok(retained, "the terminal report must retain the metadata observation");
+  assert.equal(retained.disposition, "discovery_only");
+  assert.equal(retained.canonicalSubset.pageFootprintHash, observationDraft.canonicalSubset.pageFootprintHash);
+  assert.deepEqual(retained.canonicalSubset.pageFootprint, observationDraft.canonicalSubset.pageFootprint);
+  assert.equal(report.telemetry.evidence.supporting, 0);
+  assert.equal(report.telemetry.evidence.discoveryOnly, 1);
+  assert.equal(report.findings.length, 0);
+  assert.equal(JSON.stringify(report).includes("UNSAFE_RAW_PAYLOAD_SENTINEL"), false);
+});
+
+test("exact T0 URL retains extractor-503 page metadata through runner and every report projection", async () => {
+  const sourceUrl = "https://public.example/profile";
+  const input = {
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: sourceUrl,
+    requestedDepth: "quick",
+  };
+  let sourceRequests = 0;
+  let extractionProviderRequests = 0;
+  const live = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => [PUBLIC_IP],
+    fetch: async (request) => {
+      const url = new URL(String(request));
+      if (url.href === sourceUrl) {
+        sourceRequests += 1;
+        return new Response(
+          `<html lang="en"><head><title>Public project profile</title><meta name="description" content="Public technical projects"><link rel="canonical" href="${sourceUrl}"><meta property="og:type" content="profile"><meta property="og:site_name" content="Public Example"><meta name="generator" content="Next.js"><script src="https://cdn.jsdelivr.net/npm/example.js"></script></head><body><p>T0_RAW_EXTRACTION_SENTINEL</p></body></html>`,
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url.hostname === "openrouter.ai") {
+        extractionProviderRequests += 1;
+        return jsonResponse(
+          { error: { message: "temporary extraction outage" } },
+          {
+            status: 503,
+            headers: { "retry-after": "0" },
+          },
+        );
+      }
+      throw new Error(`unexpected outbound host ${url.hostname}`);
+    },
+  });
+
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      clock: domain.createSequenceClock("2026-08-20T21:46:00.000Z", 1),
+      ids: domain.createDeterministicIdFactory("exact-t0-metadata-503"),
+      planner: async ({ selectedFrontierEntries }) => ({
+        kind: "actions",
+        decisionSummary: "Fetch only the exact supplied public URL.",
+        actions: selectedFrontierEntries.map((entry) => ({
+          frontierEntryId: entry.id,
+          tool: "fetch_public_source",
+          purpose: "Inspect passive public page metadata at the exact supplied URL.",
+          arguments: { url: sourceUrl, claimFocus: "Public professional project metadata" },
+        })),
+      }),
+      executeAction: live.executeAction,
+      synthesize: async () => ({
+        decisionSummary: "Retain passive metadata only; no finding is authorized.",
+        findings: [],
+        openQuestions: [],
+      }),
+    },
+    { availableTools: ["fetch_public_source"] },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.equal(sourceRequests, 1);
+  assert.ok(extractionProviderRequests >= 1);
+  assert.equal(completed.report.candidates.length, 1);
+  const querySubject = completed.report.candidates[0];
+  assert.equal(querySubject.displayName, "Exact public URL (public.example)");
+  assert.equal(querySubject.signals.length, 1);
+  assert.equal(querySubject.signals[0].kind, "profile_url");
+  assert.equal(querySubject.signals[0].value, sourceUrl);
+  assert.equal(querySubject.signals[0].assurance, "self_asserted");
+  assert.equal(querySubject.score.total < 0.38, true);
+  assert.equal(
+    completed.report.searchGraph.frontier.some((entry) => entry.candidateId === querySubject.id),
+    false,
+    "the URL query subject must not open person/candidate research lanes",
+  );
+
+  assert.equal(completed.report.evidence.length, 1);
+  const observation = completed.report.evidence[0];
+  assert.equal(observation.candidateId, querySubject.id);
+  assert.equal(observation.disposition, "discovery_only");
+  assert.equal(observation.verificationMethod, "unverified");
+  assert.equal(observation.attributes.metadataObservation, true);
+  assert.equal(observation.attributes.identityBinding, false);
+  assert.equal(observation.attributes.ownershipVerified, false);
+  assert.match(observation.canonicalSubset.pageFootprintHash, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(completed.report.telemetry.evidence.supporting, 0);
+  assert.equal(completed.report.findings.length, 0);
+  assert.equal(JSON.stringify(completed.report).includes("T0_RAW_EXTRACTION_SENTINEL"), false);
+
+  const viewModel = reportExport.createReportViewModel(completed.report);
+  const projected = viewModel.evidence.find((item) => item.id === observation.id);
+  assert.ok(projected?.pageFootprint);
+  assert.equal(projected.contentLabel, "Passive page metadata observation");
+  assert.equal(projected.pageFootprint.title, "Public project profile");
+  assert.equal(projected.pageFootprint.canonicalUrl, sourceUrl);
+  assert.match(projected.pageFootprint.footprintHash, /^sha256:[a-f0-9]{64}$/);
+
+  const markdown = reportExport.reportViewModelToMarkdown(viewModel);
+  assert.match(markdown, /Passive page metadata observation/);
+  assert.match(markdown, /#### Page-declared footprint/);
+  assert.match(markdown, /Public project profile/);
+  assert.match(markdown, new RegExp(projected.pageFootprint.footprintHash));
+
+  const reportHtml = renderToStaticMarkup(
+    React.createElement(ReportSheet, {
+      report: completed.report,
+      trace: completed.trace.events,
+      open: true,
+      onClose: () => {},
+    }),
+  );
+  assert.match(reportHtml, /Passive page metadata observation/);
+  assert.match(reportHtml, /Page-declared footprint/);
+  assert.match(reportHtml, /Public project profile/);
+  assert.match(reportHtml, new RegExp(projected.pageFootprint.footprintHash));
+
+  const ordinaryDiscovery = structuredClone(completed.report);
+  ordinaryDiscovery.evidence[0].attributes = {
+    provider: "test:web_search",
+    leadId: "ordinary-discovery-lead",
+  };
+  ordinaryDiscovery.evidence[0].verificationMethod = "search_discovery";
+  ordinaryDiscovery.evidence[0].sourceType = "search_result";
+  assert.equal(
+    reportExport.createReportViewModel(ordinaryDiscovery).evidence[0].pageFootprint,
+    null,
+    "ordinary discovery leads must never export an attached footprint object",
+  );
 });
 
 test("Wayback refuses discovery-only and self-asserted candidate links without network work", async () => {
@@ -1823,6 +2233,6 @@ test("Wayback refuses discovery-only and self-asserted candidate links without n
   );
 
   assert.equal(result.status, "skipped");
-  assert.equal(result.diagnostics[0].code, "established_candidate_link_required");
+  assert.equal(result.diagnostics[0].code, "admitted_candidate_link_required");
   assert.equal(networkCalls, 0);
 });

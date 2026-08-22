@@ -4,6 +4,7 @@ import { createServer } from "vite";
 
 const vite = await createServer({
   configFile: false,
+  cacheDir: `node_modules/.vite-atlas-ssr/${process.pid}`,
   appType: "custom",
   logLevel: "silent",
   server: { middlewareMode: true },
@@ -11,7 +12,13 @@ const vite = await createServer({
 after(async () => vite.close());
 
 const { investigateGithubEmailCodegraph } = await vite.ssrLoadModule("/lib/tools/github-codegraph.ts");
+const { searchDuckDuckGoHtml, unwrapDuckDuckGoResultUrl } = await vite.ssrLoadModule("/lib/tools/duckduckgo-search.ts");
+const { searchGoogleHtml, unwrapGoogleResultUrl } = await vite.ssrLoadModule("/lib/tools/google-search.ts");
+const { searchGithubPublicUsersByExactName } = await vite.ssrLoadModule("/lib/tools/github-user-search.ts");
 const { lookupKeybaseGithub } = await vite.ssrLoadModule("/lib/tools/keybase.ts");
+const { extractSameOriginProfessionalLinks } = await vite.ssrLoadModule("/lib/tools/professional-links.ts");
+const { searchSemanticScholarAuthorsByExactName } = await vite.ssrLoadModule("/lib/tools/semantic-scholar-search.ts");
+const { searchCrossrefWorksByExactAuthor } = await vite.ssrLoadModule("/lib/tools/crossref-search.ts");
 const { inspectWaybackHistory } = await vite.ssrLoadModule("/lib/tools/wayback.ts");
 
 const jsonResponse = (body, init = {}) =>
@@ -37,6 +44,414 @@ function commitItem({ sha, email, login, accountId, repo, verified = false, comm
     repository: { full_name: repo, html_url: `https://github.com/${repo}` },
   };
 }
+
+test("DuckDuckGo HTML fallback retains only bounded safe titles and unwrapped HTTPS targets", async () => {
+  const html = `<!doctype html><html><body>
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fprofile.example%2Fganesh%3Fview%3Dpublic&amp;rut=opaque"><b>Ganesh Talluri</b> — Profile</a>
+    <a class="result__a extra" href="https://github.com/g4nesh#readme">Ganesh Talluri · GitHub</a>
+    <a class="result__a" href="https://github.com/g4nesh">Duplicate GitHub result</a>
+    <a class="result__a" href="http://insecure.example/person">Insecure result</a>
+    <a class="result__a" href="https://user:password@example.com/person">Credential result</a>
+    <a class="result__a" href="https://example.com/person?access_token=secret">Secret query result</a>
+    <a class="result__a" href="https://duckduckgo.com/settings">DuckDuckGo internal result</a>
+    <a class="result__a" href="https://www.whitepages.com/name/example">Denied people-finder result</a>
+    <div class="result__snippet">Private-looking snippet 602-555-0100 must never survive.</div>
+  </body></html>`;
+  const requests = [];
+  const result = await searchDuckDuckGoHtml("Ganesh Talluri public professional profile", {
+    resolveHostname: async (hostname) => {
+      assert.equal(hostname, "html.duckduckgo.com");
+      return ["52.149.246.39"];
+    },
+    fetch: async (input, init) => {
+      const url = new URL(String(input));
+      requests.push(url.href);
+      assert.equal(url.origin, "https://html.duckduckgo.com");
+      assert.equal(url.pathname, "/html/");
+      assert.equal(url.searchParams.get("q"), "Ganesh Talluri public professional profile");
+      assert.match(new Headers(init?.headers).get("user-agent"), /atlas-people-intelligence/);
+      return new Response(html, { headers: { "content-type": "text/html; charset=UTF-8" } });
+    },
+  });
+
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.data.results, [
+    { title: "Ganesh Talluri — Profile", url: "https://profile.example/ganesh?view=public" },
+    { title: "Ganesh Talluri · GitHub", url: "https://github.com/g4nesh" },
+  ]);
+  assert.equal(result.data.observedResultAnchors, 8);
+  assert.equal(result.data.excludedResultAnchors, 6);
+  assert.equal(result.meta.requests, 1);
+  assert.ok(result.meta.bytesRead > 0);
+  assert.equal(requests.length, 1);
+  assert.equal(JSON.stringify(result).includes("602-555-0100"), false, "result snippets never leave the adapter");
+  assert.ok(result.diagnostics.some((item) => item.code === "duckduckgo_result_rows_excluded"));
+});
+
+test("DuckDuckGo decodes and validates complete titles before bounding them", async () => {
+  const safeUrl = (id) => `https://profile.example/result-${id}`;
+  const anchors = [
+    `<a class="result__a" href="${safeUrl(0)}">&Eacute;lodie&rsquo;s R&eacute;sum&eacute; &mdash; Research &copy;</a>`,
+    `<a class="result__a" href="${safeUrl(1)}">${"A".repeat(315)} ghp&lowbar;${"B".repeat(36)}</a>`,
+    `<a class="result__a" href="${safeUrl(2)}">ghp&#x5f${"G".repeat(36)}</a>`,
+    `<a class="result__a" href="${safeUrl(3)}">ghp&amp;#x5f;${"H".repeat(36)}</a>`,
+    `<a class="result__a" href="${safeUrl(4)}">private&commat;example.com</a>`,
+    `<a class="result__a" href="${safeUrl(5)}">ghp_\u200b${"I".repeat(36)}</a>`,
+    `<a class="result__a" href="${safeUrl(6)}">Unresolved &madeup; title</a>`,
+  ];
+  const result = await searchDuckDuckGoHtml("public professional profile", {
+    resolveHostname: async () => ["52.149.246.39"],
+    fetch: async () =>
+      new Response(anchors.join("\n"), {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+  });
+
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.data.results, [
+    {
+      title: "Élodie’s Résumé — Research ©",
+      url: safeUrl(0),
+    },
+  ]);
+  assert.equal(result.data.observedResultAnchors, 7);
+  assert.equal(result.data.excludedResultAnchors, 6);
+  const serialized = JSON.stringify(result.data);
+  assert.equal(serialized.includes("ghp_"), false);
+  assert.equal(serialized.includes("private@example.com"), false);
+  assert.equal(serialized.includes("madeup"), false);
+});
+
+test("DuckDuckGo HTML fallback fails closed without DNS validation and rejects unsafe queries", async () => {
+  let fetchCalls = 0;
+  const noDns = await searchDuckDuckGoHtml("public project repository", {
+    fetch: async () => {
+      fetchCalls += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  assert.equal(noDns.status, "skipped");
+  assert.equal(noDns.diagnostics[0].code, "dns_validation_unavailable");
+
+  const unsafe = await searchDuckDuckGoHtml("find this person's private phone number", {
+    resolveHostname: async () => ["52.149.246.39"],
+    fetch: async () => {
+      fetchCalls += 1;
+      throw new Error("must not fetch");
+    },
+  });
+  assert.equal(unsafe.status, "skipped");
+  assert.equal(unsafe.diagnostics[0].code, "unsafe_public_search_query");
+  assert.equal(fetchCalls, 0);
+});
+
+test("DuckDuckGo result unwrapping rejects malformed wrappers and internal targets", () => {
+  assert.equal(
+    unwrapDuckDuckGoResultUrl("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fperson&amp;rut=opaque"),
+    "https://example.com/person",
+  );
+  assert.equal(unwrapDuckDuckGoResultUrl("//duckduckgo.com/l/?rut=missing-target"), null);
+  assert.equal(unwrapDuckDuckGoResultUrl("//duckduckgo.com/l/?uddg=https%3A%2F%2Fduckduckgo.com%2Fabout"), null);
+  assert.equal(unwrapDuckDuckGoResultUrl("//duckduckgo.com/l/?uddg=http%3A%2F%2Fexample.com"), null);
+  assert.equal(unwrapDuckDuckGoResultUrl("https://127.0.0.1/private"), null);
+  assert.equal(unwrapDuckDuckGoResultUrl("https://example.com/profile?email=person%40example.com"), null);
+});
+
+test("Google HTML fallback parses only active anchors and never reinterprets quoted or inactive markup", async () => {
+  const html = `<!doctype html><html><head>
+    <title><a href="https://forged-title.example/person"><h3>Forged title anchor</h3></a></title>
+    <script>const forged = '<a href="https://forged-script.example/person"><h3>Forged script anchor</h3></a>';</script>
+    <template><a href="https://forged-template.example/person"><h3>Forged template anchor</h3></a></template>
+  </head><body>
+    <!-- <a href="https://forged-comment.example/person"><h3>Forged comment anchor</h3></a> -->
+    <div data-copy='<a href="https://forged-attribute.example/person"><h3>Forged attribute anchor</h3></a>'>Safe wrapper</div>
+    <a href="https://www.linkedin.com/in/denise-hilary#about"><h3>Denise Hilary | LinkedIn</h3></a>
+    <a href="/url?q=https%3A%2F%2Fwww.instagram.com%2Fdenise.hilary%2F"><h3>Denise Hilary (@denise.hilary)</h3></a>
+    <a href="https://user:password@example.com/person"><h3>Credential target</h3></a>
+    <a href="https://www.google.com/preferences"><h3>Google internal</h3></a>
+    <a href="https://www.whitepages.com/name/denise"><h3>Denied broker</h3></a>
+  </body></html>`;
+  let requests = 0;
+  const result = await searchGoogleHtml('"Denise Hilary" site:linkedin.com', {
+    resolveHostname: async (hostname) => {
+      assert.equal(hostname, "www.google.com");
+      return ["142.250.72.36"];
+    },
+    fetch: async (input, init) => {
+      requests += 1;
+      const url = new URL(String(input));
+      assert.equal(url.origin, "https://www.google.com");
+      assert.equal(url.pathname, "/search");
+      assert.equal(url.searchParams.get("q"), '"Denise Hilary" site:linkedin.com');
+      assert.equal(url.searchParams.get("safe"), "active");
+      assert.equal(new Headers(init?.headers).has("authorization"), false);
+      return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
+    },
+  });
+
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.data.results, [
+    { title: "Denise Hilary | LinkedIn", url: "https://www.linkedin.com/in/denise-hilary" },
+    { title: "Denise Hilary (@denise.hilary)", url: "https://www.instagram.com/denise.hilary/" },
+  ]);
+  assert.equal(requests, 1);
+  const serialized = JSON.stringify(result);
+  for (const marker of ["forged-title", "forged-script", "forged-template", "forged-comment", "forged-attribute"])
+    assert.equal(serialized.includes(marker), false, marker);
+});
+
+test("Google HTML fallback stops at a consent or automation challenge without bypassing it", async () => {
+  let requests = 0;
+  const result = await searchGoogleHtml('"Denise Hilary"', {
+    resolveHostname: async () => ["142.250.72.36"],
+    fetch: async () => {
+      requests += 1;
+      return new Response('<html><form action="/sorry/"><p>Unusual traffic from your network</p></form></html>', {
+        headers: { "content-type": "text/html" },
+      });
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.data, null);
+  assert.equal(requests, 1);
+  assert.ok(result.diagnostics.some((item) => item.code === "google_html_challenge_observed"));
+});
+
+test("Google result unwrapping accepts exact wrappers and rejects internal or unsafe targets", () => {
+  assert.equal(unwrapGoogleResultUrl("/url?q=https%3A%2F%2Fexample.com%2Fperson"), "https://example.com/person");
+  assert.equal(unwrapGoogleResultUrl("/url?q=https%3A%2F%2Fexample.com&amp;url=https%3A%2F%2Fother.example"), null);
+  assert.equal(unwrapGoogleResultUrl("https://www.google.com/preferences"), null);
+  assert.equal(unwrapGoogleResultUrl("https://127.0.0.1/private"), null);
+  assert.equal(unwrapGoogleResultUrl("https://example.com/profile?access_token=secret"), null);
+});
+
+test("Semantic Scholar official author search retains only exact public names and canonical profiles", async () => {
+  let requests = 0;
+  const result = await searchSemanticScholarAuthorsByExactName("Denise Hilary", {
+    resolveHostname: async (hostname) => {
+      assert.equal(hostname, "api.semanticscholar.org");
+      return ["18.238.192.30"];
+    },
+    fetch: async (input, init) => {
+      requests += 1;
+      const url = new URL(String(input));
+      assert.equal(url.pathname, "/graph/v1/author/search");
+      assert.equal(url.searchParams.get("query"), "Denise Hilary");
+      assert.equal(url.searchParams.get("limit"), "3");
+      assert.equal(url.searchParams.get("fields"), "name");
+      assert.equal(new Headers(init?.headers).has("x-api-key"), false);
+      return jsonResponse({
+        total: 8,
+        data: [
+          { authorId: "123456", name: "Denise Hilary" },
+          { authorId: "789", name: "Denise Hiliary" },
+          { authorId: "not-numeric", name: "Denise Hilary" },
+        ],
+      });
+    },
+  });
+
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.data.matches, [
+    {
+      authorId: "123456",
+      name: "Denise Hilary",
+      profileUrl: "https://www.semanticscholar.org/author/123456",
+    },
+  ]);
+  assert.equal(result.evidence.length, 0, "structured API rows remain discovery metadata");
+  assert.equal(result.meta.requests, 1);
+  assert.equal(requests, 1);
+  assert.ok(result.diagnostics.some((item) => item.code === "semantic_scholar_rows_excluded"));
+});
+
+test("Crossref public REST search requires an exact structured author and safe DOI/title", async () => {
+  let requests = 0;
+  const result = await searchCrossrefWorksByExactAuthor("Denise Hilary", {
+    resolveHostname: async (hostname) => {
+      assert.equal(hostname, "api.crossref.org");
+      return ["18.214.186.33"];
+    },
+    fetch: async (input, init) => {
+      requests += 1;
+      const url = new URL(String(input));
+      assert.equal(url.pathname, "/works");
+      assert.equal(url.searchParams.get("query.author"), "Denise Hilary");
+      assert.equal(url.searchParams.get("rows"), "3");
+      assert.equal(url.searchParams.get("select"), "DOI,title,author");
+      assert.equal(new Headers(init?.headers).has("authorization"), false);
+      return jsonResponse({
+        message: {
+          "total-results": 25,
+          items: [
+            {
+              DOI: "10.5555/602-555-0199",
+              title: ["Phone-Like DOI Metadata"],
+              author: [{ name: "Denise Hilary" }],
+            },
+            {
+              DOI: "10.5555/Atlas.2026.1",
+              title: ["Bounded Public Research"],
+              author: [{ given: "Denise", family: "Hilary" }],
+            },
+            {
+              DOI: "10.5555/wrong-author",
+              title: ["Another Work"],
+              author: [{ given: "Denise", family: "Hiliary" }],
+            },
+          ],
+        },
+      });
+    },
+  });
+
+  assert.equal(result.status, "partial");
+  assert.deepEqual(result.data.matches, [
+    {
+      doi: "10.5555/Atlas.2026.1",
+      title: "Bounded Public Research",
+      recordUrl: "https://api.crossref.org/works/10.5555%2FAtlas.2026.1",
+      attestedAuthorName: "Denise Hilary",
+    },
+  ]);
+  assert.equal(result.evidence.length, 0, "Crossref metadata is a lead, not a direct claim");
+  assert.equal(result.meta.requests, 1);
+  assert.equal(requests, 1);
+  assert.equal(
+    JSON.stringify(result).includes("602-555-0199"),
+    false,
+    "a phone-like DOI/API URL is excluded at the structured transport boundary",
+  );
+  assert.ok(result.diagnostics.some((item) => item.code === "crossref_rows_excluded"));
+});
+
+test("same-origin professional link extraction is inert, bounded, and excludes auth, files, queries, and other origins", () => {
+  const html = `<!doctype html><html><head>
+    <script>const forged = '<a href="/people/denise-hilary">Forged script profile</a>';</script>
+    <template><a href="/publications">Forged template publications</a></template>
+  </head><body>
+    <div data-copy='<a href="/research">Forged quoted-attribute link</a>'>Safe wrapper</div>
+    <a href="/team/other">Team</a>
+    <a href="/people/denise-hilary#bio">Denise Hilary</a>
+    <a href="https://profile.example/publications">Publications</a>
+    <a href="/about?email=person@example.com">Unsafe query</a>
+    <a href="/login">Login</a>
+    <a href="/research/paper.pdf">Paper</a>
+    <a href="https://instagram.com/denise.hilary">Cross-origin social</a>
+    <a href="/contact">Contact</a>
+  </body></html>`;
+  const links = extractSameOriginProfessionalLinks({
+    html,
+    finalUrl: "https://profile.example/",
+    subjectName: "Denise Hilary",
+    maxLinks: 3,
+  });
+  assert.deepEqual(links, [
+    {
+      url: "https://profile.example/people/denise-hilary",
+      label: "Denise Hilary",
+      reason: "subject_slug",
+    },
+    { url: "https://profile.example/team/other", label: "Team", reason: "professional_path" },
+    {
+      url: "https://profile.example/publications",
+      label: "Publications",
+      reason: "professional_path",
+    },
+  ]);
+  assert.equal(JSON.stringify(links).includes("Forged"), false);
+});
+
+test("GitHub public-user fallback admits only exact names from bounded canonical detail records", async () => {
+  const calls = [];
+  const result = await searchGithubPublicUsersByExactName("Ganesh Talluri", {
+    resolveHostname: async (hostname) => {
+      assert.equal(hostname, "api.github.com");
+      return ["140.82.112.5"];
+    },
+    fetch: async (input) => {
+      const url = new URL(String(input));
+      calls.push(url.href);
+      if (url.pathname === "/search/users") {
+        assert.equal(url.searchParams.get("q"), "Ganesh Talluri in:fullname");
+        assert.equal(url.searchParams.get("per_page"), "3");
+        return jsonResponse({
+          total_count: 2,
+          incomplete_results: false,
+          items: [
+            { login: "g4nesh", type: "User", url: "https://api.github.com/users/g4nesh" },
+            { login: "ganesh-org", type: "Organization", url: "https://api.github.com/users/ganesh-org" },
+          ],
+        });
+      }
+      assert.equal(url.href, "https://api.github.com/users/g4nesh");
+      return jsonResponse({
+        login: "g4nesh",
+        name: "Ganesh Talluri",
+        type: "User",
+        html_url: "https://github.com/g4nesh",
+        email: "must-not-be-retained@example.com",
+        location: "must not be retained",
+      });
+    },
+  });
+
+  assert.equal(result.status, "succeeded");
+  assert.deepEqual(result.data.matches, [
+    {
+      login: "g4nesh",
+      name: "Ganesh Talluri",
+      htmlUrl: "https://github.com/g4nesh",
+    },
+  ]);
+  assert.equal(result.meta.requests, 2);
+  assert.equal(result.evidence.length, 0, "API search/detail rows are discovery metadata, not evidence excerpts");
+  assert.equal(JSON.stringify(result).includes("must-not-be-retained"), false);
+  assert.equal(calls.length, 2);
+});
+
+test("GitHub public-user fallback honestly returns no match and ignores unsafe profile/detail URLs", async () => {
+  let unsafeFetchAttempted = false;
+  const result = await searchGithubPublicUsersByExactName("Ganesh Talluri", {
+    resolveHostname: async () => ["140.82.112.5"],
+    fetch: async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search/users") {
+        return jsonResponse({
+          total_count: 3,
+          incomplete_results: false,
+          items: [
+            { login: "unsafe", type: "User", url: "http://127.0.0.1/private" },
+            { login: "wrong-name", type: "User", url: "https://api.github.com/users/wrong-name" },
+            { login: "unsafe-profile", type: "User", url: "https://api.github.com/users/unsafe-profile" },
+          ],
+        });
+      }
+      if (url.hostname !== "api.github.com") unsafeFetchAttempted = true;
+      if (url.pathname === "/users/wrong-name")
+        return jsonResponse({
+          login: "wrong-name",
+          name: "Another Person",
+          type: "User",
+          html_url: "https://github.com/wrong-name",
+        });
+      if (url.pathname === "/users/unsafe-profile")
+        return jsonResponse({
+          login: "unsafe-profile",
+          name: "Ganesh Talluri",
+          type: "User",
+          html_url: "https://github.com/unsafe-profile?private=1",
+        });
+      throw new Error(`Unexpected request ${url.href}`);
+    },
+  });
+
+  assert.equal(result.status, "not_found");
+  assert.deepEqual(result.data.matches, []);
+  assert.equal(unsafeFetchAttempted, false);
+  assert.ok(result.diagnostics.some((item) => item.code === "github_exact_name_not_observed"));
+  assert.ok(result.diagnostics.some((item) => item.code === "github_public_user_rows_excluded"));
+});
 
 test("GitHub exact-email codegraph separates accounts, null authors, mismatches, and strongest signatures", async () => {
   const email = "person@example.com";
@@ -293,7 +708,11 @@ test("Wayback runs only for candidate-linked URLs and globally collapses digests
         const url = new URL(String(input));
         if (url.pathname === "/cdx/search/cdx") {
           assert.equal(url.searchParams.get("collapse"), "digest");
-          assert.deepEqual(url.searchParams.getAll("filter"), ["statuscode:200", "mimetype:text/html"]);
+          assert.deepEqual(url.searchParams.getAll("filter"), [
+            "statuscode:200",
+            "mimetype:text/html",
+            "original:^https://person\\.example/about$",
+          ]);
           return jsonResponse([
             ["timestamp", "original", "mimetype", "statuscode", "digest", "length"],
             ["20200101000000", "https://person.example/about", "text/html", "200", "DIGEST-A", "100"],

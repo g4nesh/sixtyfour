@@ -821,7 +821,7 @@
         "schemaVersion": 2,
         "id": "chris_replay_graph_node_0014",
         "kind": "pivot",
-        "label": "Candidate-linked Wayback history: Chris Anderson",
+        "label": "Temporal provenance diff: Chris Anderson",
         "status": "exhausted",
         "sourceTier": 5,
         "sourceLaneId": "t5.candidate_wayback",
@@ -1311,7 +1311,7 @@
         "candidateId": null,
         "depth": 0,
         "ordinal": 3,
-        "dedupeKey": "t1.first party unbound chris anderson ted base",
+        "dedupeKey": "t1.first party|unbound|chris anderson, ted|base",
         "utility": {
           "relevance": 0.94,
           "novelty": 0.88,
@@ -1348,7 +1348,7 @@
         "candidateId": "chris_replay_candidate_0002",
         "depth": 1,
         "ordinal": 6,
-        "dedupeKey": "t3.institutional chris replay candidate 0002 site ted.com chris anderson wired same name base",
+        "dedupeKey": "t3.institutional|chris replay candidate 0002|site:ted.com chris anderson wired same name|base",
         "utility": {
           "relevance": 0.78,
           "novelty": 0.76,
@@ -1385,7 +1385,7 @@
         "candidateId": "chris_replay_candidate_0002",
         "depth": 1,
         "ordinal": 9,
-        "dedupeKey": "t4.reputable media chris replay candidate 0002 wired chris anderson 3d robotics airware base",
+        "dedupeKey": "t4.reputable media|chris replay candidate 0002|wired chris anderson 3d robotics airware|base",
         "utility": {
           "relevance": 0.58,
           "novelty": 0.76,
@@ -1422,7 +1422,7 @@
         "candidateId": null,
         "depth": 1,
         "ordinal": 28,
-        "dedupeKey": "t1.first party unbound chris anderson ted ted organization anchor",
+        "dedupeKey": "t1.first party|unbound|chris anderson, ted \"ted\"|organization anchor",
         "utility": {
           "relevance": 0.94,
           "novelty": 0.96,
@@ -1468,7 +1468,7 @@
         "candidateId": "chris_replay_candidate_0001",
         "depth": 1,
         "ordinal": 31,
-        "dedupeKey": "t5.candidate wayback chris replay candidate 0001 https www.ted.com speakers chris anderson ted base",
+        "dedupeKey": "t5.candidate wayback|chris replay candidate 0001|https://www.ted.com/speakers/chris_anderson_ted|base",
         "utility": {
           "relevance": 0.58,
           "novelty": 0.76,
@@ -1504,7 +1504,7 @@
         "candidateId": null,
         "depth": 0,
         "ordinal": 34,
-        "dedupeKey": "t6.general discovery unbound chris anderson ted same-name professional candidates base",
+        "dedupeKey": "t6.general discovery|unbound|chris anderson ted same-name professional candidates|base",
         "utility": {
           "relevance": 0.58,
           "novelty": 0.88,

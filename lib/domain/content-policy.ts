@@ -2,6 +2,24 @@ import type { JsonValue } from "./types";
 
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b/gi;
 
+const CREDENTIAL_LITERAL_PATTERNS = [
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
+  /\bAIza[0-9A-Za-z_-]{35}\b/,
+  /\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{20,255})\b/,
+  /\bsk-(?:ant-|proj-|svcacct-)?[A-Za-z0-9_-]{20,255}\b/,
+  /\b(?:npm_|pypi-|hf_|glpat-|dop_v1_)[A-Za-z0-9_-]{20,255}\b/,
+  /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,255}\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{16,255}\b/,
+  /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/,
+  /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/,
+] as const;
+
+/** Known high-entropy credential formats that must never enter durable OSINT output. */
+export function containsCredentialLiteral(value: string): boolean {
+  const normalized = value.normalize("NFKC");
+  return CREDENTIAL_LITERAL_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 const RESTRICTED_URL_QUERY_KEYS = new Set([
   "accesskey",
   "accesstoken",
@@ -253,6 +271,8 @@ const RESTRICTED_TEXT_PATTERNS = [
   /\b(?:takes?|uses?|prescribed|on)\b.{0,20}\b(?:antidepressants?|psychiatric medication)\b/i,
   /\b(?:has|have|had|diagnosed with|suffers? from)\b.{0,12}\b(?:ms|multiple sclerosis)\b/i,
   /\b(?:high[- ]school|middle[- ]school|elementary[- ]school)\s+(?:student|freshman|sophomore|junior|senior)\b/i,
+  /\b(?:attends?|goes\s+to|stud(?:y|ies|ied|ying)\s+at|student\s+at|enrolled\s+(?:at|in))\b.{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
+  /\bschool\s*(?::|=|-)\s*[^,;]{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
   /\b(?:9th|10th|11th|12th)[ -]grader\b/i,
   /\bteen(?:age|ager)?\s+(?:person|founder|developer|student|researcher|engineer|executive)\b/i,
   /\bstudent\s+(?:aged?|age)\s+(?:[0-9]|1[0-7])\b/i,
@@ -399,6 +419,8 @@ const RESTRICTED_CONCEPT_PATTERNS = [
   // grammar because the student/person noun is mandatory.
   /\b(?:secondary[- ]school|year\s+(?:[1-9]|1[0-2]))\s+student\b/i,
   /\b(?:junior[- ]high\s+student|(?:[1-9]|1[0-2]|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)[- ]grade\s+(?:student|pupil)|school[- ]aged\s+child)\b/i,
+  /\b(?:attends?|goes\s+to|stud(?:y|ies|ied|ying)\s+at|student\s+at|enrolled\s+(?:at|in))\b.{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
+  /\bschool\s*(?::|=|-)\s*[^,;]{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
   // Private contact and residence intents.
   /\bwhat\s+street\b.{0,36}\blive(?:s|d)?\s+on\b/i,
   /\bwhere\b.{0,16}\b(?:send|mail)\b.{0,48}\b(?:letter|something)\b/i,
@@ -581,6 +603,7 @@ export function containsRestrictedPublicContent(value: string, options: ContentP
     STREET_ADDRESS_PATTERN.test(normalizedValue) ||
     CONTEXTUAL_STREET_ADDRESS_PATTERN.test(normalizedValue) ||
     POST_OFFICE_BOX_PATTERN.test(normalizedValue) ||
+    containsCredentialLiteral(normalizedValue) ||
     phoneLike(normalizedValue) ||
     minorAgeLike(policyText, options.currentYear ?? new Date().getUTCFullYear()) ||
     restrictedConceptLike(normalizedValue)

@@ -85,7 +85,11 @@ export function dedupeSignals(signals: readonly IdentitySignal[]): IdentitySigna
     }
   }
 
-  return [...byKey.values()].sort((left, right) => signalKey(left).localeCompare(signalKey(right)));
+  return [...byKey.values()].sort((left, right) => {
+    const leftKey = signalKey(left);
+    const rightKey = signalKey(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
 }
 
 function matchesTarget(signal: IdentitySignal, target: ParsedTarget): boolean {
@@ -129,7 +133,10 @@ export function identitySignalGroundedByEvidence(signal: IdentitySignal, evidenc
   )
     return false;
   const needle = normalizeComparable(signal.value);
-  if (needle.replace(/\s+/g, "").length < 3) return false;
+  const compactNeedle = needle.replace(/\s+/g, "");
+  const codePointLength = Array.from(compactNeedle).length;
+  const shortNonLatinName = signal.kind === "name" && codePointLength >= 2 && /[^\p{ASCII}]/u.test(compactNeedle);
+  if (codePointLength < 3 && !shortNonLatinName) return false;
   const rawMaterial = [
     evidence.claim,
     evidence.excerpt ?? "",
@@ -175,6 +182,87 @@ export function identitySignalGroundedByEvidence(signal: IdentitySignal, evidenc
   }
   const tokenPhrase = ` ${needle} `;
   return rawMaterial.some((value) => ` ${normalizeComparable(value)} `.includes(tokenPhrase));
+}
+
+export const QUERY_SUBJECT_ANCHOR_ATTRIBUTE = "querySubjectAnchor" as const;
+
+export type QuerySubjectAnchorResolution =
+  | { kind: "none"; candidates: [] }
+  | { kind: "unique"; candidates: [Candidate]; candidate: Candidate; evidence: EvidenceRecord }
+  | { kind: "ambiguous"; candidates: Candidate[] };
+
+/**
+ * Locate the run-local neutral subject created for a named-person query.
+ *
+ * This is intentionally not a same-name merge rule. An eligible anchor must
+ * retain the exact weak/self-asserted target-name signal and own an admitted
+ * discovery record carrying Atlas's server-authored query-anchor marker. A
+ * quarantined fetched subject is never eligible, even if later data happens
+ * to repeat the target name. Multiple eligible anchors fail closed.
+ */
+export function resolveQuerySubjectAnchor(
+  state: Pick<{ candidates: Candidate[]; evidence: EvidenceRecord[] }, "candidates" | "evidence">,
+  target: ParsedTarget,
+): QuerySubjectAnchorResolution {
+  if (target.kind !== "named_person" || !target.normalizedName) return { kind: "none", candidates: [] };
+
+  const evidenceByCandidate = new Map<string, EvidenceRecord[]>();
+  for (const evidence of state.evidence) {
+    const records = evidenceByCandidate.get(evidence.candidateId) ?? [];
+    records.push(evidence);
+    evidenceByCandidate.set(evidence.candidateId, records);
+  }
+
+  const anchors = state.candidates.filter((candidate) => {
+    if (candidate.normalizedName !== target.normalizedName) return false;
+    if (
+      !candidate.signals.some(
+        (signal) =>
+          signal.kind === "name" &&
+          signal.normalizedValue === target.normalizedName &&
+          signal.strength === "weak" &&
+          signal.assurance === "self_asserted" &&
+          !signal.sourceEvidenceId,
+      )
+    )
+      return false;
+
+    const records = evidenceByCandidate.get(candidate.id) ?? [];
+    if (
+      records.some(
+        (evidence) =>
+          typeof evidence.attributes.quarantinedFromCandidateId === "string" &&
+          evidence.attributes.quarantinedFromCandidateId.length > 0,
+      )
+    )
+      return false;
+
+    return records.some(
+      (evidence) =>
+        candidate.evidenceIds.includes(evidence.id) &&
+        evidence.sourceType === "search_result" &&
+        evidence.disposition === "discovery_only" &&
+        evidence.verificationMethod === "search_discovery" &&
+        evidence.attributes[QUERY_SUBJECT_ANCHOR_ATTRIBUTE] === true &&
+        typeof evidence.attributes.querySubjectName === "string" &&
+        normalizeComparable(evidence.attributes.querySubjectName) === target.normalizedName,
+    );
+  });
+
+  if (anchors.length === 0) return { kind: "none", candidates: [] };
+  if (anchors.length > 1) return { kind: "ambiguous", candidates: anchors };
+  const candidate = anchors[0];
+  const evidence = (evidenceByCandidate.get(candidate.id) ?? []).find(
+    (record) =>
+      record.sourceType === "search_result" &&
+      record.disposition === "discovery_only" &&
+      record.verificationMethod === "search_discovery" &&
+      record.attributes[QUERY_SUBJECT_ANCHOR_ATTRIBUTE] === true &&
+      typeof record.attributes.querySubjectName === "string" &&
+      normalizeComparable(record.attributes.querySubjectName) === target.normalizedName,
+  );
+  if (!evidence) return { kind: "none", candidates: [] };
+  return { kind: "unique", candidates: [candidate], candidate, evidence };
 }
 
 function isMergeGrade(signal: IdentitySignal): boolean {

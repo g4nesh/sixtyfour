@@ -1,5 +1,6 @@
-import { humanize } from "../atlas-types";
+import { humanize, isStructuredSearchTransport, traceSearchTransportAttempts, type TraceEvent } from "../atlas-types";
 import {
+  eventStableId,
   frontierForNode,
   nodeDepth,
   nodeDetail,
@@ -7,6 +8,7 @@ import {
   nodePriority,
   nodeRelationships,
   nodeUrl,
+  querySiteScopes,
   type CanonicalSearchGraph,
   type SearchGraphNode,
 } from "../graph-model";
@@ -19,10 +21,12 @@ function formatMetric(value: number | undefined): string {
 export function NodeInspector({
   graph,
   node,
+  trace,
   onClose,
 }: {
   graph: CanonicalSearchGraph;
   node: SearchGraphNode | null;
+  trace: TraceEvent[];
   onClose: () => void;
 }) {
   if (!node)
@@ -40,6 +44,12 @@ export function NodeInspector({
   const frontier = frontierForNode(graph, node);
   const detail = nodeDetail(graph, node);
   const url = nodeUrl(node);
+  const searchQuery = frontier?.allowedTools.includes("search_web") ? frontier.queryHint : null;
+  const siteScopes = searchQuery ? querySiteScopes(searchQuery) : [];
+  const relatedTrace = frontier ? trace.filter((event) => eventStableId(event) === frontier.id) : [];
+  const transports = traceSearchTransportAttempts(relatedTrace);
+  const webTransports = transports.filter((transport) => !isStructuredSearchTransport(transport));
+  const structuredTransports = transports.filter(isStructuredSearchTransport);
   return (
     <aside className="node-inspector" aria-label={`Inspector for ${node.label}`}>
       <header>
@@ -59,7 +69,7 @@ export function NodeInspector({
           <dd>{humanize(node.status)}</dd>
         </div>
         <div>
-          <dt>Path cost</dt>
+          <dt>Scheduler path cost</dt>
           <dd>{formatMetric(nodePathCost(graph, node))}</dd>
         </div>
         <div>
@@ -71,6 +81,67 @@ export function NodeInspector({
           <dd>{nodeDepth(graph, node) ?? "—"}</dd>
         </div>
       </dl>
+      <p className="inspector-path-note">
+        Scheduler path cost is ranking metadata, not an API charge, error, or rejection reason. Exhausted means this
+        frontier is closed for the run; check Transport attempts or the trace to see whether a request actually ran. The
+        score did not reject it.
+      </p>
+      {frontier ? (
+        <section className="inspector-execution" aria-labelledby="execution-heading">
+          <div className="inspector-section-heading">
+            <h3 id="execution-heading">Search execution</h3>
+            <span>{frontier.allowedTools.length}</span>
+          </div>
+          {searchQuery ? (
+            <div>
+              <span>Exact query</span>
+              <code>{searchQuery}</code>
+            </div>
+          ) : null}
+          {siteScopes.length > 0 ? (
+            <div>
+              <span>Site scope</span>
+              <strong>{siteScopes.join(" · ")}</strong>
+            </div>
+          ) : null}
+          <div>
+            <span>Allowed tools</span>
+            <strong>{frontier.allowedTools.map(humanize).join(" · ")}</strong>
+          </div>
+          {transports.length > 0 ? (
+            <div>
+              <span>Transport attempts</span>
+              {webTransports.length > 0 ? (
+                <section className="inspector-transport-group">
+                  <strong>Web discovery path</strong>
+                  <ul>
+                    {webTransports.map((transport) => (
+                      <li key={transport.id}>
+                        <strong>{transport.label}</strong>
+                        <small>{humanize(transport.outcome)}</small>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+              {structuredTransports.length > 0 ? (
+                <section className="inspector-transport-group">
+                  <strong>Structured indexes</strong>
+                  <ul>
+                    {structuredTransports.map((transport) => (
+                      <li key={transport.id}>
+                        <strong>{transport.label}</strong>
+                        <small>{humanize(transport.outcome)}</small>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+            </div>
+          ) : null}
+          <p>Attempts and discovery leads are not cited sources unless a hardened fetch admits evidence.</p>
+        </section>
+      ) : null}
       <section className="inspector-identifiers" aria-label="Stable graph identifiers">
         {node.frontierEntryId ? (
           <div>

@@ -127,6 +127,8 @@ const RULES: SafetyRule[] = [
     patterns: [
       /\b(?:minor|underage|child|schoolchild|teenager)\b/i,
       /\b(?:high[- ]school|middle[- ]school|elementary[- ]school)\s+(?:student|freshman|sophomore|junior|senior)\b/i,
+      /\b(?:attends?|goes\s+to|stud(?:y|ies|ied|ying)\s+at|student\s+at|enrolled\s+(?:at|in))\b.{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
+      /\bschool\s*(?::|=|-)\s*[^,;]{0,80}\b(?:elementary|middle|high|secondary|junior[- ]high)\s+school\b/i,
       /\b(?:patient|victim|refugee)\s+(?:address|location|identity|details)\b/i,
     ],
   },

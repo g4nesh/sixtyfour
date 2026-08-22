@@ -23,7 +23,7 @@ Each example directory contains `input.json`, `output.json`, `trace.json`, `cass
 
 The release procedure additionally runs the opt-in React-PDF byte smoke, renders an example report to PDF, rasterizes every page, and inspects both page images and extracted text. It also regenerates all 15 example artifacts twice and requires byte-for-byte equality, then exercises the CLI/API terminal matrix and performs responsive, zoomed-text, keyboard, reduced-motion, and high-contrast browser checks.
 
-The specialist tool fixtures cover incomplete GitHub search, `author: null`, multiple accounts, signature-identity mismatch, stale Keybase proofs, unavailable Wayback, malformed payloads, response-size and timeout limits, `429`/`Retry-After`, cancellation, and retry accounting.
+The specialist tool fixtures cover incomplete GitHub search, `author: null`, multiple accounts, signature-identity mismatch, stale Keybase proofs, unavailable Wayback, exact CDX URL binding, edit/revert capture selection, raw-body hashes, bounded added/removed fragments, inert page-footprint extraction, malformed/oversized metadata, prompt injection, response-size and timeout limits, `429`/`Retry-After`, cancellation, and retry accounting. Frontier tests separately prove neutral-baseline/operator ordering, canonical query execution, official App Store classification, exact-URL T5 scheduling, and denial of cloud/account/iOS-binary enumeration tools.
 
 ## Honest limits
 
