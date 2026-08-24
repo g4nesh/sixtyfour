@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
@@ -13,6 +13,7 @@ import {
   DEFAULT_OPENROUTER_SITE_URL,
   LAUNCH_AGENT_LABEL,
   LOCAL_HOSTNAME,
+  MANAGED_CREDENTIAL_FILENAME,
   buildLaunchAgentProgramArguments,
   buildRunLocalhostPlan,
   createLaunchAgentPlistXml,
@@ -34,11 +35,14 @@ function makeOpenRouterKey(character) {
   return `sk-or-v1-${character.repeat(48)}`;
 }
 
-async function serviceFixture() {
+async function serviceFixture(context) {
   const directory = await mkdtemp(join(tmpdir(), "atlas-macos-service-"));
+  context.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
   const homeDirectory = join(directory, "home");
   const projectRoot = "/Users/test/atlas project & root";
-  const envFilePath = join(directory, "secrets", "atlas <env>.env");
+  const envFilePath = join(directory, "caller-owned", "source <credential>.env");
   return {
     directory,
     homeDirectory,
@@ -50,12 +54,17 @@ async function serviceFixture() {
 
 async function writeEnvFile(path, contents) {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, contents, "utf8");
+  await writeFile(path, contents, { encoding: "utf8", mode: 0o600 });
+}
+
+async function assertMissing(path) {
+  await assert.rejects(stat(path), { code: "ENOENT" });
 }
 
 async function runCli(arguments_) {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [script.pathname, ...arguments_], {
+      env: { LANG: "C", PATH: process.env.PATH ?? "/usr/bin:/bin" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -73,8 +82,8 @@ async function runCli(arguments_) {
   });
 }
 
-test("plist generation is deterministic, escaped, and excludes Node --env-file usage", async () => {
-  const fixture = await serviceFixture();
+test("plist generation points only to the fixed managed credential snapshot", async (context) => {
+  const fixture = await serviceFixture(context);
   const xml = createLaunchAgentPlistXml(fixture);
   const paths = resolveServicePaths(fixture);
 
@@ -85,10 +94,12 @@ test("plist generation is deterministic, escaped, and excludes Node --env-file u
   assert.match(xml, /<key>ProcessType<\/key>\n\t<string>Background<\/string>/);
   assert.match(xml, /<string>\/usr\/bin\/caffeinate<\/string>/);
   assert.match(xml, /<string>-i<\/string>/);
-  assert.doesNotMatch(xml, /<string>--env-file=/);
-  assert.match(xml, /<string>--env-file-path=/);
-  assert.match(xml, /atlas &lt;env&gt;\.env/);
+  assert.doesNotMatch(xml, /--env-file(?:-path)?=/);
+  assert.doesNotMatch(xml, /source &lt;credential&gt;\.env/);
+  assert.doesNotMatch(xml, /OPENROUTER_API_KEY|sk-or-v1-/);
+  assert.match(xml, /Library\/Application Support\/Atlas\/openrouter\.env/);
   assert.match(xml, /atlas project &amp; root/);
+  assert.equal(paths.credentialSnapshotPath, join(paths.supportDirectory, MANAGED_CREDENTIAL_FILENAME));
   assert.deepEqual(buildLaunchAgentProgramArguments(paths), [
     "/usr/bin/caffeinate",
     "-i",
@@ -96,15 +107,15 @@ test("plist generation is deterministic, escaped, and excludes Node --env-file u
     join(fixture.projectRoot, "scripts/macos-service.mjs"),
     "bootstrap-localhost",
     `--project-root=${fixture.projectRoot}`,
-    `--env-file-path=${fixture.envFilePath}`,
+    `--runtime-credential-path=${paths.credentialSnapshotPath}`,
     `--home-directory=${fixture.homeDirectory}`,
     `--wrangler-log-path=${paths.wranglerLogPath}`,
     `--miniflare-registry-path=${paths.miniflareRegistryPath}`,
   ]);
 });
 
-test("custom runtime state paths are propagated into LaunchAgent args", async () => {
-  const fixture = await serviceFixture();
+test("custom runtime state paths are propagated without changing the fixed snapshot", async (context) => {
+  const fixture = await serviceFixture(context);
   const paths = resolveServicePaths({
     ...fixture,
     wranglerLogPath: join(fixture.homeDirectory, "custom", "wrangler.log"),
@@ -118,46 +129,50 @@ test("custom runtime state paths are propagated into LaunchAgent args", async ()
     join(fixture.projectRoot, "scripts/macos-service.mjs"),
     "bootstrap-localhost",
     `--project-root=${fixture.projectRoot}`,
-    `--env-file-path=${fixture.envFilePath}`,
+    `--runtime-credential-path=${paths.credentialSnapshotPath}`,
     `--home-directory=${fixture.homeDirectory}`,
     `--wrangler-log-path=${paths.wranglerLogPath}`,
     `--miniflare-registry-path=${paths.miniflareRegistryPath}`,
   ]);
 });
 
-test("install writes an atomic mode-0600 plist without reading or requiring the env file", async () => {
-  const fixture = await serviceFixture();
+test("install imports only the key into an atomic private snapshot and never returns it", async (context) => {
+  const fixture = await serviceFixture(context);
+  const key = makeOpenRouterKey("i");
+  const poison = "synthetic-poison-must-not-survive";
+  await writeEnvFile(
+    fixture.envFilePath,
+    `OPENROUTER_API_KEY=${key}\nNODE_OPTIONS=--import injected.mjs\nSENTINEL=${poison}\n`,
+  );
+
   const installed = await installLaunchAgent(fixture);
   const status = await statusLaunchAgent(fixture);
   const plist = await readFile(installed.plistPath, "utf8");
+  const snapshot = await readFile(installed.credentialSnapshotPath, "utf8");
+  const serialized = JSON.stringify(installed);
 
-  assert.equal(status.installed, true);
-  assert.equal(status.matchesDesired, true);
+  assert.equal(snapshot, `OPENROUTER_API_KEY=${key}\n`);
+  assert.equal((await stat(installed.credentialSnapshotPath)).mode & 0o777, 0o600);
+  assert.equal((await stat(installed.supportDirectory)).mode & 0o777, 0o700);
   assert.equal((await stat(installed.plistPath)).mode & 0o777, 0o600);
-  assert.match(plist, /StandardOutPath/);
-  assert.match(plist, /Library\/Logs\/Atlas\/atlas\.stdout\.log/);
-  assert.match(plist, /Library\/Logs\/Atlas\/atlas\.stderr\.log/);
-  await assert.rejects(stat(fixture.envFilePath), { code: "ENOENT" });
+  assert.deepEqual(await readdir(installed.supportDirectory), [MANAGED_CREDENTIAL_FILENAME]);
+  assert.doesNotMatch(plist, /--env-file(?:-path)?=|source &lt;credential&gt;\.env/);
+  assert.match(plist, /--runtime-credential-path=/);
+  assert.doesNotMatch(serialized, new RegExp(key));
+  assert.doesNotMatch(serialized, new RegExp(poison));
+  assert.equal(serialized.includes(fixture.envFilePath), false);
+  assert.equal(installed.credentialSourceReadDuringInstall, true);
+  assert.equal(installed.credentialSourceRetainedByAtlas, false);
+  assert.equal(status.installed, true);
+  assert.equal(status.plistMatchesDesired, true);
+  assert.equal(status.matchesDesired, true);
+  assert.equal(status.credentialDirectoryMode, "0700");
+  assert.equal(status.credentialSnapshotMode, "0600");
+  assert.equal(status.credentialSnapshotHealth, "valid");
 });
 
-test("status detects drift and uninstall removes only the plist target", async () => {
-  const fixture = await serviceFixture();
-  const installed = await installLaunchAgent(fixture);
-  await writeFile(installed.plistPath, "changed\n", "utf8");
-
-  const drifted = await statusLaunchAgent(fixture);
-  assert.equal(drifted.installed, true);
-  assert.equal(drifted.matchesDesired, false);
-
-  const removed = await uninstallLaunchAgent(fixture);
-  assert.equal(removed.removed, true);
-  const missing = await statusLaunchAgent(fixture);
-  assert.equal(missing.installed, false);
-  assert.equal(missing.matchesDesired, false);
-});
-
-test("localhost runtime consumes only OPENROUTER_API_KEY from the env file and sanitizes the final env", async () => {
-  const fixture = await serviceFixture();
+test("the source can be removed after install and runtime uses only the managed snapshot", async (context) => {
+  const fixture = await serviceFixture(context);
   const fileKey = makeOpenRouterKey("f");
   await writeEnvFile(
     fixture.envFilePath,
@@ -177,6 +192,8 @@ test("localhost runtime consumes only OPENROUTER_API_KEY from the env file and s
       "",
     ].join("\n"),
   );
+  await installLaunchAgent(fixture);
+  await rm(fixture.envFilePath);
 
   const hostEnvironment = {
     HOME: fixture.homeDirectory,
@@ -187,7 +204,10 @@ test("localhost runtime consumes only OPENROUTER_API_KEY from the env file and s
     SENTINEL: "must-not-leak",
   };
   const plan = await buildRunLocalhostPlan(fixture, hostEnvironment);
+  const status = await statusLaunchAgent(fixture);
 
+  await assertMissing(fixture.envFilePath);
+  assert.equal(status.matchesDesired, true);
   assert.equal(plan.cwd, fixture.projectRoot);
   assert.equal(plan.host, LOCAL_HOSTNAME);
   assert.equal(plan.port, Number(DEFAULT_PORT));
@@ -227,7 +247,161 @@ test("localhost runtime consumes only OPENROUTER_API_KEY from the env file and s
   assert.equal("OPENAI_API_KEY" in targetEnvironment, false);
 });
 
-test("bounded env-file parsing keeps only the validated OpenRouter key", async () => {
+test("reinstall atomically rotates the snapshot and restores private modes", async (context) => {
+  const fixture = await serviceFixture(context);
+  const firstKey = makeOpenRouterKey("a");
+  const secondKey = makeOpenRouterKey("b");
+  await writeEnvFile(fixture.envFilePath, `OPENROUTER_API_KEY=${firstKey}\n`);
+  const first = await installLaunchAgent(fixture);
+  await chmod(first.supportDirectory, 0o755);
+  await writeEnvFile(
+    fixture.envFilePath,
+    `OPENROUTER_API_KEY=${secondKey}\nOPENAI_API_KEY=${firstKey}\nSENTINEL=discard\n`,
+  );
+
+  const rotated = await installLaunchAgent(fixture);
+  const contents = await readFile(rotated.credentialSnapshotPath, "utf8");
+
+  assert.equal(contents, `OPENROUTER_API_KEY=${secondKey}\n`);
+  assert.doesNotMatch(contents, new RegExp(firstKey));
+  assert.doesNotMatch(contents, /OPENAI_API_KEY|SENTINEL/);
+  assert.equal((await stat(rotated.supportDirectory)).mode & 0o777, 0o700);
+  assert.equal((await stat(rotated.credentialSnapshotPath)).mode & 0o777, 0o600);
+  assert.deepEqual(await readdir(rotated.supportDirectory), [MANAGED_CREDENTIAL_FILENAME]);
+});
+
+test("status reports bounded snapshot mode and parse health without the source", async (context) => {
+  const fixture = await serviceFixture(context);
+  const key = makeOpenRouterKey("s");
+  await writeEnvFile(fixture.envFilePath, `OPENROUTER_API_KEY=${key}\n`);
+  const installed = await installLaunchAgent(fixture);
+  await rm(fixture.envFilePath);
+
+  await chmod(installed.credentialSnapshotPath, 0o644);
+  let status = await statusLaunchAgent(fixture);
+  assert.equal(status.credentialSnapshotHealth, "unsafe_mode");
+  assert.equal(status.credentialSnapshotMode, "0644");
+  assert.equal(status.credentialSnapshotValid, false);
+  assert.equal(status.matchesDesired, false);
+
+  await chmod(installed.credentialSnapshotPath, 0o600);
+  await writeFile(installed.credentialSnapshotPath, "OPENROUTER_API_KEY=invalid\n", { mode: 0o600 });
+  status = await statusLaunchAgent(fixture);
+  assert.equal(status.credentialSnapshotHealth, "invalid");
+  assert.equal(status.credentialSnapshotValid, false);
+  assert.doesNotMatch(JSON.stringify(status), /OPENROUTER_API_KEY=|sk-or-v1-/);
+
+  await writeFile(installed.credentialSnapshotPath, `OPENROUTER_API_KEY=${key}\n`, { mode: 0o600 });
+  await chmod(installed.supportDirectory, 0o755);
+  status = await statusLaunchAgent(fixture);
+  assert.equal(status.credentialSnapshotHealth, "unsafe_parent_mode");
+  assert.equal(status.credentialDirectoryMode, "0755");
+  assert.equal(status.matchesDesired, false);
+
+  await chmod(installed.supportDirectory, 0o700);
+  await rm(installed.credentialSnapshotPath);
+  status = await statusLaunchAgent(fixture);
+  assert.equal(status.credentialSnapshotHealth, "missing");
+  assert.equal(status.credentialSnapshotPresent, false);
+  assert.equal(status.matchesDesired, false);
+});
+
+test("runtime refuses a snapshot or parent directory with unsafe permissions", async (context) => {
+  const fixture = await serviceFixture(context);
+  await writeEnvFile(fixture.envFilePath, `OPENROUTER_API_KEY=${makeOpenRouterKey("r")}\n`);
+  const installed = await installLaunchAgent(fixture);
+  await rm(fixture.envFilePath);
+
+  await chmod(installed.credentialSnapshotPath, 0o644);
+  await assert.rejects(
+    buildRunLocalhostPlan(fixture, {}),
+    /managed Atlas credential snapshot must be a private mode-0600 regular file/,
+  );
+  await chmod(installed.credentialSnapshotPath, 0o600);
+  await chmod(installed.supportDirectory, 0o755);
+  await assert.rejects(
+    buildRunLocalhostPlan(fixture, {}),
+    /managed Atlas credential directory must be a private mode-0700 directory/,
+  );
+});
+
+test("install and uninstall reject managed parent and snapshot symlinks", async (context) => {
+  const parentFixture = await serviceFixture(context);
+  const parentKey = makeOpenRouterKey("p");
+  await writeEnvFile(parentFixture.envFilePath, `OPENROUTER_API_KEY=${parentKey}\n`);
+  const redirectedParent = join(parentFixture.directory, "redirected-parent");
+  await mkdir(join(parentFixture.homeDirectory, "Library"), { recursive: true });
+  await mkdir(redirectedParent, { recursive: true });
+  await symlink(redirectedParent, join(parentFixture.homeDirectory, "Library", "Application Support"));
+
+  await assert.rejects(
+    installLaunchAgent(parentFixture),
+    /credential directory must be a real directory without symlinks/,
+  );
+  await assertMissing(join(redirectedParent, "Atlas", MANAGED_CREDENTIAL_FILENAME));
+
+  const snapshotFixture = await serviceFixture(context);
+  const snapshotKey = makeOpenRouterKey("q");
+  await writeEnvFile(snapshotFixture.envFilePath, `OPENROUTER_API_KEY=${snapshotKey}\n`);
+  const snapshotPaths = resolveServicePaths(snapshotFixture);
+  const redirectedFile = join(snapshotFixture.directory, "must-remain-unchanged");
+  await mkdir(snapshotPaths.supportDirectory, { recursive: true, mode: 0o700 });
+  await chmod(snapshotPaths.supportDirectory, 0o700);
+  await writeFile(redirectedFile, "sentinel\n", "utf8");
+  await symlink(redirectedFile, snapshotPaths.credentialSnapshotPath);
+
+  await assert.rejects(installLaunchAgent(snapshotFixture), /snapshot must be a regular file without symlinks/);
+  await assert.rejects(uninstallLaunchAgent(snapshotFixture), /snapshot must be a regular file without symlinks/);
+  assert.equal(await readFile(redirectedFile, "utf8"), "sentinel\n");
+
+  const status = await statusLaunchAgent(snapshotFixture);
+  assert.equal(status.credentialSnapshotHealth, "unsafe_type");
+  assert.equal(status.credentialSnapshotSafe, false);
+  assert.doesNotMatch(JSON.stringify(status), new RegExp(snapshotKey));
+});
+
+test("the runtime snapshot path cannot be redirected by an option", async (context) => {
+  const fixture = await serviceFixture(context);
+  assert.throws(
+    () => resolveServicePaths({ ...fixture, runtimeCredentialPath: join(fixture.directory, "attacker-selected.env") }),
+    /runtimeCredentialPath must be the managed Atlas credential snapshot path/,
+  );
+});
+
+test("uninstall removes only the exact plist and managed snapshot and reports recovery", async (context) => {
+  const fixture = await serviceFixture(context);
+  const key = makeOpenRouterKey("u");
+  await writeEnvFile(fixture.envFilePath, `OPENROUTER_API_KEY=${key}\nSENTINEL=caller-owned\n`);
+  const installed = await installLaunchAgent(fixture);
+  await writeFile(installed.stdoutPath, "preserved log\n", "utf8");
+  await mkdir(installed.miniflareRegistryPath, { recursive: true });
+  const statePath = join(installed.miniflareRegistryPath, "preserved-state");
+  await writeFile(statePath, "state\n", "utf8");
+
+  const result = await uninstallLaunchAgent(fixture);
+
+  assert.equal(result.removed, true);
+  assert.equal(result.plistRemoved, true);
+  assert.equal(result.credentialSnapshotRemoved, true);
+  assert.equal(result.credentialSnapshotRecoverable, false);
+  assert.equal(result.callerCredentialSourceTouched, false);
+  assert.equal(result.logsPreserved, true);
+  assert.equal(result.runtimeStatePreserved, true);
+  assert.match(result.recovery, /not recoverable; reinstall/);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(key));
+  assert.equal(JSON.stringify(result).includes(fixture.envFilePath), false);
+  await assertMissing(installed.plistPath);
+  await assertMissing(installed.credentialSnapshotPath);
+  assert.match(await readFile(fixture.envFilePath, "utf8"), /SENTINEL=caller-owned/);
+  assert.equal(await readFile(installed.stdoutPath, "utf8"), "preserved log\n");
+  assert.equal(await readFile(statePath, "utf8"), "state\n");
+
+  const repeated = await uninstallLaunchAgent(fixture);
+  assert.equal(repeated.removed, false);
+  assert.equal(repeated.credentialSnapshotRecoverable, null);
+});
+
+test("bounded env-file parsing keeps only the validated OpenRouter key", () => {
   const key = makeOpenRouterKey("k");
   assert.equal(
     parseValidatedOpenRouterKeyFromEnvText(
@@ -237,8 +411,8 @@ test("bounded env-file parsing keeps only the validated OpenRouter key", async (
   );
 });
 
-test("env-file validation rejects invalid or missing keys without echoing values", async () => {
-  const fixture = await serviceFixture();
+test("env-file validation rejects invalid or missing keys without echoing values", async (context) => {
+  const fixture = await serviceFixture(context);
   const invalidSecret = "bad-secret-value";
   await writeEnvFile(fixture.envFilePath, `OPENROUTER_API_KEY=${invalidSecret}\nSENTINEL=also-hidden\n`);
 
@@ -256,8 +430,8 @@ test("env-file validation rejects invalid or missing keys without echoing values
   );
 });
 
-test("env-file reads enforce a bounded maximum size without logging contents", async () => {
-  const fixture = await serviceFixture();
+test("env-file reads enforce a bounded maximum size without logging contents", async (context) => {
+  const fixture = await serviceFixture(context);
   const oversizedBody = `OPENROUTER_API_KEY=${makeOpenRouterKey("x")}\nSENTINEL=${"n".repeat(DEFAULT_ENV_FILE_MAX_BYTES)}\n`;
   await writeEnvFile(fixture.envFilePath, oversizedBody);
 
@@ -269,32 +443,69 @@ test("env-file reads enforce a bounded maximum size without logging contents", a
   });
 });
 
-test("CLI install/status/uninstall are safely testable and emit JSON", async () => {
-  const fixture = await serviceFixture();
-  const common = [
+test("CLI status and uninstall need no source after the one-time install import", async (context) => {
+  const fixture = await serviceFixture(context);
+  const key = makeOpenRouterKey("c");
+  const poison = "cli-synthetic-poison";
+  await writeEnvFile(fixture.envFilePath, `OPENROUTER_API_KEY=${key}\nSENTINEL=${poison}\n`);
+  const base = [
     `--project-root=${fixture.projectRoot}`,
-    `--env-file-path=${fixture.envFilePath}`,
     `--home-directory=${fixture.homeDirectory}`,
     `--node-path=${fixture.nodePath}`,
   ];
 
-  const install = await runCli(["install", ...common]);
+  const install = await runCli(["install", ...base, `--env-file-path=${fixture.envFilePath}`]);
   assert.equal(install.code, 0, install.stderr);
-  assert.equal(JSON.parse(install.stdout).label, LAUNCH_AGENT_LABEL);
+  const installPayload = JSON.parse(install.stdout);
+  assert.equal(installPayload.label, LAUNCH_AGENT_LABEL);
+  assert.equal(installPayload.credentialSnapshotHealth, "valid");
+  assert.doesNotMatch(install.stdout, new RegExp(key));
+  assert.doesNotMatch(install.stdout, new RegExp(poison));
+  assert.equal(install.stdout.includes(fixture.envFilePath), false);
+  assert.equal(install.stderr, "");
+  await rm(fixture.envFilePath);
 
-  const status = await runCli(["status", ...common]);
+  const status = await runCli(["status", ...base]);
   assert.equal(status.code, 0, status.stderr);
   const statusPayload = JSON.parse(status.stdout);
   assert.equal(statusPayload.installed, true);
   assert.equal(statusPayload.matchesDesired, true);
+  assert.equal(statusPayload.credentialSnapshotHealth, "valid");
+  assert.doesNotMatch(status.stdout, new RegExp(key));
+  assert.equal(status.stderr, "");
 
-  const uninstall = await runCli(["uninstall", ...common]);
+  const uninstall = await runCli(["uninstall", ...base]);
   assert.equal(uninstall.code, 0, uninstall.stderr);
-  assert.equal(JSON.parse(uninstall.stdout).removed, true);
+  const uninstallPayload = JSON.parse(uninstall.stdout);
+  assert.equal(uninstallPayload.removed, true);
+  assert.equal(uninstallPayload.credentialSnapshotRemoved, true);
+  assert.equal(uninstallPayload.credentialSnapshotRecoverable, false);
+  assert.doesNotMatch(uninstall.stdout, new RegExp(key));
+  assert.equal(uninstall.stderr, "");
 });
 
-test("temporary project roots are rejected so install targets a durable checkout only", async () => {
-  const fixture = await serviceFixture();
+test("CLI failures redact a credential-shaped value embedded in a source filename", async (context) => {
+  const fixture = await serviceFixture(context);
+  const syntheticKey = makeOpenRouterKey("e");
+  const missingSource = join(fixture.directory, `${syntheticKey}.env`);
+  const result = await runCli([
+    "install",
+    `--project-root=${fixture.projectRoot}`,
+    `--home-directory=${fixture.homeDirectory}`,
+    `--node-path=${fixture.nodePath}`,
+    `--env-file-path=${missingSource}`,
+  ]);
+
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, "");
+  assert.doesNotMatch(result.stderr, new RegExp(syntheticKey));
+  assert.match(result.stderr, /\[redacted OpenRouter credential\]/);
+  await assertMissing(resolveServicePaths(fixture).credentialSnapshotPath);
+});
+
+test("temporary roots and relative source paths are rejected before managed writes", async (context) => {
+  const fixture = await serviceFixture(context);
+  await writeEnvFile(fixture.envFilePath, `OPENROUTER_API_KEY=${makeOpenRouterKey("t")}\n`);
   await assert.rejects(
     installLaunchAgent({
       ...fixture,
@@ -302,16 +513,9 @@ test("temporary project roots are rejected so install targets a durable checkout
     }),
     /must not live under a temporary directory/,
   );
-});
-
-test("relative paths are rejected before normalization", async () => {
-  await assert.throws(
-    () =>
-      resolveServicePaths({
-        projectRoot: "/Users/test/atlas",
-        envFilePath: "relative.env",
-        homeDirectory: "/Users/test",
-      }),
+  await assert.rejects(
+    installLaunchAgent({ ...fixture, envFilePath: "relative.env" }),
     /envFilePath must be an absolute path/,
   );
+  await assertMissing(resolveServicePaths(fixture).credentialSnapshotPath);
 });

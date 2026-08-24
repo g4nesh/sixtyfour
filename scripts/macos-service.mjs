@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
@@ -13,6 +14,7 @@ export const DEFAULT_OPENROUTER_MODEL = "openai/gpt-5.4-nano";
 export const DEFAULT_OPENROUTER_SITE_URL = "http://localhost:3000";
 export const DEFAULT_OPENROUTER_APP_NAME = "Atlas";
 export const LOCAL_HOSTNAME = "127.0.0.1";
+export const MANAGED_CREDENTIAL_FILENAME = "openrouter.env";
 const HOST_ENV_ALLOWLIST = ["HOME", "PATH", "TMPDIR", "LANG"];
 
 function escapeXml(value) {
@@ -53,7 +55,7 @@ function assertDurableProjectRoot(projectRoot) {
 
 export function resolveServicePaths({
   projectRoot,
-  envFilePath,
+  runtimeCredentialPath,
   nodePath = process.execPath,
   homeDirectory = homedir(),
   plistPath,
@@ -63,20 +65,26 @@ export function resolveServicePaths({
   miniflareRegistryPath,
 } = {}) {
   const resolvedProjectRoot = assertDurableProjectRoot(projectRoot);
-  const resolvedEnvFilePath = assertAbsolutePath("envFilePath", envFilePath);
   const resolvedNodePath = assertAbsolutePath("nodePath", nodePath);
   const resolvedHomeDirectory = assertAbsolutePath("homeDirectory", homeDirectory);
   const logsDirectory = join(resolvedHomeDirectory, "Library/Logs/Atlas");
   const supportDirectory = join(resolvedHomeDirectory, "Library/Application Support/Atlas");
+  const credentialSnapshotPath = join(supportDirectory, MANAGED_CREDENTIAL_FILENAME);
+  if (
+    runtimeCredentialPath !== undefined &&
+    assertAbsolutePath("runtimeCredentialPath", runtimeCredentialPath) !== credentialSnapshotPath
+  ) {
+    throw new TypeError("runtimeCredentialPath must be the managed Atlas credential snapshot path.");
+  }
   return {
     label: LAUNCH_AGENT_LABEL,
     projectRoot: resolvedProjectRoot,
-    envFilePath: resolvedEnvFilePath,
     nodePath: resolvedNodePath,
     homeDirectory: resolvedHomeDirectory,
     launchAgentsDirectory: join(resolvedHomeDirectory, "Library/LaunchAgents"),
     logsDirectory,
     supportDirectory,
+    credentialSnapshotPath,
     plistPath: plistPath
       ? assertAbsolutePath("plistPath", plistPath)
       : join(resolvedHomeDirectory, "Library/LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`),
@@ -102,7 +110,7 @@ export function buildLaunchAgentProgramArguments(paths) {
     paths.entryScriptPath,
     "bootstrap-localhost",
     `--project-root=${paths.projectRoot}`,
-    `--env-file-path=${paths.envFilePath}`,
+    `--runtime-credential-path=${paths.credentialSnapshotPath}`,
     `--home-directory=${paths.homeDirectory}`,
     `--wrangler-log-path=${paths.wranglerLogPath}`,
     `--miniflare-registry-path=${paths.miniflareRegistryPath}`,
@@ -183,7 +191,7 @@ export function buildRunLocalhostEnvironment(options, hostEnvironment = process.
 
 export async function buildRunLocalhostPlan(options, hostEnvironment = process.env) {
   const paths = resolveServicePaths(options);
-  const openRouterKey = await readValidatedOpenRouterKeyFromEnvFile(paths.envFilePath);
+  const openRouterKey = await readValidatedManagedOpenRouterKey(paths);
   return {
     cwd: paths.projectRoot,
     modulePath: paths.vinextProdServerPath,
@@ -212,56 +220,347 @@ async function closeServer(server) {
   });
 }
 
-async function writeAtomicFile(path, contents, mode = 0o600) {
+function isMissingFileError(error) {
+  return Boolean(error && typeof error === "object" && error.code === "ENOENT");
+}
+
+async function optionalLstat(path) {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (isMissingFileError(error)) return null;
+    throw error;
+  }
+}
+
+function octalMode(stats) {
+  return (stats.mode & 0o7777).toString(8).padStart(4, "0");
+}
+
+function managedDirectoryChain(paths) {
+  return [
+    paths.homeDirectory,
+    join(paths.homeDirectory, "Library"),
+    join(paths.homeDirectory, "Library/Application Support"),
+    paths.supportDirectory,
+  ];
+}
+
+async function inspectManagedDirectory(paths) {
+  for (const path of managedDirectoryChain(paths)) {
+    const stats = await optionalLstat(path);
+    if (!stats) {
+      return {
+        present: false,
+        safe: true,
+        private: false,
+        mode: null,
+        health: "missing_parent",
+      };
+    }
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      return {
+        present: true,
+        safe: false,
+        private: false,
+        mode: path === paths.supportDirectory ? octalMode(stats) : null,
+        health: "unsafe_parent",
+      };
+    }
+  }
+
+  const supportStats = await lstat(paths.supportDirectory);
+  const mode = octalMode(supportStats);
+  return {
+    present: true,
+    safe: true,
+    private: mode === "0700",
+    mode,
+    health: mode === "0700" ? "valid" : "unsafe_parent_mode",
+  };
+}
+
+async function ensurePrivateManagedDirectory(paths) {
+  const existing = await inspectManagedDirectory(paths);
+  if (!existing.safe) {
+    throw new TypeError("The managed Atlas credential directory must be a real directory without symlinks.");
+  }
+  await mkdir(paths.supportDirectory, { recursive: true, mode: 0o700 });
+  let inspection = await inspectManagedDirectory(paths);
+  if (!inspection.present || !inspection.safe) {
+    throw new TypeError("The managed Atlas credential directory must be a real directory without symlinks.");
+  }
+  await chmod(paths.supportDirectory, 0o700);
+  inspection = await inspectManagedDirectory(paths);
+  if (!inspection.private) {
+    throw new TypeError("The managed Atlas credential directory must use mode 0700.");
+  }
+}
+
+async function inspectCredentialTarget(paths) {
+  const stats = await optionalLstat(paths.credentialSnapshotPath);
+  if (!stats) return { present: false, safe: true, mode: null };
+  return {
+    present: true,
+    safe: !stats.isSymbolicLink() && stats.isFile(),
+    mode: octalMode(stats),
+  };
+}
+
+async function assertCredentialTargetSafe(paths) {
+  const target = await inspectCredentialTarget(paths);
+  if (target.present && !target.safe) {
+    throw new TypeError("The managed Atlas credential snapshot must be a regular file without symlinks.");
+  }
+}
+
+async function readValidatedManagedOpenRouterKey(paths) {
+  const directory = await inspectManagedDirectory(paths);
+  if (!directory.present || !directory.safe || !directory.private) {
+    throw new TypeError(
+      "The managed Atlas credential directory must be a private mode-0700 directory without symlinks.",
+    );
+  }
+  const target = await inspectCredentialTarget(paths);
+  if (!target.present || !target.safe || target.mode !== "0600") {
+    throw new TypeError(
+      "The managed Atlas credential snapshot must be a private mode-0600 regular file without symlinks.",
+    );
+  }
+  const openRouterKey = await readValidatedOpenRouterKeyFromEnvFile(paths.credentialSnapshotPath);
+  const afterRead = await inspectCredentialTarget(paths);
+  if (!afterRead.present || !afterRead.safe || afterRead.mode !== "0600") {
+    throw new TypeError("The managed Atlas credential snapshot changed during validation.");
+  }
+  return openRouterKey;
+}
+
+export async function inspectManagedCredentialSnapshot(options) {
+  const paths = resolveServicePaths(options);
+  const directory = await inspectManagedDirectory(paths);
+  if (!directory.present || !directory.safe) {
+    return {
+      credentialDirectoryPresent: directory.present,
+      credentialDirectorySafe: directory.safe,
+      credentialDirectoryPrivate: directory.private,
+      credentialDirectoryMode: directory.mode,
+      credentialSnapshotPresent: false,
+      credentialSnapshotSafe: false,
+      credentialSnapshotPrivate: false,
+      credentialSnapshotMode: null,
+      credentialSnapshotValid: false,
+      credentialSnapshotHealth: directory.health,
+    };
+  }
+
+  const target = await inspectCredentialTarget(paths);
+  if (!target.present) {
+    return {
+      credentialDirectoryPresent: true,
+      credentialDirectorySafe: true,
+      credentialDirectoryPrivate: directory.private,
+      credentialDirectoryMode: directory.mode,
+      credentialSnapshotPresent: false,
+      credentialSnapshotSafe: true,
+      credentialSnapshotPrivate: false,
+      credentialSnapshotMode: null,
+      credentialSnapshotValid: false,
+      credentialSnapshotHealth: "missing",
+    };
+  }
+  if (!target.safe) {
+    return {
+      credentialDirectoryPresent: true,
+      credentialDirectorySafe: true,
+      credentialDirectoryPrivate: directory.private,
+      credentialDirectoryMode: directory.mode,
+      credentialSnapshotPresent: true,
+      credentialSnapshotSafe: false,
+      credentialSnapshotPrivate: false,
+      credentialSnapshotMode: target.mode,
+      credentialSnapshotValid: false,
+      credentialSnapshotHealth: "unsafe_type",
+    };
+  }
+
+  const snapshotPrivate = target.mode === "0600";
+  if (!directory.private || !snapshotPrivate) {
+    return {
+      credentialDirectoryPresent: true,
+      credentialDirectorySafe: true,
+      credentialDirectoryPrivate: directory.private,
+      credentialDirectoryMode: directory.mode,
+      credentialSnapshotPresent: true,
+      credentialSnapshotSafe: true,
+      credentialSnapshotPrivate: snapshotPrivate,
+      credentialSnapshotMode: target.mode,
+      credentialSnapshotValid: false,
+      credentialSnapshotHealth: directory.private ? "unsafe_mode" : "unsafe_parent_mode",
+    };
+  }
+
+  let valid = false;
+  try {
+    await readValidatedOpenRouterKeyFromEnvFile(paths.credentialSnapshotPath);
+    valid = true;
+  } catch {
+    // Status reports only bounded health metadata; it never returns parser text or credential material.
+  }
+  return {
+    credentialDirectoryPresent: true,
+    credentialDirectorySafe: true,
+    credentialDirectoryPrivate: true,
+    credentialDirectoryMode: directory.mode,
+    credentialSnapshotPresent: true,
+    credentialSnapshotSafe: true,
+    credentialSnapshotPrivate: true,
+    credentialSnapshotMode: target.mode,
+    credentialSnapshotValid: valid,
+    credentialSnapshotHealth: valid ? "valid" : "invalid",
+  };
+}
+
+async function writeAtomicFile(path, contents, mode = 0o600, beforeRename) {
   const directory = dirname(path);
-  const temporaryPath = join(directory, `.${process.pid}.${Date.now()}.tmp`);
+  const temporaryPath = join(directory, `.atlas-${process.pid}-${randomUUID()}.tmp`);
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  await writeFile(temporaryPath, contents, { encoding: "utf8", mode, flag: "wx" });
-  await rename(temporaryPath, path);
-  await chmod(path, mode);
+  try {
+    await writeFile(temporaryPath, contents, { encoding: "utf8", mode, flag: "wx" });
+    if (beforeRename) await beforeRename();
+    await rename(temporaryPath, path);
+    await chmod(path, mode);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
+async function writeManagedCredentialSnapshot(paths, openRouterKey) {
+  await ensurePrivateManagedDirectory(paths);
+  await assertCredentialTargetSafe(paths);
+  await writeAtomicFile(paths.credentialSnapshotPath, `OPENROUTER_API_KEY=${openRouterKey}\n`, 0o600, async () => {
+    const directory = await inspectManagedDirectory(paths);
+    if (!directory.safe || !directory.private) {
+      throw new TypeError("The managed Atlas credential directory changed during installation.");
+    }
+    await assertCredentialTargetSafe(paths);
+  });
+  const inspection = await inspectManagedCredentialSnapshot(paths);
+  if (inspection.credentialSnapshotHealth !== "valid") {
+    throw new TypeError("The managed Atlas credential snapshot failed its private-file validation.");
+  }
+  return inspection;
 }
 
 export async function installLaunchAgent(options) {
+  const sourceEnvFilePath = assertAbsolutePath("envFilePath", options?.envFilePath);
   const paths = resolveServicePaths(options);
+  const openRouterKey = await readValidatedOpenRouterKeyFromEnvFile(sourceEnvFilePath);
   const xml = createLaunchAgentPlistXml(paths);
+  const credentialInspection = await writeManagedCredentialSnapshot(paths, openRouterKey);
   await Promise.all([
     mkdir(dirname(paths.plistPath), { recursive: true, mode: 0o700 }),
     mkdir(dirname(paths.stdoutPath), { recursive: true, mode: 0o700 }),
     mkdir(dirname(paths.wranglerLogPath), { recursive: true, mode: 0o700 }),
-    mkdir(dirname(paths.miniflareRegistryPath), { recursive: true, mode: 0o700 }),
   ]);
   await writeAtomicFile(paths.plistPath, xml, 0o600);
-  return { ...paths, plistXml: xml };
+  return {
+    ...paths,
+    installed: true,
+    plistXml: xml,
+    ...credentialInspection,
+    credentialSourceReadDuringInstall: true,
+    credentialSourceRetainedByAtlas: false,
+  };
+}
+
+async function removeExactFile(path) {
+  try {
+    await rm(path, { force: false });
+    return true;
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error;
+    return false;
+  }
+}
+
+async function assertRegularFileOrMissing(path, label) {
+  const stats = await optionalLstat(path);
+  if (stats && (stats.isSymbolicLink() || !stats.isFile())) {
+    throw new TypeError(`${label} must be a regular file without symlinks.`);
+  }
 }
 
 export async function uninstallLaunchAgent(options) {
   const paths = resolveServicePaths(options);
-  let removed = false;
-  try {
-    await rm(paths.plistPath, { force: false });
-    removed = true;
-  } catch (error) {
-    if (!(error && typeof error === "object" && error.code === "ENOENT")) throw error;
+  const directory = await inspectManagedDirectory(paths);
+  if (!directory.safe) {
+    throw new TypeError("The managed Atlas credential directory must be a real directory without symlinks.");
   }
-  return { ...paths, removed };
+  await assertRegularFileOrMissing(paths.credentialSnapshotPath, "The managed Atlas credential snapshot");
+  await assertRegularFileOrMissing(paths.plistPath, "The Atlas LaunchAgent plist");
+
+  const credentialSnapshotRemoved = await removeExactFile(paths.credentialSnapshotPath);
+  const plistRemoved = await removeExactFile(paths.plistPath);
+  return {
+    ...paths,
+    removed: credentialSnapshotRemoved || plistRemoved,
+    plistRemoved,
+    credentialSnapshotRemoved,
+    credentialSnapshotRecoverable: credentialSnapshotRemoved ? false : null,
+    callerCredentialSourceTouched: false,
+    logsPreserved: true,
+    runtimeStatePreserved: true,
+    recovery:
+      "A removed managed snapshot is not recoverable; reinstall with the caller-owned source or a replacement credential file.",
+  };
 }
 
 export async function statusLaunchAgent(options) {
   const paths = resolveServicePaths(options);
-  try {
-    const installedXml = await readFile(paths.plistPath, "utf8");
-    const desiredXml = createLaunchAgentPlistXml(paths);
+  const desiredXml = createLaunchAgentPlistXml(paths);
+  const snapshot = await inspectManagedCredentialSnapshot(paths);
+  const plistStats = await optionalLstat(paths.plistPath);
+  if (!plistStats) {
+    return {
+      ...paths,
+      installed: false,
+      plistSafe: true,
+      plistMatchesDesired: false,
+      matchesDesired: false,
+      ...snapshot,
+    };
+  }
+  if (plistStats.isSymbolicLink() || !plistStats.isFile()) {
     return {
       ...paths,
       installed: true,
-      matchesDesired: installedXml === desiredXml,
+      plistSafe: false,
+      plistMatchesDesired: false,
+      matchesDesired: false,
+      ...snapshot,
+    };
+  }
+
+  try {
+    const installedXml = await readFile(paths.plistPath, "utf8");
+    const plistMatchesDesired = installedXml === desiredXml;
+    return {
+      ...paths,
+      installed: true,
+      plistSafe: true,
+      plistMatchesDesired,
+      matchesDesired: plistMatchesDesired && snapshot.credentialSnapshotHealth === "valid",
+      ...snapshot,
     };
   } catch (error) {
-    if (error && typeof error === "object" && error.code === "ENOENT") {
+    if (isMissingFileError(error)) {
       return {
         ...paths,
         installed: false,
+        plistSafe: true,
+        plistMatchesDesired: false,
         matchesDesired: false,
+        ...snapshot,
       };
     }
     throw error;
@@ -313,6 +612,7 @@ function parseCommandLine(arguments_) {
     const match = /^--([^=]+)=(.*)$/.exec(argument);
     if (!match) throw new TypeError(`Unsupported argument: ${argument}`);
     const [, key, value] = match;
+    if (Object.hasOwn(options, key)) throw new TypeError(`Duplicate argument: --${key}`);
     options[key] = value;
   }
   if (!command) throw new TypeError("A command is required.");
@@ -323,6 +623,7 @@ function cliOptions(rawOptions) {
   return {
     projectRoot: rawOptions["project-root"],
     envFilePath: rawOptions["env-file-path"],
+    runtimeCredentialPath: rawOptions["runtime-credential-path"],
     homeDirectory: rawOptions["home-directory"],
     nodePath: rawOptions["node-path"],
     plistPath: rawOptions["plist-path"],
@@ -357,7 +658,10 @@ async function main() {
 
 if (import.meta.url === new URL(process.argv[1], "file:").href) {
   main().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : "macOS service command failed."}\n`);
+    const message = error instanceof Error ? error.message : "macOS service command failed.";
+    process.stderr.write(
+      `${message.replace(/\bsk-or-v1-[A-Za-z0-9_-]{12,}\b/g, "[redacted OpenRouter credential]")}\n`,
+    );
     process.exitCode = 1;
   });
 }

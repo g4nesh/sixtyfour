@@ -37,7 +37,7 @@ Paid OpenRouter credit avoids relying on a free-model allowance, but it is not a
 
 ## Persistent local iMac service
 
-For zero cloud-compute cost without Docker, build Atlas once and install the checked-in user LaunchAgent. It reads a caller-selected dotenv file through Node, consumes only `OPENROUTER_API_KEY`, discards every other loaded entry before importing Vinext, and runs the production build on `127.0.0.1:3000` with `openai/gpt-5.4-nano`.
+For zero cloud-compute cost without Docker, build Atlas once and install the checked-in user LaunchAgent. The foreground installer reads a caller-selected dotenv file once through the shared bounded reader, consumes only `OPENROUTER_API_KEY`, and atomically writes that one entry to `~/Library/Application Support/Atlas/openrouter.env`. The generated LaunchAgent reads only this managed snapshot and runs the production Vinext build on `127.0.0.1:3000` with `openai/gpt-5.4-nano`.
 
 From a durable checkout, build and write the LaunchAgent plist:
 
@@ -51,6 +51,8 @@ npm run macos:service -- install \
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/chat.ganstlr.atlas-backend.plist"
 ```
 
+The install command must run in the foreground because it is the only step that reads the caller-owned source path. Atlas creates the managed directory with mode `0700`, writes the snapshot with mode `0600`, and rejects symlink substitution. Neither the source path nor the key is written into the plist, command output, or logs. After a successful install, the original source can be moved or removed without affecting the service.
+
 The LaunchAgent starts after login, restarts Atlas after any exit, writes application logs under `~/Library/Logs/Atlas`, and wraps the process in `caffeinate -i` so ordinary idle sleep does not make the backend disappear. Rotate or remove those log files as part of normal host maintenance. The service does not run while the iMac is powered off, before a user logs in after reboot, after logout, or during manually requested sleep.
 
 Check health and service state without exposing the provider key:
@@ -60,14 +62,26 @@ curl --fail http://127.0.0.1:3000/api/health
 launchctl print "gui/$(id -u)/chat.ganstlr.atlas-backend"
 npm run macos:service -- status \
   --project-root="$PWD" \
-  --env-file-path="$PWD/.env" \
   --node-path="$(command -v node)" \
   --home-directory="$HOME"
 ```
 
-Restart after a new production build or credential rotation:
+`status` does not reread the caller-owned source. It reports whether the plist matches the desired snapshot-only definition and whether the managed directory and snapshot are present, private, symlink-free, and parseable, without returning credential contents.
+
+Restart after a new production build:
 
 ```sh
+launchctl kickstart -k "gui/$(id -u)/chat.ganstlr.atlas-backend"
+```
+
+To rotate the credential, rerun the foreground install with the replacement caller-owned source, then restart the loaded job. Reinstall atomically replaces the managed snapshot and restores its private file modes:
+
+```sh
+npm run macos:service -- install \
+  --project-root="$PWD" \
+  --env-file-path="/absolute/path/to/replacement-openrouter-credentials" \
+  --node-path="$(command -v node)" \
+  --home-directory="$HOME"
 launchctl kickstart -k "gui/$(id -u)/chat.ganstlr.atlas-backend"
 ```
 
@@ -77,10 +91,11 @@ To remove it, unload the job before deleting its plist:
 launchctl bootout "gui/$(id -u)/chat.ganstlr.atlas-backend"
 npm run macos:service -- uninstall \
   --project-root="$PWD" \
-  --env-file-path="$PWD/.env" \
   --node-path="$(command -v node)" \
   --home-directory="$HOME"
 ```
+
+Uninstall removes only the exact LaunchAgent plist and managed credential snapshot. It preserves the caller-owned source, application logs, and runtime state. A deleted managed snapshot is not recoverable; reinstall from the caller-owned source or a replacement credential file if the service is needed again.
 
 This LaunchAgent is deliberately loopback-only and uses the unauthenticated local bypass. Do not attach it to a tunnel, LAN listener, or public reverse proxy; use the authenticated container path for non-loopback ingress.
 
