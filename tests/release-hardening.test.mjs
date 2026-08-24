@@ -679,6 +679,77 @@ test("structured planner calls disable provider parallelism and repair multiple 
   assert.deepEqual(accounting.counts(), { reservations: 2, settlements: 2 });
 });
 
+test("non-strict planner tools still reject malformed action arguments through Atlas validation", async () => {
+  const engine = createEngine("Grace Hopper, US Navy", "planner-local-validation");
+  const selectedFrontierEntries = selectedPlannerFrontier(engine, ["search_web"], "planner-local-frontier");
+  assert.ok(selectedFrontierEntries.length > 0);
+  const requestBodies = [];
+  let attempt = 0;
+  const dependencies = createLiveDependencies(engine.snapshot().input, {
+    apiKey: "test-key",
+    model: "test/model",
+    fetch: async (_request, init = {}) => {
+      requestBodies.push(decodeRequestBody(init));
+      attempt += 1;
+      return providerResponse({
+        toolCalls: [
+          functionCall(
+            "propose_research_batch",
+            attempt === 1
+              ? {
+                  kind: "actions",
+                  decisionSummary: "Attempt a selected public search.",
+                  nextPhase: null,
+                  actions: [
+                    {
+                      frontierEntryId: selectedFrontierEntries[0].id,
+                      tool: "search_web",
+                      purpose: "Find a public professional source.",
+                      arguments: ["not", "an", "object"],
+                      candidateId: null,
+                    },
+                  ],
+                }
+              : {
+                  kind: "stop",
+                  decisionSummary: "Stop after the local validator rejected malformed action arguments.",
+                  nextPhase: null,
+                  actions: [],
+                },
+            `call-planner-validation-${attempt}`,
+          ),
+        ],
+        id: `generation-planner-validation-${attempt}`,
+      });
+    },
+  });
+  const accounting = modelAccounting();
+  const decision = await dependencies.planner({
+    schemaVersion: domain.SCHEMA_VERSION,
+    state: engine.snapshot(),
+    availableTools: ["search_web"],
+    legalNextPhases: ["classify"],
+    selectedFrontierEntries,
+    modelAccounting: accounting.value,
+  });
+
+  assert.equal(decision.kind, "stop");
+  assert.equal(attempt, 2, "malformed action arguments must trigger exactly one repair turn");
+  assert.deepEqual(
+    requestBodies.map(
+      (body) => body.tools.find((tool) => tool.function?.name === "propose_research_batch").function.strict,
+    ),
+    [false, false],
+  );
+  const rejection = requestBodies[1].messages.find((message) => message.role === "tool");
+  assert.deepEqual(JSON.parse(rejection.content), {
+    accepted: false,
+    error: "Decision failed local schema or policy validation.",
+  });
+  assert.match(requestBodies[1].messages.at(-1).content, /repair the decision once/i);
+  assert.deepEqual(accounting.counts(), { reservations: 2, settlements: 2 });
+});
+
 test("action policy scans nested string values and the runner ignores model-supplied budget classes", async () => {
   const safeTool = ["search_web"];
   for (const [purpose, argumentsValue] of [

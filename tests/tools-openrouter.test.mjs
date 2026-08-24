@@ -149,6 +149,39 @@ test("web search and custom functions default to auto single-submit tool calling
   assert.deepEqual(requests[1].body.messages[1].reasoning_details, opaqueReasoning);
 });
 
+test("OpenRouter omits temperature for OpenAI GPT-5 reasoning slugs and retains it for compatible models", async () => {
+  const requests = [];
+  const invoke = async (model, temperature) => {
+    const client = createOpenRouterClient({
+      provider: "openrouter",
+      apiKey: "test-key-not-real",
+      model,
+      endpoint: "https://router.example.com/api/v1/chat/completions",
+      fetch: async (_url, init) => {
+        requests.push(JSON.parse(new TextDecoder().decode(init.body)));
+        return new Response(
+          JSON.stringify({
+            id: `generation-${requests.length}`,
+            model,
+            choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Done." } }],
+            usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+    await client.complete({ messages: [{ role: "user", content: "Use the configured model." }], temperature });
+  };
+
+  await invoke("openai/gpt-5.4-nano", 0);
+  await invoke("openai/gpt-5.4-mini", 0);
+  await invoke("openai/gpt-4.1-mini", 0.25);
+
+  assert.equal("temperature" in requests[0], false);
+  assert.equal("temperature" in requests[1], false);
+  assert.equal(requests[2].temperature, 0.25);
+});
+
 test("provider errors never echo response bodies", async () => {
   const secretEcho = "sensitive prompt fragment";
   const logs = [];

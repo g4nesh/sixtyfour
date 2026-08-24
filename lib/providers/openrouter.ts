@@ -405,6 +405,15 @@ function normalizeTemperature(value: number): number {
   return value;
 }
 
+function requiresDefaultTemperature(provider: OpenRouterClientConfig["provider"], model: string): boolean {
+  const openAiReasoningModel = /^(?:gpt-5|o[134])(?:[.-]|$)/i;
+  if (provider === "openai") return openAiReasoningModel.test(model);
+  if (provider === undefined || provider === "openrouter") {
+    return /^openai\//i.test(model) && openAiReasoningModel.test(model.slice("openai/".length));
+  }
+  return false;
+}
+
 function normalizeAnthropicTemperature(value: number): number {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw new OpenRouterConfigurationError("Anthropic temperature must be a finite number between 0 and 1.");
@@ -1225,10 +1234,12 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
           ...(!isOpenAiCompat && options.reasoning ? { reasoning: options.reasoning } : {}),
           // Gemini's OpenAI-compat layer expects `max_tokens`; OpenAI uses `max_completion_tokens`.
           ...(tokenCap === undefined ? {} : isGemini ? { max_tokens: tokenCap } : { max_completion_tokens: tokenCap }),
-          // gpt-5 and o-series reasoning models only accept the default temperature.
+          // OpenAI GPT-5 and o-series reasoning models only accept their
+          // default temperature, including when addressed through OpenRouter's
+          // `openai/...` slug namespace.
           ...(options.temperature === undefined ||
           useOpenAiSearch ||
-          (isOpenAi && /^(?:gpt-5|o[134])/i.test(requestModel))
+          requiresDefaultTemperature(config.provider, requestModel)
             ? {}
             : { temperature: normalizeTemperature(options.temperature) }),
         };

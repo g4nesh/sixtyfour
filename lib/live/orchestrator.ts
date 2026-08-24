@@ -413,7 +413,11 @@ function decisionTool(
   return functionTool({
     name: "propose_research_batch",
     description: "Submit one bounded, policy-compliant research decision. Do not include private reasoning.",
-    strict: true,
+    // Planner actions intentionally carry a tool-specific free-form arguments
+    // object. OpenAI-backed OpenRouter routes reject strict schemas containing
+    // that open nested object, so the provider hint must stay non-strict. Atlas
+    // still parses and policy-validates every returned field below.
+    strict: false,
     parameters: {
       type: "object",
       additionalProperties: false,
