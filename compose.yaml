@@ -6,25 +6,34 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     environment:
-      ATLAS_LIVE_ENABLED: ${ATLAS_LIVE_ENABLED:-false}
-      ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true"
-      ATLAS_API_TOKEN: ${ATLAS_API_TOKEN:-}
-      LIVE_PROVIDER: ${LIVE_PROVIDER:-}
-      LIVE_SEARCH_PROVIDER: ${LIVE_SEARCH_PROVIDER:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      OPENAI_SEARCH_MODEL: ${OPENAI_SEARCH_MODEL:-gpt-4o-mini}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-5.4}
+      ATLAS_LIVE_ENABLED: ${ATLAS_LIVE_ENABLED:-true}
+      ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: ${ATLAS_ALLOW_UNAUTHENTICATED_LOCAL:-true}
+      LIVE_PROVIDER: ${LIVE_PROVIDER:-openrouter}
+      ATLAS_API_TOKEN_FILE: /run/secrets/atlas_api_token
+      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-5.4-mini}
       OPENROUTER_SITE_URL: ${OPENROUTER_SITE_URL:-http://localhost:3000}
       OPENROUTER_APP_NAME: ${OPENROUTER_APP_NAME:-Atlas}
+    secrets:
+      - atlas_api_token
+      - openrouter_api_key
     init: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+secrets:
+  atlas_api_token:
+    file: ${ATLAS_API_TOKEN_FILE:?Run npm run container:configure first}
+  openrouter_api_key:
+    file: ${OPENROUTER_API_KEY_FILE:?Run npm run container:configure first}

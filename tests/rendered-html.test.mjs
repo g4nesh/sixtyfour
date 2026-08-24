@@ -189,6 +189,12 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(workbench, /aria-live="polite"/);
   assert.match(workbench, /aria-describedby="research-scope-note"/);
   assert.match(workbench, /requestedDepth: "deep"/);
+  assert.match(workbench, /\/api\/live\/session/);
+  assert.match(workbench, /liveAuthorizationRequired/);
+  assert.match(workbench, /credentials: "same-origin"/);
+  assert.match(workbench, /type="password"/);
+  assert.match(workbench, /short-lived HttpOnly session/);
+  assert.doesNotMatch(workbench, /localStorage|sessionStorage/);
   assert.doesNotMatch(workbench, /ResearchDepth|researchDepth|atlas-research-depth|research-depth-select/);
   assert.doesNotMatch(workbench, /<span aria-hidden="true">A<\/span>/);
   assert.match(workbench, /AbortController/);
@@ -202,7 +208,18 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(workbench, /event\.key\.toLowerCase\(\) === "r"/);
   assert.doesNotMatch(workbench, /@xyflow\/react|elkjs/);
   assert.doesNotMatch(css, /\.atlas-wordmark\s*>\s*span|\.research-depth-select/);
-  assert.match(layout, /<html lang="en" className=\{`\$\{geistSans\.variable\}/);
+  assert.match(layout, /<html lang="en">/);
+  assert.doesNotMatch(layout, /next\/font\/google|fonts\.googleapis/);
+  assert.match(css, /@font-face\s*\{[\s\S]*font-family:\s*"Geist"/);
+  assert.match(css, /url\("\/fonts\/Geist-Variable\.woff2"\)/);
+  assert.match(css, /url\("\/fonts\/GeistMono-Variable\.woff2"\)/);
+  await Promise.all([
+    access(new URL("../public/fonts/Geist-Variable.woff2", import.meta.url)),
+    access(new URL("../public/fonts/Geist-Italic-Variable.woff2", import.meta.url)),
+    access(new URL("../public/fonts/GeistMono-Variable.woff2", import.meta.url)),
+    access(new URL("../public/fonts/GeistMono-Italic-Variable.woff2", import.meta.url)),
+    access(new URL("../public/fonts/GEIST-LICENSE.txt", import.meta.url)),
+  ]);
 
   assert.match(graphModel, /value\.schemaVersion !== 2/);
   assert.match(graphModel, /report\.searchGraph/);

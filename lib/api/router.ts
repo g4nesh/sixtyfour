@@ -25,18 +25,9 @@ export interface ApiEnvironment {
   ATLAS_API_TOKEN?: string;
   /** Local development escape hatch. Never enable on public ingress. */
   ATLAS_ALLOW_UNAUTHENTICATED_LOCAL?: string;
-  /** Prefer a provider: "openai" | "gemini" | "anthropic"/"claude" | "openrouter". */
+  /** Optional strict policy pin. Any nonempty value except "openrouter" fails closed. */
   LIVE_PROVIDER?: string;
-  /** Explicitly delegate grounded web discovery to OpenAI while keeping the selected reasoning provider. */
-  LIVE_SEARCH_PROVIDER?: string;
-  OPENAI_API_KEY?: string;
-  OPENAI_MODEL?: string;
-  OPENAI_SEARCH_MODEL?: string;
-  OPENAI_BASE_URL?: string;
-  GEMINI_API_KEY?: string;
-  GEMINI_MODEL?: string;
-  ANTHROPIC_API_KEY?: string;
-  ANTHROPIC_MODEL?: string;
+  /** The only externally configurable live provider credential. Keep server-side. */
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODEL?: string;
   OPENROUTER_SITE_URL?: string;
@@ -45,6 +36,15 @@ export interface ApiEnvironment {
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const MINIMUM_API_TOKEN_BYTES = 32;
+const LIVE_SESSION_COOKIE_NAME = "__Host-atlas_live_session";
+const LIVE_SESSION_VERSION = "v1";
+const LIVE_SESSION_TTL_SECONDS = 30 * 60;
+
+export interface ApiRuntime {
+  now?: () => number;
+  /** Internal test seam; production uses the real live orchestrator. */
+  streamLive?: typeof streamLiveResearch;
+}
 
 function localBypassEnabled(url: URL, environment: ApiEnvironment): boolean {
   return (
@@ -77,119 +77,113 @@ async function tokensMatch(left: string, right: string): Promise<boolean> {
   return difference === 0;
 }
 
-async function liveRequestAuthorized(request: Request, url: URL, environment: ApiEnvironment): Promise<boolean> {
+function bearerToken(request: Request): string | null {
+  const authorization = request.headers.get("authorization")?.trim() ?? "";
+  const match = /^Bearer ([^\s]{1,4096})$/i.exec(authorization);
+  return match?.[1] ?? null;
+}
+
+function hex(bytes: Uint8Array): string {
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function liveSessionSignature(apiToken: string, expiresAtSeconds: number): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(apiToken), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ]);
+  const payload = `${LIVE_SESSION_COOKIE_NAME}:${LIVE_SESSION_VERSION}:${expiresAtSeconds}`;
+  return hex(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(payload))));
+}
+
+function cookieValue(request: Request, name: string): string | null {
+  const header = request.headers.get("cookie");
+  if (!header || header.length > 8_192) return null;
+  const matches = header
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(`${name}=`))
+    .map((part) => part.slice(name.length + 1));
+  return matches.length === 1 && matches[0].length <= 256 ? matches[0] : null;
+}
+
+async function validLiveSession(request: Request, apiToken: string, nowMs: number): Promise<boolean> {
+  const value = cookieValue(request, LIVE_SESSION_COOKIE_NAME);
+  const match = value ? /^v1\.([1-9][0-9]{0,12})\.([a-f0-9]{64})$/.exec(value) : null;
+  if (!match) return false;
+  const expiresAtSeconds = Number(match[1]);
+  const nowSeconds = Math.floor(nowMs / 1_000);
+  if (
+    !Number.isSafeInteger(expiresAtSeconds) ||
+    expiresAtSeconds <= nowSeconds ||
+    expiresAtSeconds > nowSeconds + LIVE_SESSION_TTL_SECONDS
+  ) {
+    return false;
+  }
+  const expected = await liveSessionSignature(apiToken, expiresAtSeconds);
+  return tokensMatch(match[2], expected);
+}
+
+function liveSessionSetCookie(value: string, maxAgeSeconds: number): string {
+  return [
+    `${LIVE_SESSION_COOKIE_NAME}=${value}`,
+    "Path=/",
+    "HttpOnly",
+    "Secure",
+    "SameSite=Strict",
+    `Max-Age=${maxAgeSeconds}`,
+  ].join("; ");
+}
+
+async function createLiveSessionCookie(apiToken: string, nowMs: number): Promise<string> {
+  const expiresAtSeconds = Math.floor(nowMs / 1_000) + LIVE_SESSION_TTL_SECONDS;
+  const signature = await liveSessionSignature(apiToken, expiresAtSeconds);
+  return liveSessionSetCookie(`${LIVE_SESSION_VERSION}.${expiresAtSeconds}.${signature}`, LIVE_SESSION_TTL_SECONDS);
+}
+
+function clearLiveSessionCookie(): string {
+  return `${liveSessionSetCookie("", 0)}; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+}
+
+async function liveRequestAuthorized(
+  request: Request,
+  url: URL,
+  environment: ApiEnvironment,
+  nowMs: number,
+): Promise<boolean> {
   if (localBypassEnabled(url, environment)) return true;
   const expected = configuredApiToken(environment);
   if (!expected) return false;
-  const authorization = request.headers.get("authorization")?.trim() ?? "";
-  const match = /^Bearer ([^\s]{1,4096})$/i.exec(authorization);
-  return Boolean(match && (await tokensMatch(match[1], expected)));
+  const suppliedBearer = bearerToken(request);
+  if (suppliedBearer && (await tokensMatch(suppliedBearer, expected))) return true;
+  return validLiveSession(request, expected, nowMs);
 }
 
 interface ResolvedLiveProvider {
-  provider: "openai" | "openrouter" | "gemini" | "anthropic";
+  provider: "openrouter";
   apiKey: string;
   model: string;
-  searchModel?: string;
-  endpoint?: string;
   siteUrl?: string;
   appName?: string;
-  searchProvider?: "openai";
-  searchApiKey?: string;
-  searchEndpoint?: string;
 }
 
 /**
- * Resolve the live model provider from the environment.
- *
- * Selection: an explicit LIVE_PROVIDER wins; otherwise Gemini is used when its
- * key is present, then OpenAI, Anthropic, and OpenRouter. Health reports only
- * whether a usable server-side configuration exists; it never discloses this
- * selection.
- *
- * Gemini uses its native Google Search grounding path by default. A separate
- * OpenAI search surface is activated only by LIVE_SEARCH_PROVIDER=openai, so
- * merely configuring a second key never creates an implicit billing path.
+ * Resolve the only externally configurable live provider. Internal provider
+ * adapters remain available to focused tests, but HTTP and CLI ingress fail
+ * closed unless an OpenRouter credential is explicitly configured.
  */
 function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider | null {
-  const openaiKey = environment.OPENAI_API_KEY?.trim();
-  const geminiKey = environment.GEMINI_API_KEY?.trim();
-  const anthropicKey = environment.ANTHROPIC_API_KEY?.trim();
+  const policyPin = environment.LIVE_PROVIDER?.trim().toLowerCase();
+  if (policyPin && policyPin !== "openrouter") return null;
   const openrouterKey = environment.OPENROUTER_API_KEY?.trim();
-  const forced = environment.LIVE_PROVIDER?.trim().toLowerCase();
-  const openaiSearchModel = environment.OPENAI_SEARCH_MODEL?.trim() || "gpt-4o-mini";
-  const forcedSearchProvider = environment.LIVE_SEARCH_PROVIDER?.trim().toLowerCase();
-
-  const withSearchProvider = (config: ResolvedLiveProvider | null): ResolvedLiveProvider | null => {
-    if (!config || !forcedSearchProvider) return config;
-    // Cross-provider search is deliberately opt-in: it can consume a second
-    // provider's budget and must never happen merely because another key is
-    // present. An invalid or unconfigured explicit choice fails closed.
-    if (forcedSearchProvider !== "openai" || !openaiKey) return null;
-    if (config.provider === "openai") return config;
-    const base = environment.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1";
-    return {
-      ...config,
-      searchModel: openaiSearchModel,
-      searchProvider: "openai",
-      searchApiKey: openaiKey,
-      searchEndpoint: `${base.replace(/\/+$/, "")}/chat/completions`,
-    };
+  if (!openrouterKey) return null;
+  return {
+    provider: "openrouter",
+    apiKey: openrouterKey,
+    model: environment.OPENROUTER_MODEL?.trim() || "openai/gpt-5.4-mini",
+    siteUrl: environment.OPENROUTER_SITE_URL?.trim(),
+    appName: environment.OPENROUTER_APP_NAME?.trim(),
   };
-
-  const openaiConfig = (): ResolvedLiveProvider | null => {
-    if (!openaiKey) return null;
-    const base = environment.OPENAI_BASE_URL?.trim();
-    return {
-      provider: "openai",
-      apiKey: openaiKey,
-      model: environment.OPENAI_MODEL?.trim() || "gpt-4o-mini",
-      searchModel: openaiSearchModel,
-      ...(base ? { endpoint: `${base.replace(/\/+$/, "")}/chat/completions` } : {}),
-    };
-  };
-
-  const geminiConfig = (): ResolvedLiveProvider | null => {
-    if (!geminiKey) return null;
-    return {
-      provider: "gemini",
-      apiKey: geminiKey,
-      model: environment.GEMINI_MODEL?.trim() || "gemini-3.6-flash",
-      endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    };
-  };
-
-  const anthropicConfig = (): ResolvedLiveProvider | null => {
-    if (!anthropicKey) return null;
-    return {
-      provider: "anthropic",
-      apiKey: anthropicKey,
-      model: environment.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514",
-      endpoint: "https://api.anthropic.com/v1/messages",
-    };
-  };
-
-  const openrouterConfig = (): ResolvedLiveProvider | null => {
-    if (!openrouterKey) return null;
-    return {
-      provider: "openrouter",
-      apiKey: openrouterKey,
-      model: environment.OPENROUTER_MODEL?.trim() || "openai/gpt-5.4",
-      siteUrl: environment.OPENROUTER_SITE_URL?.trim(),
-      appName: environment.OPENROUTER_APP_NAME?.trim(),
-    };
-  };
-
-  const fallbacks = () => geminiConfig() ?? openaiConfig() ?? anthropicConfig() ?? openrouterConfig();
-  if (forced === "gemini")
-    return withSearchProvider(geminiConfig() ?? openaiConfig() ?? anthropicConfig() ?? openrouterConfig());
-  if (forced === "openai")
-    return withSearchProvider(openaiConfig() ?? geminiConfig() ?? anthropicConfig() ?? openrouterConfig());
-  if (forced === "anthropic" || forced === "claude")
-    return withSearchProvider(anthropicConfig() ?? openaiConfig() ?? geminiConfig() ?? openrouterConfig());
-  if (forced === "openrouter")
-    return withSearchProvider(openrouterConfig() ?? openaiConfig() ?? geminiConfig() ?? anthropicConfig());
-  return withSearchProvider(fallbacks());
 }
 
 const FINDING_CATEGORIES: readonly FindingCategory[] = [
@@ -582,8 +576,13 @@ export function traceNdjsonResponse(
   });
 }
 
-export async function handleApiRequest(request: Request, environment: ApiEnvironment): Promise<Response | null> {
+export async function handleApiRequest(
+  request: Request,
+  environment: ApiEnvironment,
+  runtime: ApiRuntime = {},
+): Promise<Response | null> {
   const url = new URL(request.url);
+  const nowMs = (runtime.now ?? Date.now)();
 
   if (url.pathname === "/api/health") {
     if (request.method !== "GET") return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "GET" });
@@ -597,6 +596,50 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
       replayReady: true,
       exampleCount: listReplayExamples().length,
       liveConfigured,
+      liveAuthorizationRequired: liveConfigured && !localBypassEnabled(url, environment),
+    });
+  }
+
+  if (url.pathname === "/api/live/session") {
+    if (request.method === "DELETE") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "cache-control": "no-store",
+          "set-cookie": clearLiveSessionCookie(),
+        },
+      });
+    }
+    if (request.method === "GET") {
+      const apiToken = configuredApiToken(environment);
+      const authenticated =
+        localBypassEnabled(url, environment) || Boolean(apiToken && (await validLiveSession(request, apiToken, nowMs)));
+      return authenticated
+        ? jsonResponse({ authenticated: true })
+        : jsonResponse({ authenticated: false }, 401, { "www-authenticate": 'Bearer realm="atlas-live"' });
+    }
+    if (request.method !== "POST") {
+      return jsonResponse({ error: "method_not_allowed" }, 405, { allow: "GET, POST, DELETE" });
+    }
+    const apiToken = configuredApiToken(environment);
+    if (environment.ATLAS_LIVE_ENABLED?.trim() !== "true" || !resolveLiveProvider(environment) || !apiToken) {
+      return jsonResponse(
+        { error: "live_authorization_unavailable", message: "Live authorization is not configured." },
+        503,
+      );
+    }
+    const suppliedBearer = bearerToken(request);
+    if (!suppliedBearer || !(await tokensMatch(suppliedBearer, apiToken))) {
+      return jsonResponse({ error: "unauthorized", message: "Valid live research authorization is required." }, 401, {
+        "www-authenticate": 'Bearer realm="atlas-live"',
+      });
+    }
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "cache-control": "no-store",
+        "set-cookie": await createLiveSessionCookie(apiToken, nowMs),
+      },
     });
   }
 
@@ -685,28 +728,24 @@ export async function handleApiRequest(request: Request, environment: ApiEnviron
     const events = immediateTerminalTrace(
       input,
       "configuration_error",
-      "Live HTTP research requires explicit enablement, a server-side model key, and protected ingress.",
+      "Live HTTP research requires explicit enablement, a server-side OpenRouter key, and protected ingress.",
     );
     return traceNdjsonResponse(() => replayEvents(events), request.signal, input, "live");
   }
-  if (!(await liveRequestAuthorized(request, url, environment))) {
+  if (!(await liveRequestAuthorized(request, url, environment, nowMs))) {
     return jsonResponse({ error: "unauthorized", message: "Valid live research authorization is required." }, 401, {
       "www-authenticate": 'Bearer realm="atlas-live"',
     });
   }
+  const liveStream = runtime.streamLive ?? streamLiveResearch;
   return traceNdjsonResponse(
     (signal) =>
-      streamLiveResearch(input, {
+      liveStream(input, {
         provider: provider.provider,
         apiKey: provider.apiKey,
         model: provider.model,
-        ...(provider.searchModel ? { searchModel: provider.searchModel } : {}),
-        ...(provider.endpoint ? { endpoint: provider.endpoint } : {}),
         ...(provider.siteUrl ? { siteUrl: provider.siteUrl } : {}),
         ...(provider.appName ? { appName: provider.appName } : {}),
-        ...(provider.searchProvider ? { searchProvider: provider.searchProvider } : {}),
-        ...(provider.searchApiKey ? { searchApiKey: provider.searchApiKey } : {}),
-        ...(provider.searchEndpoint ? { searchEndpoint: provider.searchEndpoint } : {}),
         // Injected DNS validation lets public-source fetches resolve arbitrary
         // hosts while the hardened fetch still rejects private/loopback answers.
         resolveHostname: createDohResolver(),

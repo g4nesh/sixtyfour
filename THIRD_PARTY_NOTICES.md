@@ -12,5 +12,6 @@ Atlas uses the following principal directly imported open-source application and
 | `zod`                  | 4.4.3   | Dependency-compatible schema runtime          | MIT                         | <https://github.com/colinhacks/zod>           |
 | `playwright`           | 1.62.1  | Deterministic desktop/mobile browser QA       | Apache-2.0                  | <https://github.com/microsoft/playwright>     |
 | `selenium-webdriver`   | 4.47.0  | Independent browser-engine geometry smoke     | Apache-2.0                  | <https://github.com/SeleniumHQ/selenium>      |
+| Geist Sans / Mono      | 1.7.2   | Self-hosted dashboard typography              | SIL Open Font License 1.1   | <https://github.com/vercel/geist-font>        |
 
-Atlas does not modify or remove upstream copyright or license files. This notice summarizes direct dependency metadata and does not replace the full license terms shipped by those projects.
+Atlas does not modify or remove upstream copyright or license files. The Geist license is shipped at `public/fonts/GEIST-LICENSE.txt`. This notice summarizes direct dependency metadata and does not replace the full license terms shipped by those projects.

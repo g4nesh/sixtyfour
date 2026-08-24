@@ -88,7 +88,7 @@ test("web search and custom functions default to auto single-submit tool calling
   const completion = await client.complete({
     messages: [{ role: "user", content: "research the supplied target" }],
     tools: [githubTool],
-    webSearch: { max_results: 4, max_total_results: 10, allowed_domains: ["example.com"] },
+    webSearch: { max_uses: 9, max_results: 4, max_total_results: 10, allowed_domains: ["example.com"] },
     reasoning: { effort: "high" },
   });
 
@@ -102,6 +102,20 @@ test("web search and custom functions default to auto single-submit tool calling
   assert.deepEqual(
     requests[0].body.tools.map((tool) => tool.type),
     ["function", "openrouter:web_search"],
+  );
+  assert.deepEqual(requests[0].body.tools[1], {
+    type: "openrouter:web_search",
+    parameters: {
+      max_uses: 1,
+      max_results: 4,
+      max_total_results: 10,
+      allowed_domains: ["example.com"],
+    },
+  });
+  assert.equal(
+    requests[0].body.max_tool_calls,
+    1,
+    "OpenRouter must enforce one provider-independent server-tool step in addition to the native max_uses hint",
   );
   assert.deepEqual(completion.message.reasoning_details, opaqueReasoning);
   assert.equal(Object.hasOwn(completion.message, "reasoning"), false);
@@ -127,6 +141,11 @@ test("web search and custom functions default to auto single-submit tool calling
   await client.complete({ messages: [...nextMessages, toolMessage], tools: [githubTool] });
   assert.equal(requests.length, 2);
   assert.equal(requests[1].body.parallel_tool_calls, false);
+  assert.equal(
+    "max_tool_calls" in requests[1].body,
+    false,
+    "ordinary function-only turns must not inherit the search-specific tool-call cap",
+  );
   assert.deepEqual(requests[1].body.messages[1].reasoning_details, opaqueReasoning);
 });
 
@@ -422,4 +441,5 @@ test("usage normalization rejects negative and non-finite counters", () => {
   assert.throws(() => webSearchTool({ allowed_domains: ["https://example.com/path"] }), {
     code: "openrouter_configuration_error",
   });
+  assert.equal(webSearchTool({ max_uses: 20 }).parameters.max_uses, 1);
 });

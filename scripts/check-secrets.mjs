@@ -34,7 +34,7 @@ const textExtensions = new Set([
 ]);
 const signatures = [
   ["OpenAI API key", /\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b/g],
-  ["OpenRouter API key", /\bsk-or-v1-[A-Za-z0-9]{32,}\b/g],
+  ["OpenRouter API key", /\bsk-or-v1-[A-Za-z0-9_-]{32,}\b/g],
   ["Google API key", /\bAIza[0-9A-Za-z_-]{35}\b/g],
   ["GitHub token", /\bgh[pousr]_[A-Za-z0-9]{30,}\b/g],
   ["AWS access key", /\bAKIA[0-9A-Z]{16}\b/g],
@@ -45,6 +45,7 @@ const signatures = [
 async function filesUnder(directory) {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
     if (!entry.isDirectory() && ignoredFiles.has(entry.name)) continue;
     const path = resolve(directory, entry.name);

@@ -22,6 +22,7 @@ export interface OpenRouterWebSearchTool {
   type: "openrouter:web_search";
   parameters?: {
     engine?: "auto" | "native" | "exa" | "firecrawl" | "parallel" | "perplexity";
+    max_uses?: number;
     max_results?: number;
     max_total_results?: number;
     max_characters?: number;
@@ -335,7 +336,11 @@ export function webSearchTool(parameters: OpenRouterWebSearchTool["parameters"] 
   if (parameters.allowed_domains?.length && parameters.excluded_domains?.length) {
     throw new OpenRouterConfigurationError("allowed_domains and excluded_domains cannot be combined.");
   }
-  const normalized: NonNullable<OpenRouterWebSearchTool["parameters"]> = {};
+  const normalized: NonNullable<OpenRouterWebSearchTool["parameters"]> = {
+    // An Atlas frontier action owns one bounded query. Prevent the provider's
+    // server tool from recursively searching more than once for that action.
+    max_uses: boundedInteger(parameters.max_uses, 1, 1, 1),
+  };
   if (parameters.engine) normalized.engine = parameters.engine;
   if (parameters.max_results !== undefined) {
     normalized.max_results = boundedInteger(parameters.max_results, 5, 1, 20);
@@ -353,9 +358,7 @@ export function webSearchTool(parameters: OpenRouterWebSearchTool["parameters"] 
   if (parameters.excluded_domains?.length) {
     normalized.excluded_domains = [...new Set(parameters.excluded_domains.map(normalizeDomain))];
   }
-  return Object.keys(normalized).length
-    ? { type: "openrouter:web_search", parameters: normalized }
-    : { type: "openrouter:web_search" };
+  return { type: "openrouter:web_search", parameters: normalized };
 }
 
 export function functionTool(input: {
@@ -1211,6 +1214,12 @@ export function createOpenRouterClient(config: OpenRouterClientConfig) {
                 tool_choice: "auto",
                 parallel_tool_calls: options.parallelToolCalls ?? false,
               }
+            : {}),
+          // `max_uses` is forwarded only by some native providers. OpenRouter's
+          // top-level budget is the provider-independent hard stop that keeps
+          // one Atlas search action to one server-tool call.
+          ...(!isOpenAiCompat && bodyTools.some((tool) => tool.type === "openrouter:web_search")
+            ? { max_tool_calls: 1 }
             : {}),
           // `reasoning` is an OpenRouter extension; OpenAI/Gemini chat reject it.
           ...(!isOpenAiCompat && options.reasoning ? { reasoning: options.reasoning } : {}),

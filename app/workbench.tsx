@@ -174,6 +174,10 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
   const [message, setMessage] = useState("Describe the person with any public-professional context you have.");
   const [executionMode, setExecutionMode] = useState<ResearchExecutionMode | null>(null);
   const [liveConfigured, setLiveConfigured] = useState<boolean | null>(null);
+  const [liveAuthorizationRequired, setLiveAuthorizationRequired] = useState<boolean | null>(null);
+  const [liveSessionAuthenticated, setLiveSessionAuthenticated] = useState(false);
+  const [accessToken, setAccessToken] = useState("");
+  const [accessStatus, setAccessStatus] = useState("");
   const [graphView, setGraphView] = useState<GraphView>("graph");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [focusedStableId, setFocusedStableId] = useState<string | null>(null);
@@ -217,11 +221,62 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
 
   useEffect(() => {
     void fetch("/api/health", { headers: { accept: "application/json" } })
-      .then(async (response) => (response.ok ? ((await response.json()) as { liveConfigured?: boolean }) : null))
-      .then((health) => setLiveConfigured(health?.liveConfigured ?? false))
-      .catch(() => setLiveConfigured(false));
+      .then(async (response) =>
+        response.ok
+          ? ((await response.json()) as { liveConfigured?: boolean; liveAuthorizationRequired?: boolean })
+          : null,
+      )
+      .then(async (health) => {
+        setLiveConfigured(health?.liveConfigured ?? false);
+        const authorizationRequired = health?.liveAuthorizationRequired === true;
+        setLiveAuthorizationRequired(authorizationRequired);
+        if (!authorizationRequired) {
+          setLiveSessionAuthenticated(true);
+          return;
+        }
+        const session = await fetch("/api/live/session", {
+          method: "GET",
+          headers: { accept: "application/json" },
+          credentials: "same-origin",
+        });
+        setLiveSessionAuthenticated(session.ok);
+      })
+      .catch(() => {
+        setLiveConfigured(false);
+        setLiveAuthorizationRequired(false);
+        setLiveSessionAuthenticated(true);
+      });
     return () => abortRef.current?.abort();
   }, []);
+
+  const unlockLiveSession = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const token = accessToken.trim();
+    if (new TextEncoder().encode(token).byteLength < 32) {
+      setAccessStatus("Enter the server's Atlas access token.");
+      return;
+    }
+    setAccessStatus("Unlocking this session…");
+    setAccessToken("");
+    try {
+      const response = await fetch("/api/live/session", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        setLiveSessionAuthenticated(false);
+        setAccessStatus("That Atlas access token was not accepted.");
+        return;
+      }
+      setLiveSessionAuthenticated(true);
+      setAccessStatus("");
+      setMessage("Private live session unlocked. The provider key remains server-side.");
+    } catch {
+      setLiveSessionAuthenticated(false);
+      setAccessStatus("The server could not establish a private session.");
+    }
+  };
 
   const ingestEvent = useCallback(
     (streamed: TraceEvent): string | undefined => {
@@ -247,6 +302,14 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
 
   const startResearch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (liveAuthorizationRequired === null) {
+      setMessage("Checking the live server authorization boundary…");
+      return;
+    }
+    if (liveAuthorizationRequired && !liveSessionAuthenticated) {
+      setMessage("Unlock a private live session before starting research.");
+      return;
+    }
     const trimmed = query.trim();
     if (!trimmed) {
       setMessage("Describe the person with a name or other public-professional context.");
@@ -277,6 +340,10 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
       });
       if (abortRef.current !== controller || controller.signal.aborted) return;
       if (!response.ok || !response.body) {
+        if (response.status === 401) {
+          setLiveSessionAuthenticated(false);
+          setAccessStatus("Your Atlas access session expired. Enter the access token again.");
+        }
         const detail = await response.text();
         throw new Error(detail || `Research failed (${response.status})`);
       }
@@ -422,6 +489,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
   );
 
   const idle = runStatus === "idle" && !report;
+  const researchAuthorized = liveAuthorizationRequired === false || liveSessionAuthenticated;
 
   return (
     <div className="atlas-shell">
@@ -460,6 +528,7 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
           <button
             className="run-button"
             type="button"
+            disabled={!researchAuthorized}
             onClick={() => document.querySelector<HTMLFormElement>(".command-search")?.requestSubmit()}
           >
             <PlayIcon />
@@ -516,6 +585,34 @@ export function AtlasWorkbench({ onDownloadMarkdown, onDownloadPdf }: AtlasWorkb
             school. Home addresses, personal phones, data-broker records, and research about minors are refused.
           </p>
         </div>
+
+        {liveAuthorizationRequired === true && !liveSessionAuthenticated ? (
+          <section className="access-gate" aria-labelledby="atlas-access-title">
+            <span className="access-kicker">Private deployment</span>
+            <h2 id="atlas-access-title">Unlock live research</h2>
+            <p>
+              Enter the separate Atlas access token. It is exchanged for a short-lived HttpOnly session and is never
+              written to browser storage by Atlas.
+            </p>
+            <form onSubmit={unlockLiveSession}>
+              <label htmlFor="atlas-access-token">Atlas access token</label>
+              <div>
+                <input
+                  id="atlas-access-token"
+                  type="password"
+                  value={accessToken}
+                  onChange={(event) => setAccessToken(event.target.value)}
+                  autoComplete="off"
+                  spellCheck="false"
+                />
+                <button type="submit">Unlock</button>
+              </div>
+            </form>
+            <p className="access-status" role="status" aria-live="polite">
+              {accessStatus}
+            </p>
+          </section>
+        ) : null}
 
         {idle ? (
           <div className="empty-hint">

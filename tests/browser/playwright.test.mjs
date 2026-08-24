@@ -451,6 +451,82 @@ test(
   },
 );
 
+test("remote dashboard exchanges the Atlas bearer once and keeps research requests cookie-only", async () => {
+  await assertServerReady();
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: viewports[0] });
+  const atlasAccessToken = "a".repeat(48);
+  const sessionRequests = [];
+  let researchAuthorization = null;
+  try {
+    await page.route("**/api/health", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          liveConfigured: true,
+          liveAuthorizationRequired: true,
+        }),
+      }),
+    );
+    await page.route("**/api/live/session", async (route) => {
+      const request = route.request();
+      sessionRequests.push({ method: request.method(), authorization: request.headers().authorization ?? null });
+      if (request.method() === "GET") {
+        await route.fulfill({ status: 401, contentType: "application/json", body: '{"authenticated":false}\n' });
+        return;
+      }
+      assert.equal(request.method(), "POST");
+      await route.fulfill({
+        status: 204,
+        headers: {
+          "set-cookie": "__Host-atlas_live_session=v1.mock.signature; Path=/; HttpOnly; Secure; SameSite=Strict",
+        },
+      });
+    });
+    await page.route("**/api/research", async (route) => {
+      researchAuthorization = route.request().headers().authorization ?? null;
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: '{"error":"unauthorized","message":"Session expired."}\n',
+      });
+    });
+
+    await page.goto(baseUrl.href, { waitUntil: "domcontentloaded" });
+    const accessInput = page.getByLabel("Atlas access token");
+    await accessInput.waitFor({ state: "visible" });
+    assert.equal(await page.getByRole("button", { name: "Research", exact: true }).isDisabled(), true);
+    await accessInput.fill(atlasAccessToken);
+    await page.getByRole("button", { name: "Unlock", exact: true }).click();
+    await accessInput.waitFor({ state: "hidden" });
+    assert.equal(await page.getByRole("button", { name: "Research", exact: true }).isEnabled(), true);
+    assert.deepEqual(sessionRequests, [
+      { method: "GET", authorization: null },
+      { method: "POST", authorization: `Bearer ${atlasAccessToken}` },
+    ]);
+
+    const browserStorage = await page.evaluate(() => ({
+      local: Object.values(localStorage),
+      session: Object.values(sessionStorage),
+      text: document.body.textContent,
+    }));
+    assert.equal(browserStorage.local.includes(atlasAccessToken), false);
+    assert.equal(browserStorage.session.includes(atlasAccessToken), false);
+    assert.equal(browserStorage.text.includes(atlasAccessToken), false);
+
+    await page.getByRole("searchbox", { name: "Public-professional research input" }).fill("Alex Rivera");
+    const researchResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/research");
+    await page.getByRole("button", { name: "Research", exact: true }).click();
+    await researchResponse;
+    assert.equal(researchAuthorization, null, "the long-lived Atlas bearer leaked into a research request");
+    await page.getByText(/access session expired/i).waitFor({ state: "visible" });
+  } finally {
+    await browser.close();
+  }
+});
+
 test(
   "dense intercepted NDJSON has collision-free desktop and mobile graph geometry",
   { timeout: 240_000 },

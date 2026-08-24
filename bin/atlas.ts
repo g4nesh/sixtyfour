@@ -22,12 +22,9 @@ Usage:
   npm run atlas -- research [--mode replay|live] [--example <id>] [--depth quick|standard|deep] [--ndjson] <query>
 
 Replay is the default and performs zero network requests. Live mode requires
-a server-side OpenAI, Gemini, Anthropic Claude, or OpenRouter key in the process environment.
-Use LIVE_PROVIDER=openai|gemini|anthropic|openrouter to prefer one when its key is configured
-(claude is accepted as an alias for anthropic);
-otherwise Atlas selects the first configured provider in its documented order.
-Set LIVE_SEARCH_PROVIDER=openai to explicitly use OpenAI Responses web_search
-while keeping Gemini, Anthropic, or OpenRouter for reasoning turns.
+a server-side OpenRouter key in OPENROUTER_API_KEY. OpenRouter handles planning,
+tool calling, and one bounded server-side web search per discovery action.
+LIVE_PROVIDER may be unset or pinned to openrouter; every other value fails closed.
 Ctrl-C propagates cancellation to the same engine used by the HTTP API.
 `;
 
@@ -43,15 +40,6 @@ export function cliApiEnvironment(
     ATLAS_LIVE_ENABLED: mode === "live" ? "true" : undefined,
     ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
     LIVE_PROVIDER: environment.LIVE_PROVIDER,
-    LIVE_SEARCH_PROVIDER: environment.LIVE_SEARCH_PROVIDER,
-    OPENAI_API_KEY: environment.OPENAI_API_KEY,
-    OPENAI_MODEL: environment.OPENAI_MODEL,
-    OPENAI_SEARCH_MODEL: environment.OPENAI_SEARCH_MODEL,
-    OPENAI_BASE_URL: environment.OPENAI_BASE_URL,
-    GEMINI_API_KEY: environment.GEMINI_API_KEY,
-    GEMINI_MODEL: environment.GEMINI_MODEL,
-    ANTHROPIC_API_KEY: environment.ANTHROPIC_API_KEY,
-    ANTHROPIC_MODEL: environment.ANTHROPIC_MODEL,
     OPENROUTER_API_KEY: environment.OPENROUTER_API_KEY,
     OPENROUTER_MODEL: environment.OPENROUTER_MODEL,
     OPENROUTER_SITE_URL: environment.OPENROUTER_SITE_URL,

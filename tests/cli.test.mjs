@@ -25,13 +25,12 @@ function runAtlas(arguments_) {
   });
 }
 
-test("CLI help documents every supported live provider", () => {
+test("CLI help documents the OpenRouter-only live boundary", () => {
   const result = runAtlas(["help"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /OpenAI, Gemini, Anthropic Claude, or OpenRouter/);
-  assert.match(result.stdout, /LIVE_PROVIDER=openai\|gemini\|anthropic\|openrouter/);
-  assert.match(result.stdout, /claude.*alias.*anthropic/i);
-  assert.match(result.stdout, /LIVE_SEARCH_PROVIDER=openai/);
+  assert.match(result.stdout, /server-side OpenRouter key in OPENROUTER_API_KEY/);
+  assert.match(result.stdout, /LIVE_PROVIDER.*pinned to openrouter/);
+  assert.doesNotMatch(result.stdout, /OpenAI|Gemini|Anthropic|LIVE_SEARCH_PROVIDER/);
 });
 
 test("configured live CLI uses the loopback-only ingress bypass", async () => {
@@ -58,9 +57,12 @@ test("configured live CLI uses the loopback-only ingress bypass", async () => {
     assert.equal(researchUrl.hostname, "localhost");
     assert.equal(researchUrl.pathname, "/api/research");
     assert.equal(environment.ATLAS_ALLOW_UNAUTHENTICATED_LOCAL, "true");
-    assert.equal(environment.LIVE_SEARCH_PROVIDER, "openai");
-    assert.equal(environment.ANTHROPIC_API_KEY, "claude-secret");
-    assert.equal(environment.ANTHROPIC_MODEL, "claude-test-model");
+    assert.equal(environment.LIVE_PROVIDER, "openrouter");
+    assert.equal(environment.OPENROUTER_API_KEY, "server-secret");
+    assert.equal("LIVE_SEARCH_PROVIDER" in environment, false);
+    assert.equal("OPENAI_API_KEY" in environment, false);
+    assert.equal("ANTHROPIC_API_KEY" in environment, false);
+    assert.equal("ANTHROPIC_MODEL" in environment, false);
     assert.equal(environment.ATLAS_API_TOKEN, undefined);
   } finally {
     await vite.close();

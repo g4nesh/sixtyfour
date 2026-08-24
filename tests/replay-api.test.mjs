@@ -965,6 +965,7 @@ test("health and example APIs expose replay readiness without leaking configurat
     replayReady: true,
     exampleCount: 3,
     liveConfigured: false,
+    liveAuthorizationRequired: false,
   });
   const keyOnlyHealth = await api.handleApiRequest(new Request("https://atlas.test/api/health"), {
     OPENROUTER_API_KEY: "server-secret",
@@ -983,6 +984,7 @@ test("health and example APIs expose replay readiness without leaking configurat
     replayReady: true,
     exampleCount: 3,
     liveConfigured: true,
+    liveAuthorizationRequired: true,
   });
   const unprotectedHealth = await api.handleApiRequest(new Request("https://atlas.test/api/health"), {
     ATLAS_LIVE_ENABLED: "true",
@@ -992,18 +994,14 @@ test("health and example APIs expose replay readiness without leaking configurat
   const localHealth = await api.handleApiRequest(new Request("http://localhost/api/health"), {
     ATLAS_LIVE_ENABLED: "true",
     ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    LIVE_PROVIDER: "openrouter",
     OPENROUTER_API_KEY: "server-secret",
   });
-  assert.equal((await localHealth.json()).liveConfigured, true);
-  const missingDelegatedSearchKey = await api.handleApiRequest(new Request("http://localhost/api/health"), {
-    ATLAS_LIVE_ENABLED: "true",
-    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
-    LIVE_PROVIDER: "gemini",
-    LIVE_SEARCH_PROVIDER: "openai",
-    GEMINI_API_KEY: "reasoning-secret",
-  });
-  assert.equal((await missingDelegatedSearchKey.json()).liveConfigured, false);
-  const configuredDelegatedSearch = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+  const localPayload = await localHealth.json();
+  assert.equal(localPayload.liveConfigured, true);
+  assert.equal(localPayload.liveAuthorizationRequired, false);
+
+  const staleDirectProvider = await api.handleApiRequest(new Request("http://localhost/api/health"), {
     ATLAS_LIVE_ENABLED: "true",
     ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
     LIVE_PROVIDER: "gemini",
@@ -1011,33 +1009,150 @@ test("health and example APIs expose replay readiness without leaking configurat
     GEMINI_API_KEY: "reasoning-secret",
     OPENAI_API_KEY: "search-secret",
   });
-  assert.equal((await configuredDelegatedSearch.json()).liveConfigured, true);
-  for (const provider of ["anthropic", "claude"]) {
-    const anthropicHealth = await api.handleApiRequest(new Request("http://localhost/api/health"), {
-      ATLAS_LIVE_ENABLED: "true",
-      ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
-      LIVE_PROVIDER: provider,
-      ANTHROPIC_API_KEY: "claude-secret",
-      ANTHROPIC_MODEL: "claude-test-model",
-    });
-    const anthropicPayload = await anthropicHealth.json();
-    assert.equal(anthropicPayload.liveConfigured, true);
-    assert.equal("provider" in anthropicPayload, false);
-    assert.equal("model" in anthropicPayload, false);
-  }
-  const anthropicMissingDelegatedSearch = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+  assert.equal((await staleDirectProvider.json()).liveConfigured, false);
+
+  const rejectedPolicyPin = await api.handleApiRequest(new Request("http://localhost/api/health"), {
     ATLAS_LIVE_ENABLED: "true",
     ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
-    LIVE_PROVIDER: "anthropic",
+    LIVE_PROVIDER: "openai",
+    OPENROUTER_API_KEY: "server-secret",
+  });
+  assert.equal((await rejectedPolicyPin.json()).liveConfigured, false);
+
+  const openRouterOnly = await api.handleApiRequest(new Request("http://localhost/api/health"), {
+    ATLAS_LIVE_ENABLED: "true",
+    ATLAS_ALLOW_UNAUTHENTICATED_LOCAL: "true",
+    LIVE_PROVIDER: "openrouter",
+    OPENROUTER_API_KEY: "server-secret",
     LIVE_SEARCH_PROVIDER: "openai",
     ANTHROPIC_API_KEY: "claude-secret",
+    GEMINI_API_KEY: "gemini-secret",
+    OPENAI_API_KEY: "openai-secret",
   });
-  assert.equal((await anthropicMissingDelegatedSearch.json()).liveConfigured, false);
+  const openRouterPayload = await openRouterOnly.json();
+  assert.equal(openRouterPayload.liveConfigured, true);
+  for (const forbidden of ["provider", "model", "apiKey", "searchProvider"]) {
+    assert.equal(forbidden in openRouterPayload, false);
+  }
   const response = await api.handleApiRequest(new Request("https://atlas.test/api/examples/python-creator"), {});
   const payload = await response.json();
   assert.equal(payload.id, "python-creator");
   assert.equal(payload.input.query, "the creator of Python");
   assert.equal(payload.trace.at(-1).name, "result.terminal");
+});
+
+test("remote live sessions authenticate once, expire, reject tampering, and never disclose the token", async () => {
+  const now = Date.parse("2026-08-23T12:00:00.000Z");
+  const apiToken = `atlas-test-token-${"x".repeat(48)}`;
+  const environment = {
+    ATLAS_LIVE_ENABLED: "true",
+    LIVE_PROVIDER: "openrouter",
+    OPENROUTER_API_KEY: "test-openrouter-key-not-real",
+    ATLAS_API_TOKEN: apiToken,
+  };
+  const loginRequest = (token) =>
+    new Request("https://atlas.test/api/live/session", {
+      method: "POST",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+
+  for (const request of [loginRequest(), loginRequest("wrong-token")]) {
+    const response = await api.handleApiRequest(request, environment, { now: () => now });
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("set-cookie"), null);
+    assert.equal((await response.text()).includes(apiToken), false);
+  }
+
+  const unavailable = await api.handleApiRequest(loginRequest(apiToken), {
+    ...environment,
+    OPENROUTER_API_KEY: undefined,
+  });
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.text()).includes(apiToken), false);
+
+  const login = await api.handleApiRequest(loginRequest(apiToken), environment, { now: () => now });
+  assert.equal(login.status, 204);
+  assert.equal(await login.text(), "");
+  const setCookie = login.headers.get("set-cookie");
+  assert.ok(setCookie);
+  assert.match(setCookie, /^__Host-atlas_live_session=v1\.[0-9]+\.[a-f0-9]{64};/);
+  assert.match(setCookie, /Path=\//);
+  assert.match(setCookie, /HttpOnly/);
+  assert.match(setCookie, /Secure/);
+  assert.match(setCookie, /SameSite=Strict/);
+  assert.match(setCookie, /Max-Age=1800/);
+  assert.equal(setCookie.includes(apiToken), false);
+  const cookie = setCookie.split(";", 1)[0];
+
+  const sessionStatus = (value, timestamp = now) =>
+    api.handleApiRequest(
+      new Request("https://atlas.test/api/live/session", { headers: { cookie: value } }),
+      environment,
+      { now: () => timestamp },
+    );
+  const authenticated = await sessionStatus(cookie);
+  assert.equal(authenticated.status, 200);
+  assert.deepEqual(await authenticated.json(), { authenticated: true });
+
+  const tamperedCookie = `${cookie.slice(0, -1)}${cookie.endsWith("0") ? "1" : "0"}`;
+  const tampered = await sessionStatus(tamperedCookie);
+  assert.equal(tampered.status, 401);
+  assert.deepEqual(await tampered.json(), { authenticated: false });
+
+  const duplicate = await sessionStatus(`${cookie}; ${cookie}`);
+  assert.equal(duplicate.status, 401);
+
+  const expired = await sessionStatus(cookie, now + 30 * 60 * 1_000);
+  assert.equal(expired.status, 401);
+
+  let observedConfig;
+  const research = await api.handleApiRequest(
+    new Request("https://atlas.test/api/research", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ query: "Grace Hopper public professional background", mode: "live" }),
+    }),
+    environment,
+    {
+      now: () => now,
+      streamLive(_input, config) {
+        observedConfig = config;
+        return (async function* () {})();
+      },
+    },
+  );
+  assert.equal(research.status, 200);
+  assert.equal(research.headers.get("x-atlas-execution-mode"), "live");
+  const researchTrace = await research.text();
+  assert.equal(researchTrace.includes(apiToken), false);
+  assert.equal(observedConfig.provider, "openrouter");
+  assert.equal(observedConfig.model, "openai/gpt-5.4-mini");
+  for (const forbidden of ["searchProvider", "searchApiKey", "searchEndpoint"]) {
+    assert.equal(forbidden in observedConfig, false);
+  }
+
+  const logout = await api.handleApiRequest(
+    new Request("https://atlas.test/api/live/session", { method: "DELETE", headers: { cookie } }),
+    environment,
+  );
+  assert.equal(logout.status, 204);
+  const clearedCookie = logout.headers.get("set-cookie");
+  assert.match(clearedCookie, /^__Host-atlas_live_session=;/);
+  assert.match(clearedCookie, /Max-Age=0/);
+  assert.match(clearedCookie, /Expires=Thu, 01 Jan 1970 00:00:00 GMT/);
+  assert.match(clearedCookie, /HttpOnly/);
+  assert.match(clearedCookie, /Secure/);
+  assert.match(clearedCookie, /SameSite=Strict/);
+  assert.equal(clearedCookie.includes(apiToken), false);
+  const afterLogout = await sessionStatus(clearedCookie.split(";", 1)[0]);
+  assert.equal(afterLogout.status, 401);
+
+  const wrongMethod = await api.handleApiRequest(
+    new Request("https://atlas.test/api/live/session", { method: "PUT" }),
+    environment,
+  );
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get("allow"), "GET, POST, DELETE");
 });
 
 test("POST replay streams byte-stable NDJSON ending in one terminal report", async () => {
@@ -1216,7 +1331,7 @@ test("safety refusal precedes replay lookup and missing live key is an honest co
   assert.equal(unconfigured.headers.get("x-atlas-execution-mode"), "live");
   assert.equal(terminalReport(unconfiguredEvents).status, "configuration_error");
   assert.equal(terminalReport(unconfiguredEvents).stop.reason, "configuration_error");
-  assert.match(terminalReport(unconfiguredEvents).stop.detail, /server-side model key/);
+  assert.match(terminalReport(unconfiguredEvents).stop.detail, /server-side OpenRouter key/);
 
   const keyWithoutEnablement = await api.handleApiRequest(
     new Request("https://atlas.test/api/research", {
