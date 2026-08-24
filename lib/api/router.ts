@@ -180,7 +180,7 @@ function resolveLiveProvider(environment: ApiEnvironment): ResolvedLiveProvider 
   return {
     provider: "openrouter",
     apiKey: openrouterKey,
-    model: environment.OPENROUTER_MODEL?.trim() || "openai/gpt-5.4-mini",
+    model: environment.OPENROUTER_MODEL?.trim() || "openai/gpt-5.4-nano",
     siteUrl: environment.OPENROUTER_SITE_URL?.trim(),
     appName: environment.OPENROUTER_APP_NAME?.trim(),
   };

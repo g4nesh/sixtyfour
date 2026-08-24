@@ -2,6 +2,31 @@
 
 Atlas is a stateless streaming web application. Its live runtime is pinned to OpenRouter, while public replay remains zero-network. The browser never receives the OpenRouter key.
 
+## Direct loopback production run with a caller-owned credential file
+
+For a foreground local production run without copying a credential into the checkout, keep the credential file in a private caller-controlled location. The launcher consumes only this variable:
+
+```dotenv
+OPENROUTER_API_KEY=replace-with-a-newly-rotated-key
+```
+
+Build once, then validate the file and fixed local policy without starting a service:
+
+```sh
+npm run build
+npm run local:openrouter:check -- --credentials-file /absolute/path/to/private-openrouter-credentials
+```
+
+Then start the prebuilt production server:
+
+```sh
+npm run local:openrouter -- --credentials-file /absolute/path/to/private-openrouter-credentials
+```
+
+The launcher calls Atlas's shared bounded credential-file reader, which uses Node's `parseEnv` utility and reads at most 16 KiB. The reader returns only a validated `OPENROUTER_API_KEY`; parsed `NODE_OPTIONS`, host paths, provider controls, and every other file entry are discarded without entering the process environment. Atlas then replaces the process environment and imports Vinext's `startProdServer` directly to serve the already-built `dist` directory. This path invokes neither the Vinext CLI nor the Vite development server, and it never prints the credential value. Its runtime policy is fixed to live OpenRouter research, `openai/gpt-5.4-nano`, the unauthenticated local-only bypass, `http://localhost:3000` attribution, and a strict `127.0.0.1:3000` listener. Operators who prefer the higher-quality model may explicitly configure `openai/gpt-5.4-mini` in the authenticated container or managed-host path; the loopback launcher intentionally accepts no model override.
+
+This command is intentionally unsuitable for a tunnel, reverse proxy, LAN listener, or public host because its authentication bypass cannot be disabled. Use the authenticated container or managed-host path below for any non-loopback ingress.
+
 ## Rotate the disclosed key first
 
 Never deploy an OpenRouter key that has appeared in chat, source control, a screenshot, or a shell command. Delete that key in OpenRouter, create a replacement, and configure only the replacement. OpenRouter documents both [key rotation](https://openrouter.ai/docs/cookbook/administration/api-key-rotation) and [key deletion](https://openrouter.ai/docs/api/api-reference/api-keys/delete-keys).
@@ -10,7 +35,56 @@ Atlas uses the current `openrouter:web_search` server tool rather than the depre
 
 Paid OpenRouter credit avoids relying on a free-model allowance, but it is not a promise of unlimited throughput: model/provider availability and account or key limits can still apply. Set an OpenRouter key spend limit and monitor usage rather than treating the current balance as a hard deployment budget. OpenRouter explains the distinction in its [rate-limit and credit FAQ](https://openrouter.ai/docs/faq).
 
-## Local iMac deployment
+## Persistent local iMac service
+
+For zero cloud-compute cost without Docker, build Atlas once and install the checked-in user LaunchAgent. It reads a caller-selected dotenv file through Node, consumes only `OPENROUTER_API_KEY`, discards every other loaded entry before importing Vinext, and runs the production build on `127.0.0.1:3000` with `openai/gpt-5.4-nano`.
+
+From a durable checkout, build and write the LaunchAgent plist:
+
+```sh
+npm run build
+npm run macos:service -- install \
+  --project-root="$PWD" \
+  --env-file-path="$PWD/.env" \
+  --node-path="$(command -v node)" \
+  --home-directory="$HOME"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/chat.ganstlr.atlas-backend.plist"
+```
+
+The LaunchAgent starts after login, restarts Atlas after any exit, writes application logs under `~/Library/Logs/Atlas`, and wraps the process in `caffeinate -i` so ordinary idle sleep does not make the backend disappear. Rotate or remove those log files as part of normal host maintenance. The service does not run while the iMac is powered off, before a user logs in after reboot, after logout, or during manually requested sleep.
+
+Check health and service state without exposing the provider key:
+
+```sh
+curl --fail http://127.0.0.1:3000/api/health
+launchctl print "gui/$(id -u)/chat.ganstlr.atlas-backend"
+npm run macos:service -- status \
+  --project-root="$PWD" \
+  --env-file-path="$PWD/.env" \
+  --node-path="$(command -v node)" \
+  --home-directory="$HOME"
+```
+
+Restart after a new production build or credential rotation:
+
+```sh
+launchctl kickstart -k "gui/$(id -u)/chat.ganstlr.atlas-backend"
+```
+
+To remove it, unload the job before deleting its plist:
+
+```sh
+launchctl bootout "gui/$(id -u)/chat.ganstlr.atlas-backend"
+npm run macos:service -- uninstall \
+  --project-root="$PWD" \
+  --env-file-path="$PWD/.env" \
+  --node-path="$(command -v node)" \
+  --home-directory="$HOME"
+```
+
+This LaunchAgent is deliberately loopback-only and uses the unauthenticated local bypass. Do not attach it to a tunnel, LAN listener, or public reverse proxy; use the authenticated container path for non-loopback ingress.
+
+## Local iMac container deployment
 
 This is the recommended zero-cloud-compute-cost setup. It exposes Atlas only on the iMac loopback interface.
 
@@ -103,7 +177,7 @@ Start with:
 - `ATLAS_LIVE_ENABLED=true`
 - `LIVE_PROVIDER=openrouter`
 - `ATLAS_ALLOW_UNAUTHENTICATED_LOCAL=false`
-- `OPENROUTER_MODEL=openai/gpt-5.4-mini`
+- `OPENROUTER_MODEL=openai/gpt-5.4-nano`
 - `OPENROUTER_SITE_URL` set to the service's canonical public HTTPS URL
 - replacement `OPENROUTER_API_KEY` and independent `ATLAS_API_TOKEN` in Secret Manager
 

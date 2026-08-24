@@ -1126,7 +1126,7 @@ test("remote live sessions authenticate once, expire, reject tampering, and neve
   const researchTrace = await research.text();
   assert.equal(researchTrace.includes(apiToken), false);
   assert.equal(observedConfig.provider, "openrouter");
-  assert.equal(observedConfig.model, "openai/gpt-5.4-mini");
+  assert.equal(observedConfig.model, "openai/gpt-5.4-nano");
   for (const forbidden of ["searchProvider", "searchApiKey", "searchEndpoint"]) {
     assert.equal(forbidden in observedConfig, false);
   }

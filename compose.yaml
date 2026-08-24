@@ -11,7 +11,7 @@ services:
       LIVE_PROVIDER: ${LIVE_PROVIDER:-openrouter}
       ATLAS_API_TOKEN_FILE: /run/secrets/atlas_api_token
       OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
-      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-5.4-mini}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-5.4-nano}
       OPENROUTER_SITE_URL: ${OPENROUTER_SITE_URL:-http://localhost:3000}
       OPENROUTER_APP_NAME: ${OPENROUTER_APP_NAME:-Atlas}
     secrets:

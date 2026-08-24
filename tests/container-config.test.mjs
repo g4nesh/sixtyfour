@@ -47,7 +47,7 @@ test("container configuration writes only ignored private secret files and pins 
   const token = (await readFile(join(directory, "secrets/atlas_api_token"), "utf8")).trim();
   assert.match(environment, /^ATLAS_ALLOW_UNAUTHENTICATED_LOCAL=true$/m);
   assert.match(environment, /^LIVE_PROVIDER=openrouter$/m);
-  assert.match(environment, /^OPENROUTER_MODEL=openai\/gpt-5\.4-mini$/m);
+  assert.match(environment, /^OPENROUTER_MODEL=openai\/gpt-5\.4-nano$/m);
   assert.equal(environment.includes(firstKey), false);
   assert.equal(storedKey.trim(), firstKey);
   assert.ok(token.length >= 64);

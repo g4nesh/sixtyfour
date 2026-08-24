@@ -13,6 +13,6 @@ ATLAS_LIVE_ENABLED=false
 # must be exactly `openrouter`; stale direct-provider pins fail closed.
 LIVE_PROVIDER=openrouter
 OPENROUTER_API_KEY=
-OPENROUTER_MODEL=openai/gpt-5.4-mini
+OPENROUTER_MODEL=openai/gpt-5.4-nano
 # OPENROUTER_SITE_URL=https://your-deployment.example
 # OPENROUTER_APP_NAME=Atlas
