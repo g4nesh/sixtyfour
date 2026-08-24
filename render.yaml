@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+
+previews:
+  generation: off
+
+services:
+  - type: web
+    name: atlas
+    runtime: docker
+    plan: free
+    numInstances: 1
+    region: oregon
+    branch: main
+    autoDeployTrigger: checksPass
+    renderSubdomainPolicy: enabled
+    healthCheckPath: /api/health
+    maxShutdownDelaySeconds: 300
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: ATLAS_LIVE_ENABLED
+        value: "true"
+      - key: ATLAS_ALLOW_UNAUTHENTICATED_LOCAL
+        value: "false"
+      - key: LIVE_PROVIDER
+        value: openrouter
+      - key: OPENROUTER_MODEL
+        value: openai/gpt-5.4-nano
+      - key: OPENROUTER_APP_NAME
+        value: Atlas
+      - key: OPENROUTER_SITE_URL
+        fromService:
+          type: web
+          name: atlas
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: ATLAS_API_TOKEN
+        sync: false

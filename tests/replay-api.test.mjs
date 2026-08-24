@@ -34,6 +34,34 @@ function terminalReport(events) {
   return events.at(-1)?.payload?.report ?? null;
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+const LIVE_TEST_TOKEN = `atlas-live-test-${"x".repeat(48)}`;
+const LIVE_TEST_ENVIRONMENT = {
+  ATLAS_LIVE_ENABLED: "true",
+  LIVE_PROVIDER: "openrouter",
+  OPENROUTER_API_KEY: "test-openrouter-key-not-real",
+  ATLAS_API_TOKEN: LIVE_TEST_TOKEN,
+};
+
+function liveResearchRequest({ authorized = true } = {}) {
+  const input = replay.getReplayExample("python-creator").input;
+  return new Request("https://atlas.test/api/research", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(authorized ? { authorization: `Bearer ${LIVE_TEST_TOKEN}` } : {}),
+    },
+    body: JSON.stringify({ ...input, mode: "live" }),
+  });
+}
+
 function rawReplay(example) {
   return structuredClone({
     input: example.input,
@@ -1153,6 +1181,216 @@ test("remote live sessions authenticate once, expire, reject tampering, and neve
   );
   assert.equal(wrongMethod.status, 405);
   assert.equal(wrongMethod.headers.get("allow"), "GET, POST, DELETE");
+});
+
+test("single-process live gate is atomic and stale permit releases are idempotent", () => {
+  const gate = api.createSingleProcessLiveResearchGate();
+  const first = gate.tryAcquire();
+  assert.ok(first);
+  assert.equal(gate.tryAcquire(), null);
+
+  first.release();
+  const second = gate.tryAcquire();
+  assert.ok(second);
+  first.release();
+  assert.equal(gate.tryAcquire(), null, "a stale release must not clear a newer permit");
+
+  second.release();
+  const third = gate.tryAcquire();
+  assert.ok(third);
+  third.release();
+});
+
+test("live API rejects overlap and reopens the slot only after a terminal source unwinds", async () => {
+  const example = replay.getReplayExample("python-creator");
+  const gate = api.createSingleProcessLiveResearchGate();
+  const started = deferred();
+  const continueFirst = deferred();
+  let streamCalls = 0;
+
+  const runtime = {
+    liveResearchGate: gate,
+    streamLive() {
+      streamCalls += 1;
+      if (streamCalls === 1) {
+        return (async function* () {
+          started.resolve();
+          await continueFirst.promise;
+          yield* example.trace;
+        })();
+      }
+      return (async function* () {
+        yield* example.trace;
+      })();
+    },
+  };
+
+  const first = await api.handleApiRequest(liveResearchRequest(), LIVE_TEST_ENVIRONMENT, runtime);
+  assert.equal(first.status, 200);
+  await started.promise;
+
+  const overlap = await api.handleApiRequest(liveResearchRequest(), LIVE_TEST_ENVIRONMENT, runtime);
+  assert.equal(overlap.status, 429);
+  assert.equal(overlap.headers.get("cache-control"), "no-store");
+  assert.equal(overlap.headers.get("retry-after"), "15");
+  assert.deepEqual(await overlap.json(), {
+    error: "live_research_busy",
+    message: "Another live investigation is still running. Retry after it finishes.",
+  });
+  assert.equal(streamCalls, 1, "a rejected overlap must not construct an upstream stream");
+
+  continueFirst.resolve();
+  assert.equal(terminalReport(parseNdjson(await first.text())).status, "completed");
+
+  const afterTerminal = await api.handleApiRequest(liveResearchRequest(), LIVE_TEST_ENVIRONMENT, runtime);
+  assert.equal(afterTerminal.status, 200);
+  assert.equal(terminalReport(parseNdjson(await afterTerminal.text())).status, "completed");
+  assert.equal(streamCalls, 2);
+});
+
+test("live API releases the slot after an upstream error is converted to a failed terminal", async () => {
+  const example = replay.getReplayExample("python-creator");
+  const gate = api.createSingleProcessLiveResearchGate();
+  let streamCalls = 0;
+  const runtime = {
+    liveResearchGate: gate,
+    streamLive() {
+      streamCalls += 1;
+      if (streamCalls === 1) {
+        return (async function* () {
+          yield example.trace[0];
+          throw new Error("private upstream failure");
+        })();
+      }
+      return (async function* () {
+        yield* example.trace;
+      })();
+    },
+  };
+
+  const failed = await api.handleApiRequest(liveResearchRequest(), LIVE_TEST_ENVIRONMENT, runtime);
+  const failedEvents = parseNdjson(await failed.text());
+  assert.equal(terminalReport(failedEvents).status, "failed");
+  assert.doesNotMatch(JSON.stringify(failedEvents), /private upstream failure/);
+
+  const afterFailure = await api.handleApiRequest(liveResearchRequest(), LIVE_TEST_ENVIRONMENT, runtime);
+  assert.equal(afterFailure.status, 200);
+  assert.equal(terminalReport(parseNdjson(await afterFailure.text())).status, "completed");
+  assert.equal(streamCalls, 2);
+});
+
+test("live cancellation holds the slot through upstream cleanup and fails closed if cleanup hangs", async () => {
+  const example = replay.getReplayExample("python-creator");
+  const baseGate = api.createSingleProcessLiveResearchGate();
+  const started = deferred();
+  const cleanupStarted = deferred();
+  const finishCleanup = deferred();
+  const permitReleased = deferred();
+  let streamCalls = 0;
+  const gate = {
+    tryAcquire() {
+      const permit = baseGate.tryAcquire();
+      if (!permit) return null;
+      return {
+        release() {
+          permit.release();
+          permitReleased.resolve();
+        },
+      };
+    },
+  };
+  const runtime = {
+    liveResearchGate: gate,
+    streamLive(_input, config) {
+      streamCalls += 1;
+      if (streamCalls === 1) {
+        return (async function* () {
+          try {
+            yield example.trace[0];
+            await new Promise((resolve) => {
+              if (config.signal.aborted) resolve();
+              else config.signal.addEventListener("abort", resolve, { once: true });
+              started.resolve();
+            });
+          } finally {
+            cleanupStarted.resolve();
+            await finishCleanup.promise;
+          }
+        })();
+      }
+      return (async function* () {
+        yield* example.trace;
+      })();
+    },
+  };
+
+  const first = await api.handleApiRequest(liveResearchRequest(), LIVE_TEST_ENVIRONMENT, runtime);
+  assert.ok(first.body);
+  await started.promise;
+  const cancellation = first.body.cancel("test cancellation");
+  await cleanupStarted.promise;
+
+  const duringCleanup = await api.handleApiRequest(liveResearchRequest(), LIVE_TEST_ENVIRONMENT, runtime);
+  assert.equal(duringCleanup.status, 429, "cancel must not release while upstream cleanup is still active");
+  assert.equal(streamCalls, 1);
+
+  finishCleanup.resolve();
+  await permitReleased.promise;
+  await cancellation;
+  const afterCleanup = await api.handleApiRequest(liveResearchRequest(), LIVE_TEST_ENVIRONMENT, runtime);
+  assert.equal(afterCleanup.status, 200);
+  assert.equal(terminalReport(parseNdjson(await afterCleanup.text())).status, "completed");
+  assert.equal(streamCalls, 2);
+});
+
+test("busy live gate does not affect health, examples, sessions, or replay", async () => {
+  let acquisitionAttempts = 0;
+  const runtime = {
+    liveResearchGate: {
+      tryAcquire() {
+        acquisitionAttempts += 1;
+        return null;
+      },
+    },
+  };
+
+  const health = await api.handleApiRequest(new Request("https://atlas.test/api/health"), {}, runtime);
+  assert.equal(health.status, 200);
+  const example = await api.handleApiRequest(
+    new Request("https://atlas.test/api/examples/python-creator"),
+    {},
+    runtime,
+  );
+  assert.equal(example.status, 200);
+  const session = await api.handleApiRequest(
+    new Request("https://atlas.test/api/live/session"),
+    LIVE_TEST_ENVIRONMENT,
+    runtime,
+  );
+  assert.equal(session.status, 401);
+
+  const unconfiguredLive = await api.handleApiRequest(liveResearchRequest(), {}, runtime);
+  assert.equal(terminalReport(parseNdjson(await unconfiguredLive.text())).status, "configuration_error");
+  const unauthorizedLive = await api.handleApiRequest(
+    liveResearchRequest({ authorized: false }),
+    LIVE_TEST_ENVIRONMENT,
+    runtime,
+  );
+  assert.equal(unauthorizedLive.status, 401);
+
+  const replayInput = replay.getReplayExample("python-creator").input;
+  const replayResponse = await api.handleApiRequest(
+    new Request("https://atlas.test/api/research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...replayInput, mode: "replay" }),
+    }),
+    {},
+    runtime,
+  );
+  assert.equal(replayResponse.status, 200);
+  assert.equal(terminalReport(parseNdjson(await replayResponse.text())).status, "completed");
+  assert.equal(acquisitionAttempts, 0);
 });
 
 test("POST replay streams byte-stable NDJSON ending in one terminal report", async () => {

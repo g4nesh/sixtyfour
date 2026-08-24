@@ -44,7 +44,41 @@ export interface ApiRuntime {
   now?: () => number;
   /** Internal test seam; production uses the real live orchestrator. */
   streamLive?: typeof streamLiveResearch;
+  /** Process-local admission control; production permits one live run at a time. */
+  liveResearchGate?: LiveResearchGate;
 }
+
+export interface LiveResearchPermit {
+  /** Idempotent: a stale permit can never release a newer acquisition. */
+  release(): void;
+}
+
+export interface LiveResearchGate {
+  /** Synchronously checks and reserves the only process-local live slot. */
+  tryAcquire(): LiveResearchPermit | null;
+}
+
+export function createSingleProcessLiveResearchGate(): LiveResearchGate {
+  let activePermit: symbol | null = null;
+  return {
+    tryAcquire() {
+      if (activePermit !== null) return null;
+      const permitId = Symbol("atlas-live-research-permit");
+      activePermit = permitId;
+      let released = false;
+      return {
+        release() {
+          if (released) return;
+          released = true;
+          if (activePermit === permitId) activePermit = null;
+        },
+      };
+    },
+  };
+}
+
+const processLiveResearchGate = createSingleProcessLiveResearchGate();
+const LIVE_RESEARCH_RETRY_AFTER_SECONDS = 15;
 
 function localBypassEnabled(url: URL, environment: ApiEnvironment): boolean {
   return (
@@ -349,6 +383,20 @@ export function immediateTerminalTrace(
 
 async function* replayEvents(events: readonly TraceEvent[]): AsyncGenerator<TraceEvent> {
   for (const event of events) yield event;
+}
+
+async function* liveEventsWithPermit(
+  source: () => AsyncIterable<TraceEvent>,
+  permit: LiveResearchPermit,
+): AsyncGenerator<TraceEvent> {
+  try {
+    yield* source();
+  } finally {
+    // Cancellation only aborts the upstream signal. Keep the slot reserved
+    // until the source and its cleanup actually unwind; if cleanup hangs, the
+    // process fails closed instead of allowing overlapping provider spend.
+    permit.release();
+  }
 }
 
 interface StreamSpan {
@@ -737,22 +785,43 @@ export async function handleApiRequest(
       "www-authenticate": 'Bearer realm="atlas-live"',
     });
   }
+  const permit = (runtime.liveResearchGate ?? processLiveResearchGate).tryAcquire();
+  if (!permit) {
+    return jsonResponse(
+      {
+        error: "live_research_busy",
+        message: "Another live investigation is still running. Retry after it finishes.",
+      },
+      429,
+      { "retry-after": String(LIVE_RESEARCH_RETRY_AFTER_SECONDS) },
+    );
+  }
   const liveStream = runtime.streamLive ?? streamLiveResearch;
-  return traceNdjsonResponse(
-    (signal) =>
-      liveStream(input, {
-        provider: provider.provider,
-        apiKey: provider.apiKey,
-        model: provider.model,
-        ...(provider.siteUrl ? { siteUrl: provider.siteUrl } : {}),
-        ...(provider.appName ? { appName: provider.appName } : {}),
-        // Injected DNS validation lets public-source fetches resolve arbitrary
-        // hosts while the hardened fetch still rejects private/loopback answers.
-        resolveHostname: createDohResolver(),
-        signal,
-      }),
-    request.signal,
-    input,
-    "live",
-  );
+  try {
+    return traceNdjsonResponse(
+      (signal) =>
+        liveEventsWithPermit(
+          () =>
+            liveStream(input, {
+              provider: provider.provider,
+              apiKey: provider.apiKey,
+              model: provider.model,
+              ...(provider.siteUrl ? { siteUrl: provider.siteUrl } : {}),
+              ...(provider.appName ? { appName: provider.appName } : {}),
+              // Injected DNS validation lets public-source fetches resolve arbitrary
+              // hosts while the hardened fetch still rejects private/loopback answers.
+              resolveHostname: createDohResolver(),
+              signal,
+            }),
+          permit,
+        ),
+      request.signal,
+      input,
+      "live",
+    );
+  } catch (error) {
+    // No upstream iterator was handed off when response construction failed.
+    permit.release();
+    throw error;
+  }
 }

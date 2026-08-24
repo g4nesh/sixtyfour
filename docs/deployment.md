@@ -175,7 +175,26 @@ printf '' | pbcopy
 
 Keep `ATLAS_ALLOW_UNAUTHENTICATED_LOCAL=true` only while Atlas is used directly through its loopback-bound port. Disable it before attaching a tunnel or reverse proxy, and never enable it on a public cloud service or directly exposed port.
 
-## Managed hosting recommendation
+## Public managed hosting
+
+### Render Blueprint: zero-cost public preview
+
+The root `render.yaml` provisions one public Render web service from the verified Docker image. It uses the Free instance type, waits for the linked `main` branch checks to pass before automatic deploys, disables preview environments, and health-checks `/api/health`. Render supplies the external HTTPS URL to Atlas at runtime, so no deployment hostname is hardcoded.
+
+The public URL exposes the Atlas shell to anyone, but it does **not** make paid live research anonymous. The existing Atlas authorization gate remains enabled: a visitor needs the independent Atlas access token before the server will spend OpenRouter credit. Atlas also admits only one active live stream per server process, bounding accidental overlapping spend. This does not replace per-principal rate limits or a hard deployment-wide spend ceiling.
+
+The live slot remains held until the upstream research iterator has actually unwound after a terminal result, failure, or client cancellation. Cancellation does not release the slot early while provider or tool cleanup is still active. If that cleanup hangs, the process deliberately stays closed to new live runs until it is restarted rather than risk concurrent provider work. Keep the managed service at one instance unless a future deployment adds distributed admission control; each additional process would otherwise own an independent slot.
+
+To create the service:
+
+1. Rotate any OpenRouter key that has appeared in chat or another insecure channel.
+2. Open [Deploy Atlas to Render](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fg4nesh%2Fsixtyfour). If needed, sign in and authorize Render to read the public repository; the Blueprint is fixed to `main`.
+3. When Render prompts during the initial Blueprint creation, enter a replacement `OPENROUTER_API_KEY` and a separate random `ATLAS_API_TOKEN` of at least 32 bytes. Enter both directly in Render; do not commit them, put them in `render.yaml`, or upload a local `.env` file.
+4. Apply the Blueprint and wait for `/api/health` to pass. Open the assigned `*.onrender.com` URL and use the Atlas token in the unlock form.
+
+Render stores both prompted values as runtime environment secrets because their Blueprint entries use `sync: false`. The tracked policy fixes live mode to OpenRouter, disables the localhost authorization bypass, uses `openai/gpt-5.4-nano`, and self-references Render's assigned `RENDER_EXTERNAL_URL` for OpenRouter attribution. The OpenRouter key never reaches browser code.
+
+Free Render services are suitable for a public demonstration, not dependable production. They spin down after 15 minutes without inbound traffic, can take about a minute to wake, have monthly runtime and outbound-transfer limits, and can be suspended for unusually high outbound traffic. Atlas Deep research intentionally makes multiple outbound requests, so expect cold starts and keep OpenRouter key limits conservative. See [Render's Free instance limits](https://render.com/docs/free), [Docker deployment guide](https://render.com/docs/docker), and [Blueprint reference](https://render.com/docs/blueprint-spec).
 
 ### Google Cloud Run
 
@@ -202,7 +221,6 @@ The service may allow unauthenticated HTTP access to its static shell and determ
 
 - **Oracle Always Free** provides substantially more raw VM capacity, but you own ARM image builds, TLS, firewalling, OS updates, monitoring, and idle-reclamation risk. It is free compute, not effortless deployment. See [Always Free resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm).
 - **Koyeb Free** currently offers one small 0.1-vCPU/512-MB web instance and scales to zero after idle time. It is suitable for a preview, not a dependable Deep-research backend. See [Koyeb instances](https://www.koyeb.com/docs/reference/instances).
-- **Render Free** sleeps after 15 idle minutes, may take about a minute to wake, and may suspend unusually outbound-heavy services. Atlas intentionally performs many public-source requests, so this is a poor fit. See [Render Free limitations](https://render.com/docs/free).
 - **Cloudflare Workers Free** is not a container host and currently permits only 10 ms CPU plus 50 external subrequests per invocation. Atlas Deep runs can approach or exceed those limits. A tunnel to the iMac is a better use of Cloudflare's free services. See [Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
 
 ## Secret and ingress invariants
@@ -212,7 +230,8 @@ The service may allow unauthenticated HTTP access to its static shell and determ
 - `LIVE_PROVIDER=openrouter` fails closed unless an OpenRouter key exists; it never falls back to an accidentally configured OpenAI, Gemini, or Anthropic key.
 - The OpenRouter key authorizes provider spending. The separate Atlas token authorizes use of this deployment. Rotate them independently.
 - Keep the container's public endpoint behind HTTPS. The signed browser session cookie is Secure and is intentionally unavailable over plain remote HTTP.
-- Run one Deep investigation at a time until measured resource and OpenRouter spend data justify higher concurrency.
+- Atlas enforces one active live investigation per process. Keep the host at one instance unless a distributed gate is added; horizontal replicas each have their own process-local permit.
+- A canceled client keeps its permit until upstream cleanup unwinds. A stuck cleanup therefore fails closed and requires a process restart before another live run can begin.
 
 ## Verification
 
