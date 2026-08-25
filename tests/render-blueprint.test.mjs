@@ -19,7 +19,6 @@ test("Render Blueprint exposes the verified image with authenticated OpenRouter-
     "    branch: main",
     "    autoDeployTrigger: checksPass",
     "    renderSubdomainPolicy: enabled",
-    "    healthCheckPath: /api/health",
     "    dockerfilePath: ./Dockerfile",
     "    dockerContext: .",
   ]) {
@@ -51,6 +50,11 @@ test("Render Blueprint exposes the verified image with authenticated OpenRouter-
     blueprint.includes("maxShutdownDelaySeconds:"),
     false,
     "Render Free does not support a shutdown-delay setting",
+  );
+  assert.equal(
+    blueprint.includes("healthCheckPath:"),
+    false,
+    "Render uses its default TCP readiness probe for this Free Docker service",
   );
   assert.doesNotMatch(blueprint, /NEXT_PUBLIC_|OPENAI_API_KEY|GEMINI_API_KEY|ANTHROPIC_API_KEY|LIVE_SEARCH_PROVIDER/);
   assert.doesNotMatch(blueprint, /\bsk-(?:or-v1-)?[A-Za-z0-9_-]{32,}\b/);

@@ -13,7 +13,6 @@ services:
     branch: main
     autoDeployTrigger: checksPass
     renderSubdomainPolicy: enabled
-    healthCheckPath: /api/health
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:

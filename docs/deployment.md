@@ -179,7 +179,7 @@ Keep `ATLAS_ALLOW_UNAUTHENTICATED_LOCAL=true` only while Atlas is used directly 
 
 ### Render Blueprint: zero-cost public preview
 
-The root `render.yaml` provisions one public Render web service from the verified Docker image. It uses the Free instance type, waits for the linked `main` branch checks to pass before automatic deploys, disables preview environments, and health-checks `/api/health`. Render supplies the external HTTPS URL to Atlas at runtime, so no deployment hostname is hardcoded.
+The root `render.yaml` provisions one public Render web service from the verified Docker image. It uses the Free instance type, waits for the linked `main` branch checks to pass before automatic deploys, and disables preview environments. It intentionally uses Render's default TCP readiness probe rather than an HTTP deployment gate; Atlas still exposes `/api/health` for external verification after the service is live. Render supplies the external HTTPS URL to Atlas at runtime, so no deployment hostname is hardcoded.
 
 The public URL exposes the Atlas shell to anyone, but it does **not** make paid live research anonymous. The existing Atlas authorization gate remains enabled: a visitor needs the independent Atlas access token before the server will spend OpenRouter credit. Atlas also admits only one active live stream per server process, bounding accidental overlapping spend. This does not replace per-principal rate limits or a hard deployment-wide spend ceiling.
 
