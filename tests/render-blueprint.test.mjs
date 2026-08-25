@@ -47,6 +47,11 @@ test("Render Blueprint exposes the verified image with authenticated OpenRouter-
   }
 
   assert.equal(blueprint.includes('ATLAS_ALLOW_UNAUTHENTICATED_LOCAL\n        value: "true"'), false);
+  assert.equal(
+    blueprint.includes("maxShutdownDelaySeconds:"),
+    false,
+    "Render Free does not support a shutdown-delay setting",
+  );
   assert.doesNotMatch(blueprint, /NEXT_PUBLIC_|OPENAI_API_KEY|GEMINI_API_KEY|ANTHROPIC_API_KEY|LIVE_SEARCH_PROVIDER/);
   assert.doesNotMatch(blueprint, /\bsk-(?:or-v1-)?[A-Za-z0-9_-]{32,}\b/);
 });

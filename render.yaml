@@ -14,7 +14,6 @@ services:
     autoDeployTrigger: checksPass
     renderSubdomainPolicy: enabled
     healthCheckPath: /api/health
-    maxShutdownDelaySeconds: 300
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
