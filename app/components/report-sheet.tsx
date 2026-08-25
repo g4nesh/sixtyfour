@@ -1,4 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import type { InvestigationReport } from "../../lib/domain/types";
+import { createReportViewModel } from "../../lib/report-export";
 import {
   isPassivePageMetadataObservation,
   projectPageFootprint,
@@ -20,6 +22,15 @@ import {
 import { CloseIcon, DownloadIcon, ExternalIcon } from "./atlas-icons";
 
 const PROFILE_CONTEXT_SIGNAL_KINDS = new Set(["organization", "role", "location", "bio_phrase"]);
+const REPORT_FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "summary",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
 
 function candidateScore(candidate: ReturnType<typeof reportCandidates>[number]): number | undefined {
   return typeof candidate.score === "number" ? candidate.score : candidate.score?.total;
@@ -225,20 +236,70 @@ export function ReportSheet({
   onDownloadPdf?: (report: Report) => void | Promise<void>;
 }) {
   const sheetRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     requestAnimationFrame(() => sheetRef.current?.focus());
+
+    const focusableElements = (): HTMLElement[] =>
+      [...(sheetRef.current?.querySelectorAll<HTMLElement>(REPORT_FOCUSABLE_SELECTOR) ?? [])].filter(
+        (element) => element.getClientRects().length > 0 && element.getAttribute("aria-hidden") !== "true",
+      );
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const sheet = sheetRef.current;
+      if (!sheet) return;
+      const focusable = focusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        sheet.focus();
+        return;
+      }
+      const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+      if (event.shiftKey && activeIndex <= 0) {
+        event.preventDefault();
+        focusable.at(-1)?.focus();
+      } else if (!event.shiftKey && (activeIndex === -1 || activeIndex === focusable.length - 1)) {
+        event.preventDefault();
+        focusable[0].focus();
+      }
+    };
+    const onFocusIn = (event: FocusEvent) => {
+      const sheet = sheetRef.current;
+      if (!sheet || (event.target instanceof Node && sheet.contains(event.target))) return;
+      const firstFocusable = focusableElements()[0];
+      if (firstFocusable) firstFocusable.focus();
+      else sheet.focus();
     };
     window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("focusin", onFocusIn);
     return () => {
       document.body.style.overflow = originalOverflow;
       window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("focusin", onFocusIn);
+      const returnTarget = returnFocusRef.current;
+      returnFocusRef.current = null;
+      if (returnTarget?.isConnected) requestAnimationFrame(() => returnTarget.focus());
     };
-  }, [onClose, open]);
+  }, [open]);
+
+  const viewModel = useMemo(
+    () => (report ? createReportViewModel(report as unknown as InvestigationReport) : null),
+    [report],
+  );
 
   if (!open) return null;
   const allCandidates = reportCandidates(report);
@@ -511,410 +572,498 @@ export function ReportSheet({
             <DownloadIcon /> PDF
           </button>
         </div>
-        {report ? (
+        {report && viewModel ? (
           <div className="report-sheet-body">
-            <section className="report-lede">
-              <span className={`report-status status-${report.status ?? "unknown"}`}>{humanize(report.status)}</span>
-              <p>
-                {report.input?.objective ??
-                  "Auditable public-professional intelligence assembled from admitted evidence."}
-              </p>
-            </section>
-            <section
-              className={`report-identity-assessment formal-${formalIdentityStatus}`}
-              aria-labelledby="report-identity-assessment-heading"
-            >
+            <section className="report-briefing" aria-labelledby="report-briefing-heading">
               <header>
-                <span>Candidate assessment</span>
-                <strong id="report-identity-assessment-heading">{identityAssessmentLabel}</strong>
+                <span>Public-source briefing</span>
+                <h3 id="report-briefing-heading">{viewModel.briefing.headline}</h3>
               </header>
-              {leadCandidate ? <h3>{candidateName(leadCandidate)}</h3> : null}
-              <p>{identityAssessmentSummary}</p>
-              <dl>
-                <div>
-                  <dt>Formal identity status</dt>
-                  <dd>{humanize(formalIdentityStatus)}</dd>
-                </div>
-                <div>
-                  <dt>Identity match score · {humanize(resolutionBasis)}</dt>
-                  <dd>{percentScore(leadScore)}</dd>
-                </div>
-                <div>
-                  <dt>Supporting source families</dt>
-                  <dd>{leadSupportingFamilies.length}</dd>
-                </div>
-                <div>
-                  <dt>Matched context signals</dt>
-                  <dd>{leadMatchedSignals.length}</dd>
-                </div>
-              </dl>
-              {missingCorroboration.length > 0 ? (
-                <div className="identity-corroboration-gaps" role="note">
-                  <b>What is still missing</b>
-                  <ul>
-                    {missingCorroboration.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
+              <p className="report-briefing-lead">{viewModel.briefing.leadStatement}</p>
+              <p className="report-briefing-overview">{viewModel.briefing.overview}</p>
+              {viewModel.briefing.emptyState ? (
+                <p className="report-briefing-empty">{viewModel.briefing.emptyState}</p>
               ) : null}
-            </section>
-            {coverageDiagnostics.length > 0 || searchQueries.length > 0 || searchTransports.length > 0 ? (
-              <section className="report-coverage-note" aria-labelledby="report-coverage-heading">
-                <h3 id="report-coverage-heading">Search coverage</h3>
-                {searchTransports.length > 0 ? (
-                  <div className="report-search-transports" aria-label="Search transport attempts">
-                    <strong>Transport attempts</strong>
-                    {webSearchTransports.length > 0 ? (
-                      <section>
-                        <small>Web discovery path</small>
-                        <ul>
-                          {webSearchTransports.map((transport) => (
-                            <li key={transport.id}>
-                              <span>{transport.label}</span>
-                              <small>{humanize(transport.outcome)}</small>
-                            </li>
-                          ))}
-                        </ul>
-                      </section>
-                    ) : null}
-                    {structuredSearchTransports.length > 0 ? (
-                      <section>
-                        <small>Structured indexes</small>
-                        <ul>
-                          {structuredSearchTransports.map((transport) => (
-                            <li key={transport.id}>
-                              <span>{transport.label}</span>
-                              <small>{humanize(transport.outcome)}</small>
-                            </li>
-                          ))}
-                        </ul>
-                      </section>
-                    ) : null}
-                    <p>Attempts and returned discovery leads are not cited sources until hardened fetch succeeds.</p>
-                  </div>
-                ) : null}
-                {searchQueries.length > 0 ? (
-                  <div className="report-query-program">
-                    <header>
-                      <strong>Queries attempted</strong>
-                      <span>{searchQueries.length}</span>
-                    </header>
-                    <ol>
-                      {searchQueries.map((query) => (
-                        <li key={query}>
-                          <code>{query}</code>
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-                ) : null}
-                {coverageDiagnostics.length > 0 ? (
-                  <ul className="report-coverage-diagnostics">
-                    {coverageDiagnostics.map((diagnostic) => (
-                      <li key={diagnostic.code}>
-                        <strong>{humanize(diagnostic.code)}</strong>
-                        <span>{diagnostic.message}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </section>
-            ) : null}
-            <section className="report-section" aria-labelledby="report-candidates-heading">
-              <div className="report-section-heading">
-                <h3 id="report-candidates-heading">Identity branches</h3>
-                <span>{allCandidates.length}</span>
-              </div>
-              {allCandidates.length > 1 ? (
-                <div className="candidate-ambiguity-note" role="note">
-                  <strong>{allCandidates.length} distinct candidate branches retained</strong>
-                  <p>
-                    Atlas did not merge same-name results without strong corroborating identifiers. The five
-                    highest-ranked candidate profiles are consolidated below.
-                  </p>
-                </div>
-              ) : null}
-              {candidates.length > 0 ? (
-                <div className="candidate-report-grid">
-                  {candidates.map((candidate) => {
-                    const id = candidate.id ?? candidate.candidateId ?? candidateName(candidate);
-                    const rawScore = candidateScore(candidate);
-                    const score =
-                      id === selectedCandidateId && typeof report.identity?.selectedScore === "number"
-                        ? Math.max(
-                            rawScore ?? 0,
-                            report.identity.selectedScore,
-                            report.identity.resolutionScore ?? report.identity.selectedScore,
-                          )
-                        : id === report.identity?.runnerUpCandidateId &&
-                            typeof report.identity.runnerUpScore === "number"
-                          ? Math.max(rawScore ?? 0, report.identity.runnerUpScore)
-                          : rawScore;
-                    const branchEvidence = evidence.filter((item) => item.candidateId === id);
-                    const branchFindings = findings.filter((finding) => finding.candidateId === id);
-                    const directEvidence = branchEvidence.filter(
-                      (item) => item.disposition !== "discovery_only" && item.verificationMethod !== "search_discovery",
-                    );
-                    const supportingEvidence = directEvidence.filter(
-                      (item) =>
-                        item.disposition === "supports" &&
-                        item.verificationMethod === "direct_fetch" &&
-                        item.attributes?.metadataObservation !== true,
-                    );
-                    const supportingFamilies = [
-                      ...new Set(
-                        supportingEvidence.map((item) => {
-                          const href = evidenceUrl(item);
-                          return item.sourceFamily ?? (href ? domainOf(href, "source") : "source");
-                        }),
-                      ),
-                    ].sort();
-                    const supportingEvidenceIds = new Set(
-                      supportingEvidence
-                        .map((item) => item.id ?? item.evidenceId)
-                        .filter((evidenceId): evidenceId is string => typeof evidenceId === "string"),
-                    );
-                    const matchedContextSignals = [
-                      ...new Set(
-                        [
-                          ...(candidate.signals ?? [])
-                            .filter(
-                              (signal) =>
-                                typeof signal.kind === "string" &&
-                                PROFILE_CONTEXT_SIGNAL_KINDS.has(signal.kind) &&
-                                signal.assurance !== "self_asserted" &&
-                                Boolean(signal.sourceEvidenceId && supportingEvidenceIds.has(signal.sourceEvidenceId)),
-                            )
-                            .map((signal) => signal.kind),
-                        ].filter((signal): signal is string => typeof signal === "string"),
-                      ),
-                    ].sort();
-                    const profileFacts = supportingEvidence
-                      .filter(
-                        (item, index, items) =>
-                          items.findIndex(
-                            (candidateItem) =>
-                              (candidateItem.claim ?? candidateItem.excerpt ?? "").toLocaleLowerCase("en-US") ===
-                              (item.claim ?? item.excerpt ?? "").toLocaleLowerCase("en-US"),
-                          ) === index,
-                      )
-                      .slice(0, 3);
-                    const branchSourceByHref = new Map<string, { href: string; title: string }>();
-                    for (const item of directEvidence) {
-                      const href = evidenceUrl(item);
-                      if (!href || branchSourceByHref.has(href)) continue;
-                      branchSourceByHref.set(href, {
-                        href,
-                        title: item.title ?? item.source?.title ?? item.claim ?? domainOf(href, "source"),
-                      });
-                    }
-                    const branchSources = [...branchSourceByHref.values()].slice(0, 3);
-                    return (
-                      <article key={id} className={`candidate-report-card status-${candidate.status ?? "unknown"}`}>
-                        <header>
-                          <span>
-                            {id === leadId
-                              ? formalIdentityStatus === "resolved"
-                                ? "Selected candidate"
-                                : identityAssessmentLabel
-                              : humanize(candidate.status)}
-                          </span>
-                          {typeof score === "number" ? <strong>{Math.round(score * 100)}%</strong> : null}
-                        </header>
-                        <h4>{candidateName(candidate)}</h4>
-                        <p>
-                          {candidate.headline ??
-                            candidate.affiliation ??
-                            candidate.separationReason ??
-                            "Candidate kept as a distinct graph branch."}
-                        </p>
-                        <div className="candidate-profile-metrics">
-                          <span>{directEvidence.length} direct</span>
-                          <span>{supportingFamilies.length} source families</span>
-                          <span>{matchedContextSignals.length} context matches</span>
-                        </div>
-                        {profileFacts.length > 0 ? (
-                          <div className="candidate-profile-facts">
-                            <b>
-                              {formalIdentityStatus === "resolved"
-                                ? "Cited profile facts"
-                                : "Candidate-scoped cited observations"}
-                            </b>
-                            {formalIdentityStatus !== "resolved" ? (
-                              <small>
-                                These observations are bound only to this retained branch. They do not independently
-                                establish that it is the queried person.
-                              </small>
+              <aside className={`report-confirmation formal-${viewModel.audit.formalIdentityStatus}`} role="note">
+                <h3>
+                  {viewModel.audit.formalIdentityStatus === "resolved"
+                    ? "Identity and source note"
+                    : "What still needs confirmation"}
+                </h3>
+                <p>{viewModel.briefing.statusCaveat}</p>
+                <p>{viewModel.briefing.sourceCaveat}</p>
+              </aside>
+              {viewModel.briefing.sections.length > 0 ? (
+                <div className="report-briefing-sections">
+                  {viewModel.briefing.sections.map((section) => (
+                    <section key={section.key} aria-labelledby={`report-briefing-${section.key}`}>
+                      <h4 id={`report-briefing-${section.key}`}>{section.heading}</h4>
+                      <div className="report-briefing-observations">
+                        {section.observations.map((observation) => (
+                          <article key={observation.id} className={`kind-${observation.kind}`}>
+                            <header>
+                              <strong>{observation.heading}</strong>
+                              <span>
+                                {observation.kind === "finding" ? "Evidence-backed finding" : "Public observation"}
+                              </span>
+                            </header>
+                            <p>{observation.detail}</p>
+                            {observation.sources.length > 0 ? (
+                              <footer aria-label="Cited public sources">
+                                {observation.sources.map((source) => (
+                                  <a
+                                    key={`${observation.id}-${source.ref}-${source.url}`}
+                                    href={source.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    <ExternalIcon />
+                                    <span>{source.title ?? source.domain}</span>
+                                    <small>
+                                      {source.ref} · {source.domain}
+                                    </small>
+                                  </a>
+                                ))}
+                              </footer>
                             ) : null}
-                            <ul>
-                              {profileFacts.map((item) => {
-                                const href = evidenceUrl(item);
-                                const claim = item.claim ?? item.excerpt ?? "Admitted public-professional observation.";
-                                return (
-                                  <li key={item.id ?? item.evidenceId ?? claim}>
-                                    <span>{claim}</span>
-                                    {href ? (
-                                      <a href={href} target="_blank" rel="noreferrer">
-                                        <ExternalIcon /> {domainOf(href, item.sourceFamily ?? "source")}
-                                      </a>
-                                    ) : null}
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          </div>
-                        ) : null}
-                        {branchSources.length > 0 ? (
-                          <ul className="candidate-profile-sources">
-                            {branchSources.map((source) => (
-                              <li key={source.href}>
-                                <a href={source.href} target="_blank" rel="noreferrer">
-                                  <ExternalIcon /> {source.title}
-                                </a>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <small>No directly fetched source was bound to this branch.</small>
-                        )}
-                        <small>
-                          {branchEvidence.length} evidence records · {branchFindings.length} admitted findings · branch
-                          status {humanize(candidate.status)}
-                        </small>
-                        <code>{id}</code>
-                      </article>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="report-section-empty">No identity branch was retained.</p>
-              )}
-            </section>
-            <section className="report-section" aria-labelledby="report-findings-heading">
-              <div className="report-section-heading">
-                <h3 id="report-findings-heading">Findings</h3>
-                <span>{findings.length}</span>
-              </div>
-              {findings.length > 0 ? (
-                <div className="report-findings">
-                  {findings.map((finding, index) => {
-                    const sources = findingSources(finding);
-                    return (
-                      <article key={finding.id ?? finding.findingId ?? index}>
-                        <header>
-                          <span>{humanize(finding.category)}</span>
-                          <strong>{humanize(finding.confidence?.label ?? finding.confidenceBand)}</strong>
-                        </header>
-                        <small className="finding-candidate-label">
-                          Candidate: {candidateNameById.get(finding.candidateId) ?? "Unresolved candidate branch"}
-                        </small>
-                        <h4>{finding.title}</h4>
-                        <p>{finding.description ?? finding.summary ?? finding.rationale}</p>
-                        <footer className="finding-sources">
-                          {sources.length > 0 ? (
-                            <>
-                              <span className="sources-label">Sources:</span>
-                              {sources.map((source, sourceIndex) => (
-                                <a
-                                  key={`${source.url}-${sourceIndex}`}
-                                  href={source.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="source-cite"
-                                >
-                                  <ExternalIcon />
-                                  {source.title} — {source.domain}
-                                </a>
-                              ))}
-                            </>
-                          ) : (
-                            <span className="sources-label">No cited source</span>
-                          )}
-                          {finding.counterEvidenceIds?.length ? (
-                            <span className="counter-count">{finding.counterEvidenceIds.length} counter</span>
-                          ) : null}
-                        </footer>
-                      </article>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="report-section-empty">No finding met the evidence and confidence rules.</p>
-              )}
-            </section>
-            <section className="report-section" aria-labelledby="report-evidence-heading">
-              <div className="report-section-heading">
-                <h3 id="report-evidence-heading">Evidence ledger</h3>
-                <span>{evidence.length}</span>
-              </div>
-              {evidence.length > 0 ? (
-                <ol className="report-evidence-list">
-                  {evidence.map((item, index) => {
-                    const href = evidenceUrl(item);
-                    const title = item.title ?? item.source?.title ?? item.claim ?? "Evidence record";
-                    const discoveryOnly =
-                      item.disposition === "discovery_only" || item.verificationMethod === "search_discovery";
-                    const passiveMetadataObservation = isPassivePageMetadataObservation(item);
-                    const footprint =
-                      discoveryOnly && !passiveMetadataObservation ? null : projectPageFootprint(item.canonicalSubset);
-                    const temporal = discoveryOnly ? null : projectTemporalComparison(item.canonicalSubset);
-                    const discoveryLabel = passiveMetadataObservation
-                      ? "Passive page metadata observation"
-                      : "Unverified discovery lead";
-                    const discoverySummary = passiveMetadataObservation
-                      ? "Bounded page-declared metadata from an exact authorized fetch; it does not establish identity, ownership, or a finding."
-                      : "Provider-attested URL metadata only; this lead does not support a finding until a hardened direct fetch succeeds.";
-                    return (
-                      <li
-                        key={item.id ?? item.evidenceId ?? index}
-                        className={discoveryOnly ? "is-discovery-lead" : undefined}
-                      >
-                        <span>E{String(index + 1).padStart(2, "0")}</span>
-                        <div>
-                          <small>
-                            {item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} ·{" "}
-                            {discoveryOnly ? discoveryLabel : humanize(item.verificationMethod)}
-                          </small>
-                          {item.candidateId ? (
-                            <small className="evidence-candidate-label">
-                              Candidate: {candidateNameById.get(item.candidateId) ?? item.candidateId}
-                            </small>
-                          ) : null}
-                          <strong>{title}</strong>
-                          <p>
-                            {discoveryOnly ? discoverySummary : (item.excerpt ?? item.minimalExcerpt ?? item.claim)}
-                          </p>
-                          {temporal ? <TemporalContext temporal={temporal} /> : null}
-                          {footprint ? <FootprintContext footprint={footprint} /> : null}
-                          {href ? (
-                            <a className="evidence-source-link" href={href} target="_blank" rel="noreferrer">
-                              <ExternalIcon />
-                              {title} — {domainOf(href, "source")}
-                            </a>
-                          ) : null}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-              ) : (
-                <p className="report-section-empty">No evidence record was admitted.</p>
-              )}
-            </section>
-            {(report.limitations?.length ?? 0) > 0 ? (
-              <section className="report-section report-limitations" aria-labelledby="report-limitations-heading">
-                <div className="report-section-heading">
-                  <h3 id="report-limitations-heading">Limits</h3>
-                  <span>{report.limitations?.length}</span>
-                </div>
-                <ul>
-                  {report.limitations?.map((limitation, index) => (
-                    <li key={index}>{limitationText(limitation)}</li>
+                            {observation.caveats.length > 0 ? (
+                              <ul className="report-observation-caveats">
+                                {observation.caveats.map((caveat) => (
+                                  <li key={caveat}>{caveat}</li>
+                                ))}
+                              </ul>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+                    </section>
                   ))}
-                </ul>
-              </section>
-            ) : null}
+                </div>
+              ) : null}
+            </section>
+            <details className="report-technical-audit">
+              <summary>
+                <span>Technical audit</span>
+                <small>Identity rules, search coverage, sources, and execution</small>
+              </summary>
+              <div className="report-technical-audit-body">
+                <section
+                  className={`report-identity-assessment formal-${formalIdentityStatus}`}
+                  aria-labelledby="report-identity-assessment-heading"
+                >
+                  <header>
+                    <span>Candidate assessment</span>
+                    <strong id="report-identity-assessment-heading">{identityAssessmentLabel}</strong>
+                  </header>
+                  {leadCandidate ? <h3>{candidateName(leadCandidate)}</h3> : null}
+                  <p>{identityAssessmentSummary}</p>
+                  <dl>
+                    <div>
+                      <dt>Formal identity status</dt>
+                      <dd>{humanize(viewModel.audit.formalIdentityStatus)}</dd>
+                    </div>
+                    <div>
+                      <dt>{viewModel.audit.decisionScoreLabel}</dt>
+                      <dd>{percentScore(viewModel.audit.decisionScore)}</dd>
+                    </div>
+                    <div>
+                      <dt>Resolution threshold</dt>
+                      <dd>{percentScore(viewModel.audit.resolutionThreshold)}</dd>
+                    </div>
+                    <div>
+                      <dt>Resolution margin · required</dt>
+                      <dd>
+                        {percentScore(viewModel.audit.resolutionMargin)} ·{" "}
+                        {percentScore(viewModel.audit.marginThreshold)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>{viewModel.audit.baseCandidateScoreLabel}</dt>
+                      <dd>
+                        {viewModel.audit.baseCandidateScore === null
+                          ? "Not applicable"
+                          : percentScore(viewModel.audit.baseCandidateScore)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Identity-supporting source families</dt>
+                      <dd>{viewModel.audit.identitySupportingSourceFamilyCount}</dd>
+                    </div>
+                    <div>
+                      <dt>Finding-backed coverage</dt>
+                      <dd>{percentScore(viewModel.audit.coverageScore)}</dd>
+                    </div>
+                    <div>
+                      <dt>Execution stop reason</dt>
+                      <dd>{humanize(viewModel.audit.stopReason)}</dd>
+                    </div>
+                  </dl>
+                  <p className="report-audit-stop-detail">{viewModel.audit.stopDetail}</p>
+                  {missingCorroboration.length > 0 ? (
+                    <div className="identity-corroboration-gaps" role="note">
+                      <b>Decision gaps</b>
+                      <ul>
+                        {missingCorroboration.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </section>
+                {coverageDiagnostics.length > 0 || searchQueries.length > 0 || searchTransports.length > 0 ? (
+                  <section className="report-coverage-note" aria-labelledby="report-coverage-heading">
+                    <h3 id="report-coverage-heading">Search coverage</h3>
+                    {searchTransports.length > 0 ? (
+                      <div className="report-search-transports" aria-label="Search transport attempts">
+                        <strong>Transport attempts</strong>
+                        {webSearchTransports.length > 0 ? (
+                          <section>
+                            <small>Web discovery path</small>
+                            <ul>
+                              {webSearchTransports.map((transport) => (
+                                <li key={transport.id}>
+                                  <span>{transport.label}</span>
+                                  <small>{humanize(transport.outcome)}</small>
+                                </li>
+                              ))}
+                            </ul>
+                          </section>
+                        ) : null}
+                        {structuredSearchTransports.length > 0 ? (
+                          <section>
+                            <small>Structured indexes</small>
+                            <ul>
+                              {structuredSearchTransports.map((transport) => (
+                                <li key={transport.id}>
+                                  <span>{transport.label}</span>
+                                  <small>{humanize(transport.outcome)}</small>
+                                </li>
+                              ))}
+                            </ul>
+                          </section>
+                        ) : null}
+                        <p>
+                          Attempts and returned discovery leads are not cited sources until hardened fetch succeeds.
+                        </p>
+                      </div>
+                    ) : null}
+                    {searchQueries.length > 0 ? (
+                      <div className="report-query-program">
+                        <header>
+                          <strong>Queries attempted</strong>
+                          <span>{searchQueries.length}</span>
+                        </header>
+                        <ol>
+                          {searchQueries.map((query) => (
+                            <li key={query}>
+                              <code>{query}</code>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    ) : null}
+                    {coverageDiagnostics.length > 0 ? (
+                      <ul className="report-coverage-diagnostics">
+                        {coverageDiagnostics.map((diagnostic) => (
+                          <li key={diagnostic.code}>
+                            <strong>{humanize(diagnostic.code)}</strong>
+                            <span>{diagnostic.message}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </section>
+                ) : null}
+                <section className="report-section" aria-labelledby="report-candidates-heading">
+                  <div className="report-section-heading">
+                    <h3 id="report-candidates-heading">Identity branches</h3>
+                    <span>{allCandidates.length}</span>
+                  </div>
+                  {allCandidates.length > 1 ? (
+                    <div className="candidate-ambiguity-note" role="note">
+                      <strong>{allCandidates.length} distinct candidate branches retained</strong>
+                      <p>
+                        Atlas did not merge same-name results without strong corroborating identifiers. The five
+                        highest-ranked candidate profiles are consolidated below.
+                      </p>
+                    </div>
+                  ) : null}
+                  {candidates.length > 0 ? (
+                    <div className="candidate-report-grid">
+                      {candidates.map((candidate) => {
+                        const id = candidate.id ?? candidate.candidateId ?? candidateName(candidate);
+                        const branchEvidence = evidence.filter((item) => item.candidateId === id);
+                        const branchFindings = findings.filter((finding) => finding.candidateId === id);
+                        const directEvidence = branchEvidence.filter(
+                          (item) =>
+                            item.disposition !== "discovery_only" && item.verificationMethod !== "search_discovery",
+                        );
+                        const supportingEvidence = directEvidence.filter(
+                          (item) =>
+                            item.disposition === "supports" &&
+                            item.verificationMethod === "direct_fetch" &&
+                            item.attributes?.metadataObservation !== true,
+                        );
+                        const supportingFamilies = [
+                          ...new Set(
+                            supportingEvidence.map((item) => {
+                              const href = evidenceUrl(item);
+                              return item.sourceFamily ?? (href ? domainOf(href, "source") : "source");
+                            }),
+                          ),
+                        ].sort();
+                        const supportingEvidenceIds = new Set(
+                          supportingEvidence
+                            .map((item) => item.id ?? item.evidenceId)
+                            .filter((evidenceId): evidenceId is string => typeof evidenceId === "string"),
+                        );
+                        const matchedContextSignals = [
+                          ...new Set(
+                            [
+                              ...(candidate.signals ?? [])
+                                .filter(
+                                  (signal) =>
+                                    typeof signal.kind === "string" &&
+                                    PROFILE_CONTEXT_SIGNAL_KINDS.has(signal.kind) &&
+                                    signal.assurance !== "self_asserted" &&
+                                    Boolean(
+                                      signal.sourceEvidenceId && supportingEvidenceIds.has(signal.sourceEvidenceId),
+                                    ),
+                                )
+                                .map((signal) => signal.kind),
+                            ].filter((signal): signal is string => typeof signal === "string"),
+                          ),
+                        ].sort();
+                        const profileFacts = supportingEvidence
+                          .filter(
+                            (item, index, items) =>
+                              items.findIndex(
+                                (candidateItem) =>
+                                  (candidateItem.claim ?? candidateItem.excerpt ?? "").toLocaleLowerCase("en-US") ===
+                                  (item.claim ?? item.excerpt ?? "").toLocaleLowerCase("en-US"),
+                              ) === index,
+                          )
+                          .slice(0, 3);
+                        const branchSourceByHref = new Map<string, { href: string; title: string }>();
+                        for (const item of directEvidence) {
+                          const href = evidenceUrl(item);
+                          if (!href || branchSourceByHref.has(href)) continue;
+                          branchSourceByHref.set(href, {
+                            href,
+                            title: item.title ?? item.source?.title ?? item.claim ?? domainOf(href, "source"),
+                          });
+                        }
+                        const branchSources = [...branchSourceByHref.values()].slice(0, 3);
+                        return (
+                          <article key={id} className={`candidate-report-card status-${candidate.status ?? "unknown"}`}>
+                            <header>
+                              <span>
+                                {id === leadId
+                                  ? formalIdentityStatus === "resolved"
+                                    ? "Selected candidate"
+                                    : identityAssessmentLabel
+                                  : humanize(candidate.status)}
+                              </span>
+                              <strong>{humanize(candidate.status ?? "retained")}</strong>
+                            </header>
+                            <h4>{candidateName(candidate)}</h4>
+                            <p>
+                              {candidate.headline ??
+                                candidate.affiliation ??
+                                candidate.separationReason ??
+                                "Candidate kept as a distinct graph branch."}
+                            </p>
+                            <div className="candidate-profile-metrics">
+                              <span>{directEvidence.length} direct</span>
+                              <span>{supportingFamilies.length} source families</span>
+                              <span>{matchedContextSignals.length} context matches</span>
+                            </div>
+                            {profileFacts.length > 0 ? (
+                              <div className="candidate-profile-facts">
+                                <b>
+                                  {formalIdentityStatus === "resolved"
+                                    ? "Cited profile facts"
+                                    : "Candidate-scoped cited observations"}
+                                </b>
+                                {formalIdentityStatus !== "resolved" ? (
+                                  <small>
+                                    These observations are bound only to this retained branch. They do not independently
+                                    establish that it is the queried person.
+                                  </small>
+                                ) : null}
+                                <ul>
+                                  {profileFacts.map((item) => {
+                                    const href = evidenceUrl(item);
+                                    const claim =
+                                      item.claim ?? item.excerpt ?? "Admitted public-professional observation.";
+                                    return (
+                                      <li key={item.id ?? item.evidenceId ?? claim}>
+                                        <span>{claim}</span>
+                                        {href ? (
+                                          <a href={href} target="_blank" rel="noreferrer">
+                                            <ExternalIcon /> {domainOf(href, item.sourceFamily ?? "source")}
+                                          </a>
+                                        ) : null}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </div>
+                            ) : null}
+                            {branchSources.length > 0 ? (
+                              <ul className="candidate-profile-sources">
+                                {branchSources.map((source) => (
+                                  <li key={source.href}>
+                                    <a href={source.href} target="_blank" rel="noreferrer">
+                                      <ExternalIcon /> {source.title}
+                                    </a>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <small>No directly fetched source was bound to this branch.</small>
+                            )}
+                            <small>
+                              {branchEvidence.length} evidence records · {branchFindings.length} admitted findings ·
+                              branch status {humanize(candidate.status)}
+                            </small>
+                            <code>{id}</code>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="report-section-empty">No identity branch was retained.</p>
+                  )}
+                </section>
+                <section className="report-section" aria-labelledby="report-findings-heading">
+                  <div className="report-section-heading">
+                    <h3 id="report-findings-heading">Findings</h3>
+                    <span>{findings.length}</span>
+                  </div>
+                  {findings.length > 0 ? (
+                    <div className="report-findings">
+                      {findings.map((finding, index) => {
+                        const sources = findingSources(finding);
+                        return (
+                          <article key={finding.id ?? finding.findingId ?? index}>
+                            <header>
+                              <span>{humanize(finding.category)}</span>
+                              <strong>{humanize(finding.confidence?.label ?? finding.confidenceBand)}</strong>
+                            </header>
+                            <small className="finding-candidate-label">
+                              Candidate: {candidateNameById.get(finding.candidateId) ?? "Unresolved candidate branch"}
+                            </small>
+                            <h4>{finding.title}</h4>
+                            <p>{finding.description ?? finding.summary ?? finding.rationale}</p>
+                            <footer className="finding-sources">
+                              {sources.length > 0 ? (
+                                <>
+                                  <span className="sources-label">Sources:</span>
+                                  {sources.map((source, sourceIndex) => (
+                                    <a
+                                      key={`${source.url}-${sourceIndex}`}
+                                      href={source.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="source-cite"
+                                    >
+                                      <ExternalIcon />
+                                      {source.title} — {source.domain}
+                                    </a>
+                                  ))}
+                                </>
+                              ) : (
+                                <span className="sources-label">No cited source</span>
+                              )}
+                              {finding.counterEvidenceIds?.length ? (
+                                <span className="counter-count">{finding.counterEvidenceIds.length} counter</span>
+                              ) : null}
+                            </footer>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="report-section-empty">No finding met the evidence and confidence rules.</p>
+                  )}
+                </section>
+                <section className="report-section" aria-labelledby="report-evidence-heading">
+                  <div className="report-section-heading">
+                    <h3 id="report-evidence-heading">Evidence ledger</h3>
+                    <span>{evidence.length}</span>
+                  </div>
+                  {evidence.length > 0 ? (
+                    <ol className="report-evidence-list">
+                      {evidence.map((item, index) => {
+                        const href = evidenceUrl(item);
+                        const title = item.title ?? item.source?.title ?? item.claim ?? "Evidence record";
+                        const discoveryOnly =
+                          item.disposition === "discovery_only" || item.verificationMethod === "search_discovery";
+                        const passiveMetadataObservation = isPassivePageMetadataObservation(item);
+                        const footprint =
+                          discoveryOnly && !passiveMetadataObservation
+                            ? null
+                            : projectPageFootprint(item.canonicalSubset);
+                        const temporal = discoveryOnly ? null : projectTemporalComparison(item.canonicalSubset);
+                        const discoveryLabel = passiveMetadataObservation
+                          ? "Passive page metadata observation"
+                          : "Unverified discovery lead";
+                        const discoverySummary = passiveMetadataObservation
+                          ? "Bounded page-declared metadata from an exact authorized fetch; it does not establish identity, ownership, or a finding."
+                          : "Provider-attested URL metadata only; this lead does not support a finding until a hardened direct fetch succeeds.";
+                        return (
+                          <li
+                            key={item.id ?? item.evidenceId ?? index}
+                            className={discoveryOnly ? "is-discovery-lead" : undefined}
+                          >
+                            <span>E{String(index + 1).padStart(2, "0")}</span>
+                            <div>
+                              <small>
+                                {item.sourceFamily ?? item.publisher ?? item.source?.sourceFamily ?? "Public source"} ·{" "}
+                                {discoveryOnly ? discoveryLabel : humanize(item.verificationMethod)}
+                              </small>
+                              {item.candidateId ? (
+                                <small className="evidence-candidate-label">
+                                  Candidate: {candidateNameById.get(item.candidateId) ?? item.candidateId}
+                                </small>
+                              ) : null}
+                              <strong>{title}</strong>
+                              <p>
+                                {discoveryOnly ? discoverySummary : (item.excerpt ?? item.minimalExcerpt ?? item.claim)}
+                              </p>
+                              {temporal ? <TemporalContext temporal={temporal} /> : null}
+                              {footprint ? <FootprintContext footprint={footprint} /> : null}
+                              {href ? (
+                                <a className="evidence-source-link" href={href} target="_blank" rel="noreferrer">
+                                  <ExternalIcon />
+                                  {title} — {domainOf(href, "source")}
+                                </a>
+                              ) : null}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  ) : (
+                    <p className="report-section-empty">No evidence record was admitted.</p>
+                  )}
+                </section>
+                {(report.limitations?.length ?? 0) > 0 ? (
+                  <section className="report-section report-limitations" aria-labelledby="report-limitations-heading">
+                    <div className="report-section-heading">
+                      <h3 id="report-limitations-heading">Limits</h3>
+                      <span>{report.limitations?.length}</span>
+                    </div>
+                    <ul>
+                      {report.limitations?.map((limitation, index) => (
+                        <li key={index}>{limitationText(limitation)}</li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
+              </div>
+            </details>
           </div>
         ) : (
           <div className="report-empty">

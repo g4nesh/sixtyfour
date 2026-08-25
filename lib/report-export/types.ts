@@ -21,6 +21,10 @@ export interface ReportViewModel {
   title: string;
   subject: string;
   run: ReportRunView;
+  /** Narrative-first, candidate-bound projection for the reader-facing opening. */
+  briefing: ReportBriefingView;
+  /** Compact technical mechanics kept separate from the public briefing. */
+  audit: ReportAuditView;
   executiveSummary: string;
   identity: ReportIdentityView;
   findings: ReportFindingView[];
@@ -30,6 +34,62 @@ export interface ReportViewModel {
   limitations: string[];
   execution: ReportExecutionView;
   methodology: ReportMethodologyView;
+}
+
+export type ReportBriefingObservationKind = "finding" | "direct_observation";
+
+export interface ReportBriefingObservationView {
+  id: string;
+  kind: ReportBriefingObservationKind;
+  category: FindingCategory;
+  candidateId: string;
+  candidateName: string;
+  heading: string;
+  detail: string;
+  evidenceRefs: string[];
+  /** Safe public sources, deduplicated within this candidate-bound observation. */
+  sources: ReportCitedSource[];
+  caveats: string[];
+}
+
+export interface ReportBriefingSectionView {
+  key: FindingCategory;
+  heading: string;
+  observations: ReportBriefingObservationView[];
+}
+
+export interface ReportBriefingView {
+  headline: string;
+  leadCandidateId: string | null;
+  leadName: string | null;
+  leadStatement: string;
+  /** Concrete admitted observations only; never a score or a model-written trait summary. */
+  overview: string;
+  /** Short adjacent disclosure that preserves the formal identity outcome. */
+  statusCaveat: string;
+  /** Plain-language disclosure about source independence and spoofability. */
+  sourceCaveat: string;
+  sections: ReportBriefingSectionView[];
+  emptyState: string | null;
+}
+
+export interface ReportAuditView {
+  formalIdentityStatus: "resolved" | "ambiguous" | "unresolved";
+  assessment: ReportIdentityDecisionLabel;
+  resolutionBasis: "candidate_score" | "context_corroboration";
+  decisionScore: number;
+  decisionScoreLabel: "Rule-based identity decision score (not a probability)";
+  baseCandidateScore: number | null;
+  baseCandidateScoreLabel: "Rule-based base candidate score (not a probability)";
+  resolutionThreshold: number;
+  resolutionMargin: number;
+  marginThreshold: number;
+  identitySupportingSourceFamilyCount: number;
+  admittedIndependentSourceFamilyCount: number;
+  retainedCandidateCount: number;
+  coverageScore: number;
+  stopReason: StopReason;
+  stopDetail: string;
 }
 
 export interface ReportRunView {

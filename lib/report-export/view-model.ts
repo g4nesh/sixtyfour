@@ -2,16 +2,28 @@ import type {
   BudgetUsage,
   Candidate,
   EvidenceRecord,
+  FindingCategory,
   InvestigationReport,
   SearchGraph,
   SearchGraphEdge,
   SearchGraphNode,
 } from "../domain/types";
+import {
+  containsRestrictedPublicContent,
+  containsRestrictedReportArtifact,
+  urlContainsRestrictedParameters,
+} from "../domain/content-policy";
+import { evidenceSupportsFindingCategory, validateReferentialIntegrity } from "../domain/integrity";
+import { resolveIdentity, restrictedReportContentPaths } from "../domain/report";
+import { parseInvestigationReport } from "../domain/validation";
 import { cleanInlineReportText, cleanReportText, safePublicReportUrl } from "./sanitize";
 import { isPassivePageMetadataObservation, projectPageFootprint, projectTemporalComparison } from "./evidence-context";
 import type {
   ReportCandidateView,
+  ReportBriefingObservationView,
+  ReportBriefingView,
   ReportEvidenceView,
+  ReportFindingView,
   ReportGraphCount,
   ReportIdentityDecisionLabel,
   ReportPathView,
@@ -47,9 +59,113 @@ const TIER_LABELS: Record<number, string> = {
 const ACCEPTED_STATUSES = new Set(["verified", "mutated"]);
 const REJECTED_STATUSES = new Set(["rejected"]);
 const PROFILE_CONTEXT_SIGNAL_KINDS = new Set(["organization", "role", "location", "bio_phrase"]);
+const BRIEFING_CATEGORY_ORDER: readonly FindingCategory[] = [
+  "employment",
+  "education",
+  "project",
+  "publication",
+  "online_presence",
+  "timeline",
+  "identity",
+  "other",
+];
+const BRIEFING_CATEGORY_HEADINGS: Record<FindingCategory, string> = {
+  identity: "Identity",
+  employment: "Employment",
+  education: "Education",
+  project: "Projects",
+  publication: "Publications",
+  online_presence: "Online presence",
+  timeline: "Timeline",
+  other: "Other public-professional observations",
+};
 
 function finiteScore(value: number): number {
   return Number.isFinite(value) ? value : 0;
+}
+
+function safeEvidenceSourceUrl(value: string): string | null {
+  const safe = safePublicReportUrl(value);
+  let parsed: URL;
+  try {
+    parsed = new URL(safe ?? "");
+  } catch {
+    return null;
+  }
+  const hostname = parsed.hostname.toLocaleLowerCase("en-US").replace(/\.$/, "");
+  const publicHostname =
+    hostname.length <= 253 &&
+    hostname.includes(".") &&
+    !hostname.startsWith("[") &&
+    !hostname.endsWith("]") &&
+    !hostname.endsWith(".localhost") &&
+    !hostname.endsWith(".local") &&
+    !hostname.endsWith(".internal") &&
+    !hostname.endsWith(".home.arpa") &&
+    hostname !== "localhost" &&
+    hostname.split(".").every((label) => /^(?!-)[a-z0-9-]{1,63}(?<!-)$/.test(label));
+  if (
+    !safe ||
+    parsed.port !== "" ||
+    !publicHostname ||
+    urlContainsRestrictedParameters(safe) ||
+    containsRestrictedPublicContent(safe) ||
+    containsRestrictedReportArtifact(safe)
+  ) {
+    return null;
+  }
+  return safe;
+}
+
+function sameCanonicalValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => sameCanonicalValue(item, right[index]))
+    );
+  }
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] && sameCanonicalValue(leftRecord[key], rightRecord[key]))
+  );
+}
+
+function exportableReport(value: InvestigationReport): InvestigationReport {
+  let report: InvestigationReport;
+  try {
+    report = parseInvestigationReport(value);
+  } catch {
+    throw new TypeError("report export rejected: invalid canonical investigation report");
+  }
+  const restrictedPaths = restrictedReportContentPaths(report);
+  if (restrictedPaths.length > 0) {
+    throw new TypeError(`report export rejected: restricted public content at ${restrictedPaths[0]}`);
+  }
+  // Search-graph integrity remains an execution/replay concern. The export
+  // boundary validates the complete candidate/evidence/finding fact graph so a
+  // malformed UI payload cannot forge a citation or borrow another branch.
+  const integrityIssues = validateReferentialIntegrity({
+    candidates: report.candidates,
+    evidence: report.evidence,
+    findings: report.findings,
+  });
+  if (integrityIssues.length > 0) {
+    const issue = integrityIssues[0];
+    throw new TypeError(`report export rejected: ${issue.code} at ${issue.path}`);
+  }
+  const canonicalIdentity = resolveIdentity(report.candidates, report.evidence, report.target);
+  if (!sameCanonicalValue(report.identity, canonicalIdentity)) {
+    throw new TypeError("report export rejected: identity projection does not match canonical candidates and evidence");
+  }
+  return report;
 }
 
 function percentage(value: number): string {
@@ -166,7 +282,7 @@ function evidenceViews(
     const ref = `E${String(index + 1).padStart(width, "0")}`;
     refsById.set(item.id, ref);
     const tier = evidenceTier(item, graph);
-    const url = safePublicReportUrl(item.canonicalUrl) ?? safePublicReportUrl(item.sourceUrl) ?? "";
+    const url = safeEvidenceSourceUrl(item.canonicalUrl) ?? safeEvidenceSourceUrl(item.sourceUrl) ?? "";
     const discoveryOnly = item.disposition === "discovery_only" || item.sourceType === "search_result";
     const passiveMetadataObservation = isPassivePageMetadataObservation(item);
     const exactExcerpt = discoveryOnly || item.excerpt === null ? null : cleanReportText(item.excerpt);
@@ -353,6 +469,195 @@ function countPhrase(count: number, singular: string, plural = `${singular}s`): 
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function briefingSafeText(value: string, currentYear: number): string | null {
+  const cleaned = cleanReportText(value);
+  if (!cleaned || containsRestrictedPublicContent(cleaned, { currentYear })) return null;
+  return cleaned;
+}
+
+function directObservationCategory(evidence: EvidenceRecord, candidate: Candidate): FindingCategory {
+  for (const category of BRIEFING_CATEGORY_ORDER) {
+    if (category !== "other" && evidenceSupportsFindingCategory(evidence, candidate, category)) return category;
+  }
+  return "other";
+}
+
+function quotedObservationSentence(prefix: string, detail: string): string {
+  const terminalDetail = /[.!?…]$/u.test(detail) ? detail : `${detail}.`;
+  return `${prefix}: “${terminalDetail}”`;
+}
+
+function buildBriefing(
+  report: InvestigationReport,
+  subject: string,
+  assessment: ReturnType<typeof identityPresentation>,
+  findings: readonly ReportFindingView[],
+  evidence: readonly ReportEvidenceView[],
+): ReportBriefingView {
+  const generatedYear = new Date(report.generatedAt).getUTCFullYear();
+  const currentYear = Number.isInteger(generatedYear) ? generatedYear : 1970;
+  const lead = assessment.lead;
+  const safeLeadName = lead ? briefingSafeText(lead.name, currentYear) : null;
+  const safeSubject = briefingSafeText(subject, currentYear) ?? safeLeadName ?? "Public professional profile";
+  const headline = `${safeSubject} — here’s what’s publicly available.`;
+
+  const rawEvidenceById = new Map(report.evidence.map((item) => [cleanInlineReportText(item.id), item]));
+  const rawCandidate = lead ? report.candidates.find((candidate) => candidate.id === lead.id) : null;
+  const sourceFor = (item: ReportEvidenceView) => {
+    const url = safeEvidenceSourceUrl(item.sourceUrl);
+    if (!url || containsRestrictedPublicContent(url, { currentYear })) return null;
+    const domain = briefingSafeText(item.sourceFamily, currentYear);
+    if (!domain) return null;
+    return {
+      ref: item.ref,
+      url,
+      title: item.title ? briefingSafeText(item.title, currentYear) : null,
+      domain,
+    };
+  };
+  const eligibleEvidence = new Map(
+    evidence
+      .filter(
+        (item) =>
+          item.candidateId === lead?.id &&
+          item.disposition === "supports" &&
+          isDirectEvidence(item) &&
+          briefingSafeText(item.claim, currentYear) !== null &&
+          sourceFor(item) !== null,
+      )
+      .map((item) => [item.ref, item]),
+  );
+  const sourcesFor = (refs: readonly string[]) => {
+    const seen = new Set<string>();
+    return refs
+      .map((ref) => eligibleEvidence.get(ref))
+      .filter((item): item is ReportEvidenceView => Boolean(item))
+      .map(sourceFor)
+      .filter((source): source is NonNullable<ReturnType<typeof sourceFor>> => Boolean(source))
+      .filter((source) => {
+        if (seen.has(source.url)) return false;
+        seen.add(source.url);
+        return true;
+      });
+  };
+
+  const observations: ReportBriefingObservationView[] = [];
+  const seenDetails = new Set<string>();
+  for (const finding of findings) {
+    if (finding.candidateId !== lead?.id) continue;
+    const evidenceRefs = [...new Set(finding.citations.filter((ref) => eligibleEvidence.has(ref)))].sort();
+    const heading = briefingSafeText(finding.title, currentYear);
+    const detail = briefingSafeText(finding.description, currentYear);
+    if (!heading || !detail || evidenceRefs.length === 0) continue;
+    const sources = sourcesFor(evidenceRefs);
+    if (sources.length === 0) continue;
+    const dedupeKey = detail.toLocaleLowerCase("en-US").replace(/\s+/gu, " ");
+    if (seenDetails.has(dedupeKey)) continue;
+    seenDetails.add(dedupeKey);
+    observations.push({
+      id: `finding:${finding.id}`,
+      kind: "finding",
+      category: finding.category,
+      candidateId: finding.candidateId,
+      candidateName: safeLeadName ?? "Retained candidate branch",
+      heading,
+      detail,
+      evidenceRefs,
+      sources,
+      caveats: finding.caveats
+        .map((caveat) => briefingSafeText(caveat, currentYear))
+        .filter((caveat): caveat is string => Boolean(caveat)),
+    });
+  }
+
+  for (const fact of lead?.profileFacts ?? []) {
+    const projectedEvidence = eligibleEvidence.get(fact.evidenceRef);
+    const rawEvidence = projectedEvidence ? rawEvidenceById.get(projectedEvidence.id) : null;
+    const detail = briefingSafeText(fact.claim, currentYear);
+    if (!projectedEvidence || !rawEvidence || !rawCandidate || !detail) continue;
+    const sources = sourcesFor([fact.evidenceRef]);
+    if (sources.length === 0) continue;
+    const dedupeKey = detail.toLocaleLowerCase("en-US").replace(/\s+/gu, " ");
+    if (seenDetails.has(dedupeKey)) continue;
+    seenDetails.add(dedupeKey);
+    const category = directObservationCategory(rawEvidence, rawCandidate);
+    observations.push({
+      id: `observation:${fact.evidenceRef}`,
+      kind: "direct_observation",
+      category,
+      candidateId: cleanInlineReportText(rawCandidate.id),
+      candidateName: safeLeadName ?? "Retained candidate branch",
+      heading: `${BRIEFING_CATEGORY_HEADINGS[category]} observation`,
+      detail,
+      evidenceRefs: [fact.evidenceRef],
+      sources,
+      caveats: projectedEvidence.spoofable
+        ? ["This self-published or otherwise spoofable source is not independent confirmation."]
+        : [],
+    });
+  }
+
+  const sections = BRIEFING_CATEGORY_ORDER.map((key) => ({
+    key,
+    heading: BRIEFING_CATEGORY_HEADINGS[key],
+    observations: observations.filter((observation) => observation.category === key),
+  })).filter((section) => section.observations.length > 0);
+  const firstObservations = sections.flatMap((section) => section.observations).slice(0, 2);
+  const emptyState =
+    firstObservations.length === 0
+      ? "No candidate-bound public-professional observation cleared the evidence gates in this run."
+      : null;
+  const overview =
+    firstObservations.length === 0
+      ? emptyState!
+      : [
+          quotedObservationSentence("The clearest cited public record states", firstObservations[0].detail),
+          ...(firstObservations[1]
+            ? [quotedObservationSentence("A second cited public record states", firstObservations[1].detail)]
+            : []),
+        ].join(" ");
+  const leadStatement = !lead
+    ? "Atlas did not retain a public-professional lead with candidate-bound direct evidence."
+    : report.identity.status === "resolved"
+      ? `The admitted public record supports ${safeLeadName ?? "this candidate branch"} as the resolved match.`
+      : report.identity.status === "ambiguous"
+        ? `Atlas retained competing public-professional branches; ${safeLeadName ?? "the displayed branch"} is the strongest current lead, but no branch was resolved.`
+        : assessment.decisionLabel === "Best-supported candidate"
+          ? `The strongest public-professional lead points to ${safeLeadName ?? "the displayed branch"}.`
+          : `The current public-professional lead points to ${safeLeadName ?? "the displayed branch"}.`;
+  const statusCaveat = !lead
+    ? "Identity note: no person profile is asserted because no candidate-bound direct evidence was retained."
+    : report.identity.status === "resolved"
+      ? "Identity note: Atlas formally resolved this profile to the queried person. Each statement remains limited to its cited public source."
+      : report.identity.status === "ambiguous"
+        ? "Identity note: Atlas retained competing candidate branches and did not resolve the queried person. The observations below apply only to the displayed branch."
+        : assessment.decisionLabel === "Best-supported candidate"
+          ? "Identity note: this is the best-supported retained branch, not a formally resolved identity. Its observations must not be carried to another same-name person."
+          : "Identity note: this is a retained query branch, not a best-supported or formally resolved identity. Its observations must not be carried to another same-name person.";
+  const sourceFamilyCount = assessment.resolutionSourceFamilies.length;
+  const sourceCaveat =
+    sourceFamilyCount === 0
+      ? "No identity-supporting direct source family was admitted."
+      : sourceFamilyCount === 1 && assessment.allResolutionEvidenceSpoofable
+        ? "The only identity-supporting source is self-published or otherwise spoofable, so it is not independent confirmation."
+        : sourceFamilyCount === 1
+          ? "The identity-supporting evidence comes from one source family, so it is not independent confirmation."
+          : assessment.allResolutionEvidenceSpoofable
+            ? "The identity-supporting sources remain self-published or otherwise spoofable; separate domains alone do not establish independent authority."
+            : "The identity-supporting record comes from more than one separately retained source family; source-specific caveats still apply.";
+  return {
+    headline,
+    leadCandidateId: lead?.id ?? null,
+    leadName: safeLeadName,
+    leadStatement,
+    overview,
+    statusCaveat,
+    sourceCaveat,
+    sections,
+    emptyState,
+  };
+}
+
 function identityPresentation(
   status: InvestigationReport["identity"]["status"],
   selected: ReportCandidateView | null,
@@ -474,31 +779,14 @@ function identityPresentation(
   };
 }
 
-function executiveSummary(
-  report: InvestigationReport,
-  assessment: ReturnType<typeof identityPresentation>,
-  findingCount: number,
-): string {
-  const identity = assessment.lead
-    ? `${assessment.decisionLabel}: ${assessment.lead.name} is the ${report.identity.status === "resolved" ? "formally selected" : "highest-ranked"} profile at a ${percentage(assessment.resolutionScore)} identity match score${assessment.resolutionBasis === "context_corroboration" ? ` (base candidate score ${percentage(assessment.lead.score)})` : ""}, grounded in ${countPhrase(assessment.lead.directSourceCount, "direct evidence record")} from ${countPhrase(assessment.resolutionSourceFamilies.length, "identity-supporting source family", "identity-supporting source families")}.`
-    : "No eligible candidate profile was retained from the admitted public-professional evidence.";
-  const decisionBoundary =
-    report.identity.status === "resolved"
-      ? "The formal identity decision is resolved."
-      : report.identity.status === "ambiguous"
-        ? "Competing branches remain separate pending stronger corroboration."
-        : assessment.lead
-          ? "Formal resolution is still pending; the Identity section lists the missing corroboration."
-          : "Identity resolution cannot proceed without candidate-bound direct evidence.";
-  const findings =
-    findingCount > 0
-      ? `${countPhrase(findingCount, "finding")} ${findingCount === 1 ? "cites" : "cite"} admitted evidence across ${countPhrase(report.coverage.independentSourceFamilyCount, "independent source family", "independent source families")}.`
-      : "No synthesized finding met the evidence-admission and confidence rules in this run.";
-  const coverage = `Requested-category coverage is ${percentage(report.coverage.score)}; execution stopped with ${report.stop.reason.replaceAll("_", " ")}.`;
-  return cleanReportText(`${identity} ${decisionBoundary} ${findings} ${coverage}`);
+function executiveSummary(briefing: ReportBriefingView): string {
+  return cleanReportText(
+    [briefing.leadStatement, briefing.overview, briefing.statusCaveat, briefing.sourceCaveat].join(" "),
+  );
 }
 
 export function createReportViewModel(report: InvestigationReport): ReportViewModel {
+  report = exportableReport(report);
   const evidence = evidenceViews(report.evidence, report.searchGraph);
   const selectedId = report.identity.selectedCandidateId;
   const orderedCandidates = [...report.candidates].sort((left, right) => {
@@ -513,8 +801,9 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
     (selectedId ? candidateNames.get(selectedId) : null) ??
     (report.target.name ? cleanInlineReportText(report.target.name) : cleanInlineReportText(report.input.query));
   const evidenceViewById = new Map(evidence.items.map((item) => [item.id, item]));
-  const citedSourcesFor = (ids: readonly string[]) =>
-    ids
+  const citedSourcesFor = (ids: readonly string[]) => {
+    const seen = new Set<string>();
+    return ids
       .map((id) => {
         const ref = evidence.refsById.get(id);
         const view = evidenceViewById.get(cleanInlineReportText(id));
@@ -527,9 +816,13 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
         }
         return { ref, url: view.sourceUrl, title: view.title, domain };
       })
-      .filter((source): source is { ref: string; url: string; title: string | null; domain: string } =>
-        Boolean(source),
-      );
+      .filter((source): source is { ref: string; url: string; title: string | null; domain: string } => Boolean(source))
+      .filter((source) => {
+        if (seen.has(source.url)) return false;
+        seen.add(source.url);
+        return true;
+      });
+  };
   const findings = [...report.findings]
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((finding) => ({
@@ -616,10 +909,11 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
     resolutionMargin,
     report.identity.marginThreshold,
   );
+  const briefing = buildBriefing(report, subject, assessment, findings, evidence.items);
   return {
     schemaVersion: 1,
     classification: "PUBLIC-SOURCE INTELLIGENCE",
-    title: `Atlas intelligence report - ${subject}`,
+    title: briefing.headline,
     subject,
     run: {
       id: cleanInlineReportText(report.runId),
@@ -641,7 +935,26 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
       stopReason: report.stop.reason,
       stopDetail: cleanReportText(report.stop.detail),
     },
-    executiveSummary: executiveSummary(report, assessment, findings.length),
+    briefing,
+    audit: {
+      formalIdentityStatus: report.identity.status,
+      assessment: assessment.decisionLabel,
+      resolutionBasis,
+      decisionScore: resolutionScore,
+      decisionScoreLabel: "Rule-based identity decision score (not a probability)",
+      baseCandidateScore: assessment.lead?.score ?? null,
+      baseCandidateScoreLabel: "Rule-based base candidate score (not a probability)",
+      resolutionThreshold: finiteScore(report.identity.resolutionThreshold),
+      resolutionMargin,
+      marginThreshold: finiteScore(report.identity.marginThreshold),
+      identitySupportingSourceFamilyCount: assessment.resolutionSourceFamilies.length,
+      admittedIndependentSourceFamilyCount: report.coverage.independentSourceFamilyCount,
+      retainedCandidateCount,
+      coverageScore: finiteScore(report.coverage.score),
+      stopReason: report.stop.reason,
+      stopDetail: cleanReportText(report.stop.detail),
+    },
+    executiveSummary: executiveSummary(briefing),
     identity: {
       status: report.identity.status,
       selected,
@@ -688,7 +1001,7 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
       evidenceStandard:
         "Only admitted public-professional evidence appears here. Exact source excerpts, normalized archived text, and structured API claims are labeled distinctly, and discovery-only snippets are not promoted into findings.",
       confidenceStandard:
-        "Identity assessment keeps the base candidate score separate from any evidence-weighted context-corroboration score. Finding confidence is computed from candidate-bound evidence, independent source families, contradictions, reliability, and spoofability caps. Model prose is never finding authority.",
+        "Identity assessment keeps the base candidate score separate from any evidence-weighted context-corroboration score. Both are rule-based decision scores, not probabilities. Finding confidence is computed from candidate-bound evidence, independent source families, contradictions, reliability, and spoofability caps. Model prose is never finding authority.",
       graphStandard:
         "The search graph records actual frontier execution, including rejected and exhausted paths. Best-first path scores guide which legal action runs next but never increase finding confidence.",
       safetyNote:

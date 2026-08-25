@@ -3,6 +3,11 @@ export { projectPageFootprint, projectTemporalComparison } from "./evidence-cont
 export { createReportViewModel } from "./view-model";
 export type {
   CanonicalSearchGraphInput,
+  ReportAuditView,
+  ReportBriefingObservationKind,
+  ReportBriefingObservationView,
+  ReportBriefingSectionView,
+  ReportBriefingView,
   ReportCandidateView,
   ReportCoverageView,
   ReportEvidenceView,

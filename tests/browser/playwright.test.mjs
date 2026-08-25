@@ -3,9 +3,11 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { chromium } from "playwright";
 import {
+  assertFictionalReplay,
   chromeChromeCollisions,
   chromeSelectors,
   denseReplayFixture,
+  fictionalResearchQuery,
   graphChromeCollisions,
   highNodeCountGraphFixture,
   intersectingRectangles,
@@ -175,6 +177,16 @@ function evidenceUrl(evidence) {
     evidence?.source?.url
   );
 }
+
+test("deterministic browser fixtures contain no real-target residue", async () => {
+  const fixture = await denseReplayFixture();
+  assert.doesNotThrow(() => assertFictionalReplay(fixture));
+  assert.equal(fixture.report.input.query, fictionalResearchQuery);
+  for (const item of fixture.report.evidence) {
+    const url = evidenceUrl(item);
+    if (url) assert.match(new URL(url).hostname, /\.example\.(?:org|net)$/i);
+  }
+});
 
 async function assertServerReady() {
   try {
@@ -368,7 +380,7 @@ test(
       await page.goto(baseUrl.href, { waitUntil: "domcontentloaded" });
       await healthResponse;
       await page.evaluate(installStreamedResearchFixture, { events: fixture.events, delayMs: 120 });
-      await page.getByRole("searchbox", { name: "Public-professional research input" }).fill("Chris Anderson, TED");
+      await page.getByRole("searchbox", { name: "Public-professional research input" }).fill(fictionalResearchQuery);
       await page.evaluate(() => {
         window.__atlasViewportTransforms = [];
         window.__atlasMaxMountedFlowNodes = 0;
@@ -392,12 +404,27 @@ test(
       for (let index = 0; index < fixture.events.length; index += 1) {
         const checkpoint = searchGraphFromEvent(fixture.events[index]);
         await page.waitForFunction((emitted) => window.__atlasFixtureEmitted === emitted, index + 1);
-        await page.waitForFunction(
-          (expected) =>
-            document.querySelector('.graph-workspace [role="status"]')?.textContent?.includes(`${expected} nodes`),
-          checkpoint.nodes.length,
-          { timeout: 20_000 },
-        );
+        try {
+          await page.waitForFunction(
+            (expected) =>
+              document.querySelector('.graph-workspace [role="status"]')?.textContent?.includes(`${expected} nodes`),
+            checkpoint.nodes.length,
+            { timeout: 20_000 },
+          );
+        } catch (error) {
+          const visibleStatus = await page
+            .locator('.graph-workspace [role="status"]')
+            .textContent({ timeout: 1_000 })
+            .catch(() => null);
+          const visibleBody = await page
+            .locator("body")
+            .innerText({ timeout: 1_000 })
+            .catch(() => "");
+          throw new Error(
+            `checkpoint ${index + 1}/${fixture.events.length} expected ${checkpoint.nodes.length} nodes; visible status: ${visibleStatus ?? "missing"}; page errors: ${pageErrors.join(" | ") || "none"}; console: ${consoleIssues.join(" | ") || "none"}; body: ${visibleBody.slice(0, 600) || "empty"}`,
+            { cause: error },
+          );
+        }
         assert.equal(
           await page.locator(".graph-canvas").getAttribute("data-render-mode"),
           "virtualized",
@@ -570,8 +597,8 @@ test(
           await page.evaluate(installStreamedResearchFixture, { events: fixture.events, delayMs: 50 });
           await page.evaluate(startLiveGeometrySampler, chromeSelectors);
           const searchbox = page.getByRole("searchbox", { name: "Public-professional research input" });
-          await searchbox.fill("Chris Anderson, TED");
-          assert.equal(await searchbox.inputValue(), "Chris Anderson, TED");
+          await searchbox.fill(fictionalResearchQuery);
+          assert.equal(await searchbox.inputValue(), fictionalResearchQuery);
           await page.getByRole("button", { name: "Research", exact: true }).click();
           const workspaceStatus = page.locator(".workspace-status");
           await workspaceStatus.waitFor({ state: "visible" });
@@ -614,7 +641,7 @@ test(
             if (index < checkpointGraphs.length - 1) await page.evaluate(() => window.__atlasFixtureAdvance());
           }
           const researchRequest = await page.evaluate(() => window.__atlasFixtureRequest);
-          assert.equal(researchRequest?.query, "Chris Anderson, TED");
+          assert.equal(researchRequest?.query, fictionalResearchQuery);
           assert.equal(researchRequest?.mode, "live");
           assert.equal(
             researchRequest?.requestedDepth,
@@ -651,8 +678,10 @@ test(
               (entry) => entry.allowedTools.includes("search_web") && /(?:^|\s)site:/i.test(entry.queryHint),
             );
             assert.ok(searchFrontier, "browser fixture omitted its site-scoped search frontier");
+            const renderedSiteScope = searchFrontier.queryHint.match(/(?:^|\s)site:([a-z0-9.-]+)/i)?.[1];
+            assert.ok(renderedSiteScope, "browser fixture site-scoped frontier omitted its domain");
             const ladderText = await page.locator(".source-ladder").innerText();
-            assert.match(ladderText, /Sites:\s+ted\.com/i, "source ladder hid the actual site scope");
+            assert.ok(ladderText.includes(`Sites: ${renderedSiteScope}`), "source ladder hid the actual site scope");
             assert.match(ladderText, /Web discovery path/i);
             assert.match(ladderText, /Structured indexes/i);
             assert.match(ladderText, /Configured web-search provider\s+Unavailable/i);
@@ -678,7 +707,8 @@ test(
             const inspectorText = await page.locator(".node-inspector").innerText();
             assert.match(inspectorText, /Search execution/i);
             assert.ok(inspectorText.includes(searchFrontier.queryHint), "inspector hid the exact search query");
-            assert.match(inspectorText, /Site scope\s+ted\.com/i);
+            assert.match(inspectorText, /Site scope/i);
+            assert.ok(inspectorText.includes(renderedSiteScope), "inspector hid the exact site scope");
             assert.match(inspectorText, /Allowed tools[\s\S]*Search Web/i);
             assert.match(inspectorText, /Web discovery path/i);
             assert.match(inspectorText, /Structured indexes/i);
@@ -710,19 +740,84 @@ test(
             await page.waitForTimeout(500);
             assertLayout(await renderedLayout(page, fixture.graph), fixture.graph, zoomedViewport);
           }
-          await page.getByRole("button", { name: "Report", exact: true }).click();
-          const reportDialog = page.getByRole("dialog", { name: "Chris Anderson, TED" });
+          const reportButton = page.getByRole("button", { name: "Report", exact: true });
+          await reportButton.click();
+          const reportDialog = page.getByRole("dialog", { name: fictionalResearchQuery });
           await reportDialog.waitFor({ state: "visible" });
+          await page.evaluate(() => {
+            const outsideControl = document.querySelector(".run-button");
+            if (!(outsideControl instanceof HTMLElement)) throw new Error("Fixture omitted its outside report control");
+            outsideControl.focus();
+          });
+          assert.equal(
+            await reportDialog.evaluate((dialog) => dialog.contains(document.activeElement)),
+            true,
+            `${viewport.name}: modal focus escaped into the underlying workspace`,
+          );
+          const briefing = reportDialog.locator(".report-briefing");
+          const briefingText = await briefing.innerText();
+          assert.match(briefingText, /Avery Rowan\s+[—-]\s+here’s what’s publicly available/i);
+          assert.match(briefingText, /Public-source briefing/i);
+          assert.doesNotMatch(briefingText, /identity match score/i);
+          assert.doesNotMatch(briefingText, /base candidate score/i);
+          assert.doesNotMatch(briefingText, /execution stopped/i);
+          assert.ok(
+            (await briefing.locator(".report-briefing-observations article").count()) >= 1,
+            `${viewport.name}: narrative briefing omitted its candidate-scoped observations`,
+          );
+          const briefingSourceLinks = briefing.locator(".report-briefing-observations footer a");
+          assert.ok(
+            (await briefingSourceLinks.count()) >= 1,
+            `${viewport.name}: narrative briefing omitted cited public-source links`,
+          );
+          for (const href of await briefingSourceLinks.evaluateAll((links) =>
+            links.map((link) => link.getAttribute("href")),
+          )) {
+            assert.match(href ?? "", /^https:\/\//i, `${viewport.name}: briefing citation is not public HTTPS`);
+          }
+          const confirmationText = await reportDialog.locator(".report-confirmation").innerText();
+          assert.match(confirmationText, /(?:Identity and source note|What still needs confirmation)/i);
+          assert.ok(confirmationText.length > 80, `${viewport.name}: identity/source caveat was not substantive`);
+          assert.equal(
+            await reportDialog.evaluate((dialog) => {
+              const overview = dialog.querySelector(".report-briefing-overview");
+              const confirmation = dialog.querySelector(".report-confirmation");
+              const sections = dialog.querySelector(".report-briefing-sections");
+              return Boolean(
+                overview &&
+                confirmation &&
+                (overview.compareDocumentPosition(confirmation) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
+                (!sections ||
+                  (confirmation.compareDocumentPosition(sections) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0),
+              );
+            }),
+            true,
+            `${viewport.name}: identity/source caveat was not adjacent to the narrative opening`,
+          );
+          const technicalAudit = reportDialog.locator(".report-technical-audit");
+          assert.equal(
+            await technicalAudit.evaluate((details) => details.open),
+            false,
+            `${viewport.name}: technical audit should be collapsed by default`,
+          );
+          await technicalAudit.locator("summary").click();
+          assert.equal(await technicalAudit.evaluate((details) => details.open), true);
           const identityAssessmentText = await reportDialog.locator(".report-identity-assessment").innerText();
           assert.match(identityAssessmentText, /Candidate assessment\s+Resolved match/i);
-          assert.match(identityAssessmentText, /Chris Anderson/);
+          assert.match(identityAssessmentText, /Avery Rowan/);
           assert.match(identityAssessmentText, /Formal identity status\s+Resolved/i);
-          assert.match(identityAssessmentText, /Supporting source families\s+1/i);
-          assert.match(identityAssessmentText, /Matched context signals\s+[1-9]\d*/i);
+          assert.match(identityAssessmentText, /Rule-based identity decision score \(not a probability\)\s+\d+%/i);
+          assert.match(identityAssessmentText, /Resolution threshold\s+\d+%/i);
+          assert.match(identityAssessmentText, /Identity-supporting source families\s+\d+/i);
+          assert.match(identityAssessmentText, /Finding-backed coverage\s+\d+%/i);
+          assert.match(identityAssessmentText, /Execution stop reason\s+\S+/i);
           assert.ok(
             (await reportDialog.locator(".candidate-profile-facts li").count()) >= 1,
             `${viewport.name}: candidate profile omitted its cited direct facts`,
           );
+          for (const badge of await reportDialog.locator(".candidate-report-card > header strong").allInnerTexts()) {
+            assert.doesNotMatch(badge, /%/, `${viewport.name}: candidate card retained a percentage badge`);
+          }
           const coverageText = await reportDialog.locator(".report-coverage-note").innerText();
           const fixtureSearchQuery = fixture.graph.frontier.find(
             (entry) => entry.allowedTools.includes("search_web") && /(?:^|\s)site:/i.test(entry.queryHint),
@@ -790,7 +885,7 @@ test(
             `${viewport.name}: footprint hash binding was omitted`,
           );
           assert.ok(
-            footprintText.includes("Chris Anderson - TED speaker profile"),
+            footprintText.includes("Avery Rowan - Northstar Forum profile"),
             `${viewport.name}: page-authored title was omitted`,
           );
           assert.ok(
@@ -804,9 +899,9 @@ test(
           );
           assert.match(footprintText, /Language\s+en/i);
           assert.match(footprintText, /Open Graph type\s+profile/i);
-          assert.match(footprintText, /Open Graph site\s+TED/i);
+          assert.match(footprintText, /Open Graph site\s+Northstar Forum/i);
           assert.match(footprintText, /Generators\s+Next\.js/i);
-          assert.match(footprintText, /Applications\s+TED/i);
+          assert.match(footprintText, /Applications\s+Northstar Forum/i);
           assert.match(footprintText, /Observed providers\s+Jsdelivr, Cloudflare/i);
           for (const host of reportEvidenceContextFixture.footprint.observedResourceHosts) {
             assert.ok(footprintText.includes(host), `${viewport.name}: footprint omitted referenced host ${host}`);
@@ -867,6 +962,12 @@ test(
             await page.getByText(pdfSuccessMessage).waitFor({ state: "visible", timeout: 5_000 });
           }
           await page.getByRole("button", { name: "Close report" }).click();
+          await page.waitForFunction(() => document.activeElement?.classList.contains("report-button"));
+          assert.equal(
+            await reportButton.evaluate((button) => document.activeElement === button),
+            true,
+            `${viewport.name}: closing the report did not restore its opener focus`,
+          );
           assert.deepEqual(consoleIssues, [], `${viewport.name}: browser console warnings/errors`);
           assert.deepEqual(pageErrors, [], `${viewport.name}: uncaught page errors`);
         } catch (error) {

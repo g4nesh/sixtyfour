@@ -18,201 +18,199 @@ const vite = await createServer({
   server: { middlewareMode: true },
 });
 const reportExport = await vite.ssrLoadModule("/lib/report-export/index.ts");
+const domain = await vite.ssrLoadModule("/lib/domain/index.ts");
 
 after(async () => {
   await vite.close();
 });
 
-function graph(runId = example.runId) {
-  const at = "2026-08-19T16:00:00.000Z";
-  const utility = {
-    relevance: 0.9,
-    novelty: 0.8,
-    informationGain: 0.7,
-    sourceTrust: 0.9,
-    executionCost: 0.2,
-    policyRisk: 0.05,
-    repetition: 0,
-    depthPenalty: 0.1,
-  };
-  return {
-    schemaVersion: 2,
-    runId,
-    status: "completed",
-    seed: "Chris Anderson, TED",
-    seedNodeId: "node-seed",
-    nodes: [
-      {
-        schemaVersion: 2,
-        id: "node-seed",
-        kind: "seed",
-        label: "Chris Anderson, TED",
-        status: "verified",
-        sourceTier: null,
-        sourceLaneId: null,
-        frontierEntryId: null,
-        actionId: null,
-        candidateId: null,
-        evidenceId: null,
-        findingId: null,
-        ordinal: 1,
-        data: {},
-        createdAt: at,
-        updatedAt: at,
-      },
-      {
-        schemaVersion: 2,
-        id: "node-source",
-        kind: "source",
-        label: "TED official profile",
-        status: "verified",
-        sourceTier: 1,
-        sourceLaneId: "t1.first_party",
-        frontierEntryId: "frontier-source",
-        actionId: "frontier-source",
-        candidateId: "chris_replay_candidate_0001",
-        evidenceId: "chris_replay_evidence_0001",
-        findingId: null,
-        ordinal: 2,
-        data: {},
-        createdAt: at,
-        updatedAt: at,
-      },
-      {
-        schemaVersion: 2,
-        id: "node-rejected",
-        kind: "source",
-        label: "Same-name candidate branch",
-        status: "rejected",
-        sourceTier: 4,
-        sourceLaneId: "t4.reputable_media",
-        frontierEntryId: "frontier-rejected",
-        actionId: "frontier-rejected",
-        candidateId: "chris_replay_candidate_0002",
-        evidenceId: null,
-        findingId: null,
-        ordinal: 3,
-        data: {},
-        createdAt: at,
-        updatedAt: at,
-      },
-    ],
-    edges: [
-      {
-        schemaVersion: 2,
-        id: "edge-source",
-        fromNodeId: "node-seed",
-        toNodeId: "node-source",
-        kind: "expands",
-        status: "verified",
-        frontierEntryId: "frontier-source",
-        actionId: "frontier-source",
-        edgeCost: 0.3,
-        pathCost: 0.3,
-        ordinal: 1,
-        createdAt: at,
-      },
-      {
-        schemaVersion: 2,
-        id: "edge-rejected",
-        fromNodeId: "node-seed",
-        toNodeId: "node-rejected",
-        kind: "mutates",
-        status: "rejected",
-        frontierEntryId: "frontier-rejected",
-        actionId: "frontier-rejected",
-        edgeCost: 0.7,
-        pathCost: 0.7,
-        ordinal: 2,
-        createdAt: at,
-      },
-    ],
-    frontier: [
-      {
-        schemaVersion: 2,
-        id: "frontier-source",
-        frontierEntryId: "frontier-source",
-        actionId: "frontier-source",
-        nodeId: "node-source",
-        parentNodeId: "node-seed",
-        parentFrontierEntryId: null,
-        status: "verified",
-        sourceTier: 1,
-        sourceLaneId: "t1.first_party",
-        allowedTools: ["fetch_public_source"],
-        intent: "Verify the official profile",
-        queryHint: "TED Chris Anderson",
-        candidateId: "chris_replay_candidate_0001",
-        depth: 1,
-        ordinal: 1,
-        dedupeKey: "source",
-        utility,
-        edgeCost: 0.3,
-        pathCost: 0.3,
-        mutation: null,
-        createdAt: at,
-        updatedAt: at,
-      },
-      {
-        schemaVersion: 2,
-        id: "frontier-rejected",
-        frontierEntryId: "frontier-rejected",
-        actionId: "frontier-rejected",
-        nodeId: "node-rejected",
-        parentNodeId: "node-seed",
-        parentFrontierEntryId: "frontier-source",
-        status: "rejected",
-        sourceTier: 4,
-        sourceLaneId: "t4.reputable_media",
-        allowedTools: ["search_web"],
-        intent: "Check a bounded adjacent candidate",
-        queryHint: "Chris Anderson adjacent source",
-        candidateId: "chris_replay_candidate_0002",
-        depth: 1,
-        ordinal: 2,
-        dedupeKey: "rejected",
-        utility,
-        edgeCost: 0.7,
-        pathCost: 0.7,
-        mutation: {
-          strategy: "source_adjacent",
-          parentFrontierEntryId: "frontier-source",
-          proposalIndex: 0,
-          temperature: 0.2,
-          logAcceptanceRatio: -1,
-          acceptanceProbability: 0.36,
-          deterministicU: 0.8,
-          parentNeighborCount: 1,
-          candidateNeighborCount: 2,
-        },
-        createdAt: at,
-        updatedAt: at,
-      },
-    ],
-    selectedFrontierEntryIds: ["frontier-source", "frontier-rejected"],
-    currentSourceTier: 4,
-    nextOrdinal: 4,
-    mutationStep: 1,
-    telemetry: {
-      seeded: 1,
-      enqueued: 2,
-      selected: 2,
-      pruned: 0,
-      expanded: 1,
-      exhausted: 0,
-      toolCalls: 1,
-      mutationToolCalls: 0,
-      mutationsProposed: 1,
-      mutationsAccepted: 0,
-      mutationsRejected: 1,
-    },
-    createdAt: at,
-    updatedAt: at,
-  };
+function terminalReport() {
+  return structuredClone(example);
 }
 
-function terminalReport() {
-  return { ...structuredClone(example), schemaVersion: 2, searchGraph: graph() };
+function syncFindingConfidence(report) {
+  const evidenceById = new Map(report.evidence.map((item) => [item.id, item]));
+  for (const finding of report.findings) {
+    const records = [...finding.evidenceIds, ...finding.counterEvidenceIds]
+      .map((id) => evidenceById.get(id))
+      .filter(Boolean);
+    finding.confidence = domain.assessConfidence(records);
+  }
+}
+
+function fictionalNarrativeReport() {
+  const report = terminalReport();
+  const lead = structuredClone(report.candidates[0]);
+  const alternate = structuredClone(report.candidates[1]);
+  const leadId = "fictional-candidate-lead";
+  const alternateId = "fictional-candidate-alternate";
+  const categories = ["employment", "education", "project", "publication", "online_presence"];
+  const facts = {
+    employment: "Morgan Vale works as a research lead at Northstar Studio.",
+    education: "Morgan Vale graduated from Cedar Ridge School.",
+    project: "Morgan Vale built the Lantern Mapping project.",
+    publication: "Morgan Vale published the Field Systems paper.",
+    online_presence: "Morgan Vale maintains a public code profile.",
+  };
+  const families = {
+    employment: "northstar.example",
+    education: "morgan-vale.example",
+    project: "lantern.example",
+    publication: "journal.example",
+    online_presence: "code.example",
+  };
+  const evidenceTemplate = report.evidence[0];
+  const evidence = categories.map((category, index) => {
+    const id = `fictional-evidence-${category}`;
+    const family = families[category];
+    return {
+      ...structuredClone(evidenceTemplate),
+      id,
+      candidateId: leadId,
+      claim: facts[category],
+      normalizedClaim: facts[category]
+        .toLocaleLowerCase("en-US")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim(),
+      sourceUrl: `https://${family}/morgan-vale/${category}`,
+      canonicalUrl: `https://${family}/morgan-vale/${category}`,
+      title: `${category.replaceAll("_", " ")} record for Morgan Vale`,
+      publisher: family,
+      sourceFamily: family,
+      sourceType: category === "online_presence" ? "code_profile" : "public_document",
+      excerpt: facts[category],
+      spoofable: category === "education",
+      canonicalSubset: null,
+      attributes: {},
+      fingerprint: `fictional-${index}`,
+    };
+  });
+  const crossCandidateEvidence = {
+    ...structuredClone(evidenceTemplate),
+    id: "fictional-evidence-cross-candidate",
+    candidateId: alternateId,
+    claim: "A different Morgan Vale leads Harbor Works.",
+    normalizedClaim: "a different morgan vale leads harbor works",
+    sourceUrl: "https://harbor.example/morgan-vale",
+    canonicalUrl: "https://harbor.example/morgan-vale",
+    title: "Harbor Works profile",
+    publisher: "Harbor Works",
+    sourceFamily: "harbor.example",
+    excerpt: "A different Morgan Vale leads Harbor Works.",
+    canonicalSubset: null,
+    attributes: {},
+  };
+  const discoveryOnlyEvidence = {
+    ...structuredClone(evidenceTemplate),
+    id: "fictional-evidence-discovery-only",
+    candidateId: leadId,
+    claim: "A search snippet alleges an unverified private venture.",
+    normalizedClaim: "a search snippet alleges an unverified private venture",
+    disposition: "discovery_only",
+    sourceUrl: "https://search.example/result",
+    canonicalUrl: "https://search.example/result",
+    title: "Unverified search lead",
+    publisher: "Search",
+    sourceFamily: "search.example",
+    sourceType: "search_result",
+    verificationMethod: "search_discovery",
+    excerpt: "Discovery-only material must not enter the briefing.",
+    reliability: 0,
+    spoofable: true,
+    canonicalSubset: null,
+    attributes: {},
+  };
+  const signalTemplate = lead.signals.find((signal) => signal.kind === "organization");
+  lead.id = leadId;
+  lead.displayName = "Morgan Vale";
+  lead.normalizedName = "morgan vale";
+  lead.status = "resolved";
+  lead.evidenceIds = evidence.map((item) => item.id);
+  lead.signals = [
+    {
+      ...signalTemplate,
+      kind: "name",
+      value: "Morgan Vale",
+      normalizedValue: "morgan vale",
+      sourceEvidenceId: "fictional-evidence-education",
+      sourceFamily: families.education,
+    },
+    {
+      ...signalTemplate,
+      kind: "organization",
+      value: "Northstar Studio",
+      normalizedValue: "northstar studio",
+      sourceEvidenceId: "fictional-evidence-employment",
+      sourceFamily: families.employment,
+    },
+    {
+      ...signalTemplate,
+      kind: "role",
+      value: "research lead",
+      normalizedValue: "research lead",
+      sourceEvidenceId: "fictional-evidence-employment",
+      sourceFamily: families.employment,
+    },
+  ];
+  lead.score = {
+    ...lead.score,
+    total: 0.82,
+    positive: 0.82,
+    independentFamilies: Object.values(families),
+    matchedSignals: ["name", "organization", "role"],
+    conflictingSignals: [],
+  };
+  alternate.id = alternateId;
+  alternate.displayName = "Morgan Vale";
+  alternate.normalizedName = "morgan vale";
+  alternate.evidenceIds = [crossCandidateEvidence.id];
+  alternate.signals = [
+    {
+      ...signalTemplate,
+      kind: "name",
+      value: "Morgan Vale",
+      normalizedValue: "morgan vale",
+      sourceEvidenceId: crossCandidateEvidence.id,
+      sourceFamily: crossCandidateEvidence.sourceFamily,
+    },
+  ];
+  alternate.score = { ...alternate.score, total: 0.58, positive: 0.58, penalty: 0 };
+  report.candidates = [lead, alternate];
+  report.evidence = [...evidence, crossCandidateEvidence, discoveryOnlyEvidence];
+  report.findings = categories.map((category, index) => {
+    const sourceEvidence = evidence[index];
+    return {
+      ...structuredClone(report.findings[0]),
+      id: `fictional-finding-${category}`,
+      candidateId: leadId,
+      title: `${category === "online_presence" ? "Online presence" : `${category[0].toUpperCase()}${category.slice(1)}`} — Morgan Vale`,
+      description: facts[category],
+      category,
+      evidenceIds: [sourceEvidence.id],
+      counterEvidenceIds: [],
+      confidence: domain.assessConfidence([sourceEvidence]),
+      caveats: [],
+    };
+  });
+  report.input = {
+    ...report.input,
+    query: "Morgan Vale, Northstar Studio",
+    objective: "Summarize admitted fictional public-professional records.",
+    requestedCategories: categories,
+  };
+  report.target = domain.parseTarget(report.input);
+  report.identity = domain.resolveIdentity(report.candidates, report.evidence, report.target);
+  report.coverage = {
+    ...report.coverage,
+    score: 1,
+    requestedCategories: categories,
+    coveredCategories: categories,
+    missingCategories: [],
+    supportedFindingCount: categories.length,
+    highConfidenceFindingCount: 0,
+    independentSourceFamilyCount: Object.keys(families).length,
+  };
+  return report;
 }
 
 const footprintProjectionHash = `sha256:${"a".repeat(64)}`;
@@ -231,10 +229,10 @@ function reportWithEvidenceContexts() {
       openGraph: { type: "profile", siteName: "TED" },
       observedProviderFamilies: ["cloudflare", "not-an-allowlisted-provider", "jsdelivr"],
       observedResourceHosts: ["cdn.jsdelivr.net", "localhost", "static.cloudflareinsights.com"],
-      jsonLdTypes: [" Person ", "Organization", "private-contact@example.net", `npm_${"x".repeat(48)}`],
+      jsonLdTypes: [" Person ", "Organization"],
       declaredApplications: {
-        generators: ["Next.js", "private-contact@example.net"],
-        applicationNames: ["TED", `npm_${"x".repeat(48)}`],
+        generators: ["Next.js"],
+        applicationNames: ["TED"],
       },
       bounded: false,
       spoofable: true,
@@ -245,7 +243,7 @@ function reportWithEvidenceContexts() {
   };
   report.evidence[1].verificationMethod = "archive_snapshot";
   report.evidence[1].sourceType = "web_archive";
-  report.evidence[1].excerpt = "Normalized archived profile text.";
+  report.evidence[1].excerpt = report.evidence[1].claim;
   report.evidence[1].canonicalSubset = {
     temporalComparison: {
       observedAfter: "2020-01-01T00:00:00.000Z",
@@ -263,9 +261,8 @@ function reportWithEvidenceContexts() {
         "Added a public repository link.",
         "Updated the professional biography.",
         "This seventh fragment must be bounded out.",
-        "private-contact@example.net",
       ],
-      removedTextFragments: ["  Removed   the former curator wording. ", `sk-proj-${"y".repeat(48)}`],
+      removedTextFragments: ["  Removed   the former curator wording. "],
       addedFragmentCount: 8,
       removedFragmentCount: 2,
       unchangedFragmentCount: 3,
@@ -275,6 +272,7 @@ function reportWithEvidenceContexts() {
     },
     arbitraryNestedPayload: { secret: "DO_NOT_EXPORT_CONTEXT_NESTED_PAYLOAD" },
   };
+  syncFindingConfidence(report);
   return report;
 }
 
@@ -308,9 +306,17 @@ test("report view model and Markdown are deterministic and citation-complete", (
   assert.equal(first.identity.retainedCandidateCount, report.candidates.length);
   assert.ok(first.identity.profiles.length > 0 && first.identity.profiles.length <= 5);
   assert.match(first.identity.rationale, /Resolved match: Atlas formally selected Chris Anderson/);
-  assert.match(firstMarkdown, /Distinct candidate branches retained/);
-  assert.match(firstMarkdown, /Top retained candidate profiles/);
+  assert.equal(first.briefing.headline, "Chris Anderson — here’s what’s publicly available.");
+  assert.match(first.briefing.leadStatement, /resolved match/);
+  assert.match(first.briefing.overview, /clearest cited public record states/);
+  assert.match(firstMarkdown, /## Public briefing/);
+  assert.match(firstMarkdown, /## Retained candidate branches/);
+  assert.match(firstMarkdown, /## Methodology and audit/);
   assert.match(firstMarkdown, /\*\*Candidate:\*\*/);
+  assert.equal(first.audit.decisionScoreLabel, "Rule-based identity decision score (not a probability)");
+  assert.equal(first.audit.baseCandidateScoreLabel, "Rule-based base candidate score (not a probability)");
+  const narrativeOpening = firstMarkdown.slice(0, firstMarkdown.indexOf("## Retained candidate branches"));
+  assert.doesNotMatch(narrativeOpening, /\b\d{1,3}%\b|Goal Satisfied|Budget Exhausted/);
   for (const profile of first.identity.profiles) {
     assert.ok(Array.isArray(profile.evidenceRefs));
     assert.ok(Array.isArray(profile.findingIds));
@@ -322,12 +328,98 @@ test("report view model and Markdown are deterministic and citation-complete", (
     assert.equal(Number.isInteger(profile.directSourceCount), true);
   }
 
-  const singularReport = terminalReport();
-  singularReport.findings = singularReport.findings.slice(0, 1);
-  assert.match(
-    reportExport.createReportViewModel(singularReport).executiveSummary,
-    /1 finding cites admitted evidence/u,
+  assert.match(firstMarkdown, /not probabilities about a person/);
+  assert.doesNotMatch(first.briefing.overview, /[.!?…]”[.!?…]/u);
+});
+
+test("report export boundary rejects malformed, restricted, and cross-candidate report payloads", () => {
+  const malformed = terminalReport();
+  delete malformed.evidence;
+  assert.throws(() => reportExport.createReportViewModel(malformed), /invalid canonical investigation report/);
+
+  const zeroWidthRestricted = terminalReport();
+  zeroWidthRestricted.limitations = ["A private\u200b-contact@example.net value must not enter an export."];
+  assert.throws(() => reportExport.createReportViewModel(zeroWidthRestricted), /restricted public content/);
+
+  const forged = terminalReport();
+  const otherCandidateEvidence = forged.evidence.find(
+    (item) => item.candidateId !== forged.findings[0].candidateId && item.disposition === "supports",
   );
+  assert.ok(otherCandidateEvidence);
+  forged.findings[0].evidenceIds = [otherCandidateEvidence.id];
+  forged.findings[0].description = otherCandidateEvidence.excerpt;
+  forged.findings[0].confidence = domain.assessConfidence([otherCandidateEvidence]);
+  assert.throws(() => reportExport.createReportViewModel(forged), /cross_candidate_evidence/);
+
+  const forgedIdentityCandidate = terminalReport();
+  forgedIdentityCandidate.identity.selectedCandidate.displayName = "Forged Export Candidate";
+  forgedIdentityCandidate.identity.selectedCandidate.normalizedName = "forged export candidate";
+  assert.throws(
+    () => reportExport.createReportViewModel(forgedIdentityCandidate),
+    /identity projection does not match canonical candidates and evidence/,
+  );
+
+  const forgedIdentityStatus = terminalReport();
+  forgedIdentityStatus.identity.status = "unresolved";
+  assert.throws(
+    () => reportExport.createReportViewModel(forgedIdentityStatus),
+    /identity projection does not match canonical candidates and evidence/,
+  );
+});
+
+test("report sources require public HTTPS hosts and deduplicate the same canonical URL", () => {
+  const localSource = terminalReport();
+  localSource.evidence[3].sourceUrl = "https://localhost/professional-profile";
+  localSource.evidence[3].canonicalUrl = localSource.evidence[3].sourceUrl;
+  const localView = reportExport.createReportViewModel(localSource);
+  assert.equal(localView.evidence.find((item) => item.id === localSource.evidence[3].id)?.sourceUrl, "");
+
+  const credentialUrl = terminalReport();
+  credentialUrl.evidence[3].sourceUrl = "https://www.wired.com/profile?access\u200b_token=secret";
+  credentialUrl.evidence[3].canonicalUrl = credentialUrl.evidence[3].sourceUrl;
+  const credentialUrlView = reportExport.createReportViewModel(credentialUrl);
+  assert.equal(credentialUrlView.evidence.find((item) => item.id === credentialUrl.evidence[3].id)?.sourceUrl, "");
+
+  const portBearingCitation = terminalReport();
+  const portBearingEvidence = portBearingCitation.evidence.find(
+    (evidence) => evidence.id === portBearingCitation.findings[1].evidenceIds[0],
+  );
+  assert.ok(portBearingEvidence);
+  const portBearingUrl = new URL(portBearingEvidence.sourceUrl);
+  portBearingUrl.port = "8443";
+  portBearingEvidence.sourceUrl = portBearingUrl.toString();
+  portBearingEvidence.canonicalUrl = portBearingEvidence.sourceUrl;
+  const portBearingView = reportExport.createReportViewModel(portBearingCitation);
+  assert.equal(
+    portBearingView.briefing.sections
+      .flatMap((section) => section.observations)
+      .some((observation) => observation.evidenceRefs.includes(portBearingView.evidence[1].ref)),
+    false,
+  );
+  assert.equal(
+    portBearingView.briefing.sections
+      .flatMap((section) => section.observations)
+      .every((observation) => observation.sources.length > 0),
+    true,
+  );
+
+  const duplicateSources = terminalReport();
+  const supporting = duplicateSources.evidence.filter(
+    (item) => item.candidateId === duplicateSources.candidates[0].id && item.disposition === "supports",
+  );
+  duplicateSources.findings = [
+    {
+      ...duplicateSources.findings[0],
+      title: `Public professional finding — ${duplicateSources.candidates[0].displayName}`,
+      description: supporting.map((item) => item.excerpt).join(" "),
+      category: "other",
+      evidenceIds: supporting.map((item) => item.id),
+      confidence: domain.assessConfidence(supporting),
+    },
+  ];
+  const duplicateView = reportExport.createReportViewModel(duplicateSources);
+  assert.equal(duplicateView.findings[0].sources.length, 1);
+  assert.equal(duplicateView.findings[0].sources[0].url, "https://www.ted.com/speakers/chris_anderson_ted");
 });
 
 test("identity presentation separates a best-supported profile from formal unresolved status", () => {
@@ -337,32 +429,10 @@ test("identity presentation separates a best-supported profile from formal unres
   // that is not a persisted evidence contradiction and must not be presented
   // as one to the reader.
   lead.score.conflictingSignals = ["conflict"];
-  report.evidence[1] = {
-    ...report.evidence[1],
-    sourceFamily: "conference.org",
-    sourceUrl: "https://conference.org/archive/chris-anderson",
-    canonicalUrl: "https://conference.org/archive/chris-anderson",
-  };
   report.candidates = [lead];
   report.evidence = report.evidence.filter((item) => item.candidateId === lead.id);
   report.findings = [];
-  report.identity = {
-    ...report.identity,
-    status: "unresolved",
-    selectedCandidate: structuredClone(lead),
-    runnerUpCandidate: null,
-    selectedCandidateId: lead.id,
-    runnerUpCandidateId: null,
-    selectedScore: lead.score.total,
-    runnerUpScore: 0,
-    runnerUpMargin: 0,
-    resolutionBasis: "context_corroboration",
-    resolutionScore: 0.62,
-    runnerUpResolutionScore: 0,
-    resolutionMargin: 0.62,
-    contextDecision: "probable",
-    resolutionSourceFamilies: ["ted.com"],
-  };
+  report.identity = domain.resolveIdentity(report.candidates, report.evidence, report.target);
   report.coverage = {
     ...report.coverage,
     score: 0,
@@ -379,128 +449,228 @@ test("identity presentation separates a best-supported profile from formal unres
   assert.equal(viewModel.identity.selected, null);
   assert.equal(viewModel.identity.lead?.id, lead.id);
   assert.equal(viewModel.identity.decisionLabel, "Best-supported candidate");
-  assert.deepEqual(viewModel.identity.lead?.supportingSourceFamilies, ["conference.org", "ted.com"]);
+  assert.deepEqual(viewModel.identity.lead?.supportingSourceFamilies, ["ted.com"]);
   assert.deepEqual(viewModel.identity.resolutionSourceFamilies, ["ted.com"]);
   assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("organization"), true);
   assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("role"), true);
   assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("name"), false);
   assert.deepEqual(viewModel.identity.lead?.conflictingSignals, []);
   assert.equal(viewModel.identity.lead?.profileFacts.length, 2);
-  assert.match(viewModel.executiveSummary, /^Best-supported candidate: Chris Anderson is the highest-ranked profile/);
-  assert.doesNotMatch(viewModel.executiveSummary, /Identity remains unresolved/);
+  assert.equal(viewModel.briefing.leadStatement, "The strongest public-professional lead points to Chris Anderson.");
+  assert.match(viewModel.briefing.statusCaveat, /not a formally resolved identity/);
+  assert.match(viewModel.briefing.sourceCaveat, /one source family.*not independent confirmation/);
+  assert.doesNotMatch(viewModel.executiveSummary, /\b(?:62|0|78)%\b/);
   assert.match(viewModel.identity.rationale, /Formal identity is unresolved because/);
   assert.match(viewModel.identity.rationale, /identity match score is below the 78% resolution threshold/);
   assert.match(viewModel.identity.rationale, /only one source family/);
-  assert.match(markdown, /\*\*Assessment:\*\* Best-supported candidate/);
-  assert.match(markdown, /\*\*Formal identity status:\*\* Unresolved/);
-  assert.match(markdown, /### Candidate-scoped cited observations/);
-  assert.match(markdown, /bound only to the leading retained branch/);
-  assert.match(markdown, /\[E01\]\(#e01\).*Chris Anderson Chairman, TED/);
+  assert.match(markdown, /## Public briefing/);
+  assert.match(markdown, /Identity note: this is the best-supported retained branch/);
+  assert.match(markdown, /### Employment/);
+  assert.match(markdown, /Chris Anderson Chairman, TED/);
   assert.doesNotMatch(markdown, /\*\*Selected candidate:\*\* None/);
 });
 
 test("identity presentation explains competing and empty candidate sets without canned unresolved copy", () => {
   const ambiguous = terminalReport();
-  ambiguous.identity = {
-    ...ambiguous.identity,
-    status: "ambiguous",
-    runnerUpMargin: 0.05,
+  const competingCandidate = ambiguous.candidates[1];
+  competingCandidate.status = "plausible";
+  competingCandidate.score = {
+    ...competingCandidate.score,
+    total: 0.5,
+    positive: 0.5,
+    penalty: 0,
+    conflictingSignals: [],
   };
+  ambiguous.identity = domain.resolveIdentity(ambiguous.candidates, ambiguous.evidence, ambiguous.target);
   const ambiguousView = reportExport.createReportViewModel(ambiguous);
   assert.equal(ambiguousView.identity.decisionLabel, "Competing candidates");
-  assert.match(ambiguousView.identity.rationale, /5% lead over the runner-up is below the 15% separation margin/);
-  assert.match(ambiguousView.executiveSummary, /Competing branches remain separate/);
+  assert.match(ambiguousView.identity.rationale, /direct support comes from only one source family/);
+  assert.match(ambiguousView.briefing.leadStatement, /retained competing public-professional branches/);
+  assert.match(ambiguousView.briefing.statusCaveat, /competing candidate branches/);
 
   const empty = terminalReport();
   empty.candidates = [];
   empty.evidence = [];
   empty.findings = [];
-  empty.identity = {
-    ...empty.identity,
-    status: "unresolved",
-    selectedCandidate: null,
-    runnerUpCandidate: null,
-    selectedCandidateId: null,
-    runnerUpCandidateId: null,
-    selectedScore: 0,
-    runnerUpScore: 0,
-    runnerUpMargin: 0,
-  };
+  empty.identity = domain.resolveIdentity(empty.candidates, empty.evidence, empty.target);
   const emptyView = reportExport.createReportViewModel(empty);
   assert.equal(emptyView.identity.decisionLabel, "No eligible candidate");
   assert.equal(emptyView.identity.lead, null);
   assert.match(emptyView.identity.rationale, /No candidate profile survived/);
-  assert.match(emptyView.executiveSummary, /^No eligible candidate profile was retained/);
+  assert.match(emptyView.briefing.leadStatement, /^Atlas did not retain a public-professional lead/);
+  assert.equal(emptyView.briefing.sections.length, 0);
+  assert.match(emptyView.briefing.emptyState, /No candidate-bound public-professional observation/);
 });
 
 test("identity presentation reserves high-confidence wording for resolved cross-source context matches", () => {
   const report = terminalReport();
-  report.candidates[0].score = {
-    ...report.candidates[0].score,
-    total: 0.54,
-    positive: 0.54,
-    independentFamilies: ["ted.com", "conference.org"],
-    matchedSignals: ["name", "organization", "role"],
-  };
-  report.evidence[1] = {
+  const conferenceEvidence = {
     ...report.evidence[1],
+    id: "conference-corroboration",
+    claim: "Chris Anderson works at TED.",
+    normalizedClaim: "chris anderson works at ted",
+    excerpt: "Chris Anderson works at TED.",
     sourceFamily: "conference.org",
     sourceUrl: "https://conference.org/speakers/chris-anderson",
     canonicalUrl: "https://conference.org/speakers/chris-anderson",
     title: "Chris Anderson speaker biography",
   };
-  report.identity = {
-    ...report.identity,
-    selectedCandidate: structuredClone(report.candidates[0]),
-    selectedScore: 0.54,
-    runnerUpMargin: 0.54,
-    resolutionBasis: "context_corroboration",
-    resolutionScore: 0.86,
-    runnerUpResolutionScore: 0,
-    resolutionMargin: 0.86,
+  const associationEvidence = {
+    ...structuredClone(conferenceEvidence),
+    id: "association-corroboration",
+    sourceFamily: "association.example",
+    sourceUrl: "https://association.example/people/chris-anderson",
+    canonicalUrl: "https://association.example/people/chris-anderson",
+    title: "Chris Anderson public leadership profile",
   };
+  const corroboratingEvidence = [conferenceEvidence, associationEvidence];
+  report.evidence.push(...corroboratingEvidence);
+  report.candidates[0].evidenceIds.push(...corroboratingEvidence.map((item) => item.id));
+  const nameAndOrganizationSignals = report.candidates[0].signals.filter((signal) =>
+    ["name", "organization"].includes(signal.kind),
+  );
+  for (const item of corroboratingEvidence) {
+    report.candidates[0].signals.push(
+      ...nameAndOrganizationSignals.map((signal) => ({
+        ...structuredClone(signal),
+        sourceEvidenceId: item.id,
+        sourceFamily: item.sourceFamily,
+      })),
+    );
+  }
+  report.identity = domain.resolveIdentity(report.candidates, report.evidence, report.target);
 
   const viewModel = reportExport.createReportViewModel(report);
   assert.equal(viewModel.identity.decisionLabel, "High-confidence match");
   assert.equal(viewModel.identity.resolutionBasis, "context_corroboration");
-  assert.equal(viewModel.identity.resolutionScore, 0.86);
-  assert.equal(viewModel.identity.resolutionMargin, 0.86);
+  assert.equal(viewModel.identity.resolutionScore >= 0.78, true);
+  assert.equal(viewModel.identity.resolutionMargin >= 0.15, true);
   assert.equal(viewModel.identity.lead?.score, 0.54);
-  assert.deepEqual(viewModel.identity.lead?.supportingSourceFamilies, ["conference.org", "ted.com"]);
+  assert.deepEqual(viewModel.identity.resolutionSourceFamilies, ["association.example", "conference.org", "ted.com"]);
+  assert.deepEqual(viewModel.identity.lead?.supportingSourceFamilies, [
+    "association.example",
+    "conference.org",
+    "ted.com",
+  ]);
   assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("organization"), true);
   assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("role"), true);
-  assert.match(viewModel.executiveSummary, /^High-confidence match:/);
-  assert.match(viewModel.executiveSummary, /86% identity match score \(base candidate score 54%\)/);
+  assert.match(viewModel.briefing.leadStatement, /resolved match/);
+  assert.doesNotMatch(viewModel.executiveSummary, /100%|54%/);
+  assert.equal(viewModel.audit.decisionScore, viewModel.identity.resolutionScore);
+  assert.equal(viewModel.audit.baseCandidateScore, 0.54);
 
   const spoofable = structuredClone(report);
   spoofable.evidence = spoofable.evidence.map((item) =>
     item.candidateId === spoofable.identity.selectedCandidateId ? { ...item, spoofable: true } : item,
   );
+  syncFindingConfidence(spoofable);
+  spoofable.identity = domain.resolveIdentity(spoofable.candidates, spoofable.evidence, spoofable.target);
   const spoofableView = reportExport.createReportViewModel(spoofable);
   assert.equal(spoofableView.identity.lead?.allSupportingEvidenceSpoofable, true);
-  assert.equal(spoofableView.identity.decisionLabel, "Resolved match");
+  assert.equal(spoofableView.identity.status, "unresolved");
+  assert.equal(spoofableView.identity.decisionLabel, "Best-supported candidate");
+});
+
+test("narrative briefing stays fictional, candidate-bound, and truthful across identity outcomes", () => {
+  const resolved = fictionalNarrativeReport();
+  const resolvedView = reportExport.createReportViewModel(resolved);
+  const resolvedMarkdown = reportExport.reportViewModelToMarkdown(resolvedView);
+  assert.equal(resolvedView.briefing.headline, "Morgan Vale — here’s what’s publicly available.");
+  assert.deepEqual(
+    resolvedView.briefing.sections.map((section) => section.key),
+    ["employment", "education", "project", "publication", "online_presence"],
+  );
+  const resolvedBriefing = JSON.stringify(resolvedView.briefing);
+  assert.match(
+    resolvedBriefing,
+    /Northstar Studio|Cedar Ridge School|Lantern Mapping|Field Systems|public code profile/,
+  );
+  assert.doesNotMatch(resolvedBriefing, /Harbor Works|Discovery-only|unverified private venture/);
+  for (const observation of resolvedView.briefing.sections.flatMap((section) => section.observations)) {
+    assert.equal(observation.candidateId, "fictional-candidate-lead");
+    assert.equal(
+      new Set(observation.sources.map((source) => `${source.ref}\u0000${source.url}`)).size,
+      observation.sources.length,
+    );
+  }
+  const resolvedOpening = resolvedMarkdown.slice(0, resolvedMarkdown.indexOf("## Retained candidate branches"));
+  assert.doesNotMatch(resolvedOpening, /\b(?:82|58|24|100)%\b|no legal actions|Goal Satisfied/i);
+  assert.match(resolvedMarkdown, /Rule-based identity decision score \(not a probability\)/);
+
+  const probable = fictionalNarrativeReport();
+  const educationEvidence = probable.evidence.find((item) => item.id === "fictional-evidence-education");
+  const discoveryEvidence = probable.evidence.find((item) => item.id === "fictional-evidence-discovery-only");
+  const educationFinding = probable.findings.find((item) => item.category === "education");
+  assert.ok(educationEvidence && discoveryEvidence && educationFinding);
+  const probableLead = probable.candidates[0];
+  probableLead.evidenceIds = [educationEvidence.id];
+  probableLead.signals = [
+    probableLead.signals[0],
+    {
+      ...probableLead.signals[1],
+      kind: "organization",
+      value: "Cedar Ridge School",
+      normalizedValue: "cedar ridge school",
+      sourceEvidenceId: educationEvidence.id,
+      sourceFamily: educationEvidence.sourceFamily,
+    },
+  ];
+  probableLead.score.independentFamilies = [educationEvidence.sourceFamily];
+  probableLead.score.total = 0.62;
+  probableLead.score.positive = 0.62;
+  probable.candidates = [probableLead];
+  probable.evidence = [educationEvidence, discoveryEvidence];
+  probable.findings = [educationFinding];
+  probable.identity = domain.resolveIdentity(probable.candidates, probable.evidence, probable.target);
+  const probableView = reportExport.createReportViewModel(probable);
+  assert.equal(probableView.identity.decisionLabel, "Best-supported candidate");
+  assert.equal(probableView.briefing.leadStatement, "The strongest public-professional lead points to Morgan Vale.");
+  assert.match(probableView.briefing.overview, /“Morgan Vale graduated from Cedar Ridge School\.”/);
+  assert.match(
+    probableView.briefing.sourceCaveat,
+    /self-published or otherwise spoofable.*not independent confirmation/,
+  );
+  assert.equal(probableView.briefing.sections[0].key, "education");
+  assert.match(probableView.briefing.sections[0].observations[0].sources[0].url, /^https:\/\/morgan-vale\.example\//);
+  assert.doesNotMatch(JSON.stringify(probableView.briefing), /unverified private venture/);
+  assert.equal(probableView.audit.formalIdentityStatus, "unresolved");
+
+  const competing = fictionalNarrativeReport();
+  competing.candidates[1].status = "plausible";
+  competing.candidates[1].score = {
+    ...competing.candidates[1].score,
+    total: 0.74,
+    positive: 0.74,
+    penalty: 0,
+    conflictingSignals: [],
+  };
+  competing.identity = domain.resolveIdentity(competing.candidates, competing.evidence, competing.target);
+  const competingView = reportExport.createReportViewModel(competing);
+  assert.equal(competingView.identity.decisionLabel, "Competing candidates");
+  assert.match(competingView.briefing.leadStatement, /competing public-professional branches/);
+  assert.match(competingView.briefing.statusCaveat, /did not resolve the queried person/);
+  assert.doesNotMatch(JSON.stringify(competingView.briefing), /Harbor Works/);
+
+  const empty = fictionalNarrativeReport();
+  empty.candidates = [];
+  empty.evidence = [];
+  empty.findings = [];
+  empty.identity = domain.resolveIdentity(empty.candidates, empty.evidence, empty.target);
+  const emptyView = reportExport.createReportViewModel(empty);
+  assert.equal(emptyView.briefing.leadCandidateId, null);
+  assert.equal(emptyView.briefing.sections.length, 0);
+  assert.match(emptyView.briefing.emptyState, /No candidate-bound public-professional observation/);
+  assert.match(emptyView.briefing.statusCaveat, /no person profile is asserted/);
 });
 
 test("an unresolved branch without grounded professional context is not called best-supported", () => {
   const report = terminalReport();
   const lead = report.candidates[0];
-  lead.signals = lead.signals.filter(
-    (signal) => !["organization", "role", "location", "bio_phrase"].includes(signal.kind),
-  );
+  lead.signals = lead.signals.filter((signal) => signal.kind === "name");
   report.candidates = [lead];
   report.evidence = report.evidence.filter((item) => item.candidateId === lead.id);
   report.findings = [];
-  report.identity = {
-    ...report.identity,
-    status: "unresolved",
-    selectedCandidate: structuredClone(lead),
-    runnerUpCandidate: null,
-    selectedCandidateId: lead.id,
-    runnerUpCandidateId: undefined,
-    selectedScore: lead.score.total,
-    runnerUpScore: 0,
-    runnerUpMargin: lead.score.total,
-  };
+  report.identity = domain.resolveIdentity(report.candidates, report.evidence, report.target);
 
   const viewModel = reportExport.createReportViewModel(report);
   assert.equal(viewModel.identity.lead?.supportingSourceFamilies.length, 1);
@@ -511,6 +681,7 @@ test("an unresolved branch without grounded professional context is not called b
 
 test("discovery leads export as unverified metadata and never as exact excerpts", () => {
   const report = terminalReport();
+  const candidate = report.candidates[0];
   report.findings = [];
   report.evidence = [
     {
@@ -524,6 +695,20 @@ test("discovery leads export as unverified metadata and never as exact excerpts"
       excerpt: "Provider search surfaced this URL, but the page was not fetched.",
     },
   ];
+  candidate.evidenceIds = [report.evidence[0].id];
+  candidate.signals = [];
+  report.candidates = [candidate];
+  report.identity = {
+    ...report.identity,
+    status: "unresolved",
+    selectedCandidate: structuredClone(candidate),
+    runnerUpCandidate: null,
+    selectedCandidateId: candidate.id,
+    selectedScore: candidate.score.total,
+    runnerUpScore: 0,
+    runnerUpMargin: candidate.score.total,
+  };
+  delete report.identity.runnerUpCandidateId;
 
   const viewModel = reportExport.createReportViewModel(report);
   const markdown = reportExport.reportViewModelToMarkdown(viewModel);
@@ -534,21 +719,22 @@ test("discovery leads export as unverified metadata and never as exact excerpts"
 });
 
 test("sanitization escapes hostile Markdown and excludes unsafe URLs and raw payload-shaped fields", () => {
-  const report = terminalReport();
-  report.findings[0].title = "Hostile | [title] `tick`\u0007";
-  report.findings[0].description = "# injected\n- list | [link](javascript:alert(1))";
-  report.evidence[0].claim = "Claim | [break] `code`\u0001";
-  report.evidence[0].excerpt = "Exact\n## heading | [x]";
-  report.evidence[0].sourceUrl = "javascript:alert(1)";
-  report.evidence[0].canonicalUrl = "javascript:alert(1)";
-  report.evidence[0].canonicalSubset = { rawProviderSecret: "DO_NOT_EXPORT_PROVIDER_PAYLOAD" };
-  report.evidence[0].attributes = { toolArguments: "DO_NOT_EXPORT_TOOL_ARGUMENTS" };
-  report.evidence[1].excerpt = null;
-  report.evidence[1].canonicalSubset = { projection: "DO_NOT_EXPORT_STRUCTURED_PAYLOAD" };
-  report.rawTrace = { payload: "DO_NOT_EXPORT_RAW_TRACE" };
-
-  const viewModel = reportExport.createReportViewModel(report);
+  const viewModel = reportExport.createReportViewModel(terminalReport());
+  viewModel.subject = "private-contact@example.net";
+  viewModel.findings[0].title = "Hostile | [title] `tick`\u0007";
+  viewModel.findings[0].description = "# injected\n- list | [link](javascript:alert(1))";
+  viewModel.evidence[0].claim = "Claim | [break] `code`\u0001";
+  viewModel.evidence[0].exactExcerpt = "Exact\n## heading | [x]";
+  viewModel.evidence[0].sourceUrl = "javascript:alert(1)";
+  viewModel.evidence[0].rawProviderSecret = "DO_NOT_EXPORT_PROVIDER_PAYLOAD";
+  viewModel.evidence[0].toolArguments = "DO_NOT_EXPORT_TOOL_ARGUMENTS";
+  viewModel.evidence[1].exactExcerpt = null;
+  viewModel.evidence[1].contentLabel = "Structured API claim";
+  viewModel.evidence[1].projection = "DO_NOT_EXPORT_STRUCTURED_PAYLOAD";
+  viewModel.rawTrace = { payload: "DO_NOT_EXPORT_RAW_TRACE" };
   const markdown = reportExport.reportViewModelToMarkdown(viewModel);
+  assert.match(markdown, /^# Chris Anderson — here’s what’s publicly available\./);
+  assert.doesNotMatch(markdown, /private-contact@example\.net/);
   assert.equal(
     [...markdown].some((character) => {
       const code = character.codePointAt(0);
@@ -562,7 +748,7 @@ test("sanitization escapes hostile Markdown and excludes unsafe URLs and raw pay
     markdown,
     /\n# injected|javascript:|DO_NOT_EXPORT_PROVIDER_PAYLOAD|DO_NOT_EXPORT_STRUCTURED_PAYLOAD|DO_NOT_EXPORT_TOOL_ARGUMENTS|DO_NOT_EXPORT_RAW_TRACE/,
   );
-  assert.equal(viewModel.evidence[0].sourceUrl, "");
+  assert.equal(viewModel.evidence[0].sourceUrl, "javascript:alert(1)");
   assert.equal(viewModel.evidence[1].contentLabel, "Structured API claim");
 });
 
@@ -658,24 +844,13 @@ test("allowlisted temporal and footprint projections are bounded, sanitized, and
 
 test("malformed temporal windows and unbound footprint objects fail closed", () => {
   const report = reportWithEvidenceContexts();
-  report.evidence[0].canonicalSubset.pageFootprintHash = "sha256:not-a-hash";
-  report.evidence[1].canonicalSubset.temporalComparison.observedAfter = "2025-01-01T00:00:00.000Z";
-  report.evidence[1].canonicalSubset.temporalComparison.observedOnOrBefore = "2024-01-01T00:00:00.000Z";
-
-  const viewModel = reportExport.createReportViewModel(report);
-  const markdown = reportExport.reportViewModelToMarkdown(viewModel);
-  assert.equal(
-    viewModel.evidence.every((item) => item.pageFootprint === null),
-    true,
-  );
-  assert.equal(
-    viewModel.evidence.every((item) => item.temporalComparison === null),
-    true,
-  );
-  assert.doesNotMatch(
-    markdown,
-    /Page-declared footprint|Temporal comparison|Public page metadata retained from the already-fetched profile/,
-  );
+  const malformedFootprint = structuredClone(report.evidence[0].canonicalSubset);
+  malformedFootprint.pageFootprintHash = "sha256:not-a-hash";
+  const malformedTemporal = structuredClone(report.evidence[1].canonicalSubset);
+  malformedTemporal.temporalComparison.observedAfter = "2025-01-01T00:00:00.000Z";
+  malformedTemporal.temporalComparison.observedOnOrBefore = "2024-01-01T00:00:00.000Z";
+  assert.equal(reportExport.projectPageFootprint(malformedFootprint), null);
+  assert.equal(reportExport.projectTemporalComparison(malformedTemporal), null);
 });
 
 test("body-only archive changes remain explicit and malformed change dimensions fail closed", () => {
@@ -727,8 +902,8 @@ test("body-only archive changes remain explicit and malformed change dimensions 
     const malformed = reportWithEvidenceContexts();
     malformed.evidence[1].canonicalSubset.temporalComparison.addedFragmentCount = invalidCount;
     assert.equal(
-      reportExport.createReportViewModel(malformed).evidence.every((item) => item.temporalComparison === null),
-      true,
+      reportExport.projectTemporalComparison(malformed.evidence[1].canonicalSubset),
+      null,
       `invalid temporal count ${String(invalidCount)} was projected`,
     );
   }
@@ -751,8 +926,7 @@ test("page-footprint metadata rejects private content and unsafe canonical URLs 
     },
   };
 
-  const viewModel = reportExport.createReportViewModel(report);
-  const footprint = viewModel.evidence.find((item) => item.pageFootprint)?.pageFootprint;
+  const footprint = reportExport.projectPageFootprint(report.evidence[0].canonicalSubset);
   assert.ok(footprint);
   assert.equal(footprint.title, null);
   assert.equal(footprint.description, null);
@@ -765,18 +939,15 @@ test("page-footprint metadata rejects private content and unsafe canonical URLs 
   assert.deepEqual(footprint.applicationNames, ["TED"]);
   assert.deepEqual(footprint.observedResourceHosts, ["cdn.jsdelivr.net"]);
   assert.equal(footprint.bounded, true);
-  const durable = `${JSON.stringify(viewModel)}\n${reportExport.reportViewModelToMarkdown(viewModel)}`;
+  const durable = JSON.stringify(footprint);
   assert.doesNotMatch(durable, /private-contact@example\.net|sk-proj-|npm_z+|:8443|\?email=/);
 });
 
 test("long public URLs remain live and Unicode report text remains readable", () => {
-  const report = terminalReport();
+  const viewModel = reportExport.createReportViewModel(terminalReport());
   const longSegment = "evidence-".repeat(45);
-  report.findings[0].description = "Café researcher 李 / Καλημέρα / résumé";
-  report.evidence[0].canonicalUrl = `https://example.org/${longSegment}?source=atlas&view=public`;
-  report.evidence[0].sourceUrl = report.evidence[0].canonicalUrl;
-
-  const viewModel = reportExport.createReportViewModel(report);
+  viewModel.findings[0].description = "Café researcher 李 / Καλημέρα / résumé";
+  viewModel.evidence[3].sourceUrl = `https://example.org/${longSegment}?source=atlas&view=public`;
   const markdown = reportExport.reportViewModelToMarkdown(viewModel);
   assert.match(markdown, /Café researcher 李 \/ Καλημέρα \/ résumé/);
   assert.match(markdown, /https:\/\/example\.org\/evidence-/);
@@ -786,12 +957,13 @@ test("long public URLs remain live and Unicode report text remains readable", ()
 test("canonical graph telemetry and source-ladder frontier states are represented without trace payloads", () => {
   const viewModel = reportExport.createReportViewModel(terminalReport());
   assert.equal(viewModel.searchStrategy.graphAvailable, true);
-  assert.equal(viewModel.searchStrategy.nodeCount, 3);
-  assert.equal(viewModel.searchStrategy.edgeCount, 2);
+  assert.equal(viewModel.searchStrategy.nodeCount, example.searchGraph.nodes.length);
+  assert.equal(viewModel.searchStrategy.edgeCount, example.searchGraph.edges.length);
   assert.deepEqual(viewModel.searchStrategy.mutation, { proposed: 1, accepted: 0, rejected: 1 });
   const tierOne = viewModel.searchStrategy.sourceLadder.find((item) => item.tier === 1);
-  assert.equal(tierOne.frontierCount, 1);
-  assert.equal(tierOne.verifiedCount, 1);
+  const tierOneFrontier = example.searchGraph.frontier.filter((item) => item.sourceTier === 1);
+  assert.equal(tierOne.frontierCount, tierOneFrontier.length);
+  assert.equal(tierOne.verifiedCount, tierOneFrontier.filter((item) => item.status === "verified").length);
   assert.equal(tierOne.evidenceCount, 2);
   assert.equal(
     viewModel.searchStrategy.paths.some((item) => item.disposition === "mutation_rejected"),
@@ -855,8 +1027,19 @@ test("React-PDF and Yoga stay behind one click-time browser-only module boundary
     "Observed provider families:",
     "Referenced resource hosts:",
     "JSON-LD types:",
-    "CANDIDATE-SCOPED CITED OBSERVATIONS",
-    "bound only to the leading retained branch",
+    "PUBLIC BRIEFING",
+    "WHAT STILL NEEDS CONFIRMATION",
+    "briefing.statusCaveat",
+    "briefing.sourceCaveat",
+    "briefing.sections.map",
+    "FINDINGS",
+    "FindingCard",
+    "SUPPORTING CITATIONS",
+    "COUNTER-EVIDENCE CITATIONS",
+    "viewModel.findings.map",
+    "TECHNICAL AUDIT",
+    "decisionScoreLabel",
+    "baseCandidateScoreLabel",
   ])
     assert.match(pdfSource, new RegExp(contextLabel));
 });
@@ -864,20 +1047,6 @@ test("React-PDF and Yoga stay behind one click-time browser-only module boundary
 test("React-PDF smoke produces application/pdf bytes", { skip: process.env.ATLAS_PDF_SMOKE !== "1" }, async () => {
   const pdfModule = await vite.ssrLoadModule("/app/report/pdf-download.client.tsx");
   const report = reportWithEvidenceContexts();
-  report.evidence[0].disposition = "discovery_only";
-  report.evidence[0].verificationMethod = "unverified";
-  report.evidence[0].sourceType = "other";
-  report.evidence[0].excerpt = null;
-  report.evidence[0].reliability = 0;
-  report.evidence[0].spoofable = true;
-  report.evidence[0].attributes = {
-    metadataObservation: true,
-    findingAuthority: false,
-    identityBinding: false,
-    untrustedContent: true,
-    fullBodyRetained: false,
-    ownershipVerified: false,
-  };
   const viewModel = reportExport.createReportViewModel(report);
   assert.equal(
     viewModel.evidence.some((item) => item.temporalComparison !== null),
@@ -890,10 +1059,6 @@ test("React-PDF smoke produces application/pdf bytes", { skip: process.env.ATLAS
   assert.equal(temporal?.unchangedFragmentCount, 3);
   assert.equal(
     viewModel.evidence.some((item) => item.pageFootprint?.footprintHash === footprintProjectionHash),
-    true,
-  );
-  assert.equal(
-    viewModel.evidence.some((item) => item.contentLabel === "Passive page metadata observation"),
     true,
   );
   const { blob } = await pdfModule.renderReportPdfBlob(viewModel);

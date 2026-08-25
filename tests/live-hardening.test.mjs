@@ -5893,7 +5893,11 @@ test("full runner isolates lowercase bare name-context sources without discovery
   assert.equal(viewModel.identity.selected, null);
   assert.ok(acceptedCandidateIds.has(viewModel.identity.lead?.id));
   assert.equal(viewModel.identity.decisionLabel, "Competing candidates");
-  assert.match(viewModel.executiveSummary, /^Competing candidates: Alex Rivera is the highest-ranked profile/);
+  assert.match(
+    viewModel.executiveSummary,
+    /^Atlas retained competing public-professional branches; Alex Rivera is the strongest current lead, but no branch was resolved\./,
+  );
+  assert.doesNotMatch(viewModel.executiveSummary, /identity match score|base candidate score|coverage|stopped with/i);
   const acceptedProfiles = viewModel.identity.profiles.filter((profile) => acceptedCandidateIds.has(profile.id));
   assert.equal(acceptedProfiles.length, 3);
   assert.ok(

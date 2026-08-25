@@ -13,7 +13,7 @@ The deterministic policy grammar is shared by intake, outbound action arguments,
 - medical, financial, protected-trait, or other sensitive-personal inference;
 - coercion, violence, illegal access, or doxxing.
 
-Atlas never generates or enumerates email addresses. The GitHub email tactic is available only when the user's input already contains one exact email. Allowed reports undergo final redaction and retain only the professional information necessary to support findings.
+Atlas never generates or enumerates email addresses. The GitHub email tactic is available only when the user's input already contains one exact email. Allowed reports undergo final redaction and retain only the professional information necessary to support findings. The human-readable briefing is deterministic presentation over those already-admitted same-candidate records: it does not add breach data, passwords or hashes, IP addresses, private contact details, inferred age or gender, or facts borrowed from another candidate branch. A self-published page may be quoted as a candidate-scoped observation, but presentation wording cannot promote it into independent confirmation.
 
 Allowed person input may include a name plus bounded public-professional disambiguators: role, company or organization, coarse city/region, adult university/college/school context, exact public HTTPS URL, or public handle. Coarse location is a search context, not residence enrichment. Any school context that identifies or targets a minor, and any request to turn location into a home address or precise whereabouts, is refused before a model or network call.
 

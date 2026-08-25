@@ -2173,6 +2173,263 @@ kbd {
   overflow: auto;
 }
 
+.report-briefing {
+  display: grid;
+  gap: var(--space-4);
+  padding-bottom: var(--space-6);
+  border-bottom: 1px solid var(--atlas-line);
+}
+
+.report-briefing > header {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.report-briefing > header > span,
+.report-briefing-sections h4,
+.report-briefing-observations article > header span,
+.report-confirmation h3 {
+  color: var(--atlas-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.report-briefing h3 {
+  max-width: 24ch;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--atlas-text);
+  font-size: clamp(1.55rem, 4vw, 2.15rem);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.04em;
+  line-height: 1.08;
+}
+
+.report-briefing-lead,
+.report-briefing-overview,
+.report-briefing-empty {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--atlas-text-soft);
+  font-size: var(--text-md);
+  line-height: 1.72;
+}
+
+.report-briefing-lead {
+  color: var(--atlas-text);
+  font-weight: var(--weight-medium);
+}
+
+.report-briefing-empty {
+  padding: var(--space-4);
+  border: 1px solid var(--atlas-line);
+  border-radius: var(--radius-md);
+  background: var(--atlas-panel);
+  color: var(--atlas-text-faint);
+  font-size: var(--text-sm);
+}
+
+.report-briefing-sections {
+  display: grid;
+  gap: var(--space-6);
+  margin-top: var(--space-2);
+}
+
+.report-briefing-sections > section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.report-briefing-sections h4 {
+  margin: 0;
+  color: var(--atlas-blue);
+}
+
+.report-briefing-observations {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.report-briefing-observations article {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--atlas-line);
+  border-left: 2px solid var(--atlas-green);
+  border-radius: var(--radius-md);
+  background: var(--atlas-panel);
+}
+
+.report-briefing-observations article.kind-direct_observation {
+  border-left-color: var(--atlas-blue);
+}
+
+.report-briefing-observations article > header {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.report-briefing-observations article > header strong {
+  overflow-wrap: anywhere;
+  color: var(--atlas-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.report-briefing-observations article > header span {
+  flex: 0 0 auto;
+}
+
+.report-briefing-observations article > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--atlas-text-soft);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.report-briefing-observations article > footer {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--atlas-line);
+}
+
+.report-briefing-observations article > footer a {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0 var(--space-2);
+  color: var(--atlas-blue);
+  font-size: var(--text-xs);
+  text-decoration: none;
+}
+
+.report-briefing-observations article > footer a:hover {
+  text-decoration: underline;
+}
+
+.report-briefing-observations article > footer svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  grid-row: 1 / span 2;
+  margin-top: 0.12rem;
+}
+
+.report-briefing-observations article > footer span,
+.report-briefing-observations article > footer small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.report-briefing-observations article > footer small {
+  color: var(--atlas-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.report-observation-caveats {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--atlas-text-faint);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+
+.report-confirmation {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: 0;
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--atlas-green) 34%, var(--atlas-line));
+  border-left: 3px solid var(--atlas-green);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--atlas-green) 5%, var(--atlas-panel));
+}
+
+.report-confirmation.formal-ambiguous,
+.report-confirmation.formal-unresolved {
+  border-color: color-mix(in srgb, var(--atlas-amber) 40%, var(--atlas-line));
+  border-left-color: var(--atlas-amber);
+  background: color-mix(in srgb, var(--atlas-amber) 6%, var(--atlas-panel));
+}
+
+.report-confirmation h3,
+.report-confirmation p {
+  margin: 0;
+}
+
+.report-confirmation p {
+  color: var(--atlas-text-soft);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.report-technical-audit {
+  margin-top: var(--space-6);
+  border: 1px solid var(--atlas-line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--atlas-panel) 72%, transparent);
+}
+
+.report-technical-audit > summary {
+  display: flex;
+  min-width: 0;
+  cursor: pointer;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  color: var(--atlas-text-soft);
+  list-style: none;
+}
+
+.report-technical-audit > summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-technical-audit > summary:focus-visible {
+  outline: 2px solid var(--atlas-focus);
+  outline-offset: 2px;
+}
+
+.report-technical-audit > summary::after {
+  content: "+";
+  flex: 0 0 auto;
+  color: var(--atlas-text-faint);
+  font-family: var(--font-mono);
+}
+
+.report-technical-audit[open] > summary::after {
+  content: "−";
+}
+
+.report-technical-audit > summary span {
+  color: var(--atlas-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.report-technical-audit > summary small {
+  margin-left: auto;
+  color: var(--atlas-text-faint);
+  font-size: var(--text-xs);
+}
+
+.report-technical-audit-body {
+  padding: 0 var(--space-4) var(--space-4);
+  border-top: 1px solid var(--atlas-line);
+}
+
 .report-lede {
   display: grid;
   gap: var(--space-3);
@@ -3319,6 +3576,19 @@ kbd {
   }
   .candidate-report-grid {
     grid-template-columns: 1fr;
+  }
+  .report-briefing-observations article > header {
+    display: grid;
+    gap: var(--space-1);
+  }
+  .report-briefing-observations article > header span {
+    justify-self: start;
+  }
+  .report-technical-audit > summary {
+    align-items: center;
+  }
+  .report-technical-audit > summary small {
+    display: none;
   }
   .report-identity-assessment dl {
     grid-template-columns: repeat(2, minmax(0, 1fr));

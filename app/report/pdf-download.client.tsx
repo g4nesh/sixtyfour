@@ -4,7 +4,12 @@ import { Circle, Document, Link, Page, Path, pdf, StyleSheet, Svg, Text, View } 
 import type { ReactNode } from "react";
 import { reportPdfFilename } from "../../lib/report-export/markdown";
 import { softWrapUrl } from "../../lib/report-export/sanitize";
-import type { ReportEvidenceView, ReportFindingView, ReportViewModel } from "../../lib/report-export/types";
+import type {
+  ReportBriefingObservationView,
+  ReportEvidenceView,
+  ReportFindingView,
+  ReportViewModel,
+} from "../../lib/report-export/types";
 
 const colors = {
   ink: "#141816",
@@ -38,9 +43,9 @@ const styles = StyleSheet.create({
   },
   coverTitle: {
     fontFamily: "Helvetica-Bold",
-    fontSize: 30,
+    fontSize: 26,
     lineHeight: 1.08,
-    maxWidth: 465,
+    maxWidth: 500,
     marginBottom: 18,
   },
   coverSubject: { color: "#c8d0cb", fontSize: 13, lineHeight: 1.5, maxWidth: 450 },
@@ -52,14 +57,18 @@ const styles = StyleSheet.create({
   bodyPage: {
     backgroundColor: colors.paper,
     color: colors.ink,
-    paddingTop: 28,
-    paddingBottom: 22,
+    paddingTop: 60,
+    paddingBottom: 48,
     paddingHorizontal: 48,
     fontFamily: "Helvetica",
     fontSize: 9,
     lineHeight: 1.45,
   },
   header: {
+    position: "absolute",
+    top: 28,
+    left: 48,
+    right: 48,
     display: "flex",
     flexDirection: "row",
     justifyContent: "space-between",
@@ -69,9 +78,12 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 7.5,
     letterSpacing: 0.45,
-    marginBottom: 16,
   },
   footer: {
+    position: "absolute",
+    right: 48,
+    bottom: 22,
+    left: 48,
     display: "flex",
     flexDirection: "row",
     justifyContent: "space-between",
@@ -80,7 +92,6 @@ const styles = StyleSheet.create({
     paddingTop: 7,
     color: colors.muted,
     fontSize: 7.5,
-    marginTop: "auto",
   },
   section: { marginBottom: 18 },
   sectionKicker: {
@@ -116,16 +127,57 @@ const styles = StyleSheet.create({
   },
   decisionTitle: { fontFamily: "Helvetica-Bold", fontSize: 10, marginBottom: 3 },
   decisionText: { fontSize: 8.4, lineHeight: 1.45 },
+  briefingLead: {
+    color: colors.ink,
+    fontFamily: "Helvetica-Bold",
+    fontSize: 11,
+    lineHeight: 1.5,
+    marginBottom: 8,
+  },
+  briefingOverview: { color: colors.ink, fontSize: 9.5, lineHeight: 1.62, marginBottom: 11 },
+  confirmation: {
+    borderLeftWidth: 3,
+    borderLeftColor: colors.amber,
+    backgroundColor: "#fbf7ef",
+    paddingVertical: 9,
+    paddingHorizontal: 11,
+    marginBottom: 14,
+  },
+  confirmationTitle: {
+    color: colors.amber,
+    fontFamily: "Helvetica-Bold",
+    fontSize: 8,
+    letterSpacing: 0.45,
+    marginBottom: 4,
+  },
+  confirmationText: { color: colors.ink, fontSize: 8.3, lineHeight: 1.48, marginBottom: 3 },
+  briefingSection: { marginBottom: 13 },
+  briefingSectionTitle: {
+    color: colors.blue,
+    fontFamily: "Helvetica-Bold",
+    fontSize: 8,
+    letterSpacing: 0.55,
+    marginBottom: 6,
+  },
+  observationCard: {
+    borderTopWidth: 0.8,
+    borderTopColor: colors.line,
+    paddingTop: 8,
+    marginBottom: 9,
+  },
+  observationTop: { display: "flex", flexDirection: "row", alignItems: "flex-start", marginBottom: 4 },
+  observationHeading: { flexGrow: 1, fontFamily: "Helvetica-Bold", fontSize: 9.5, lineHeight: 1.3 },
+  observationKind: { color: colors.muted, fontSize: 7.2, letterSpacing: 0.25, marginLeft: 10 },
+  observationDetail: { color: colors.ink, fontSize: 8.5, lineHeight: 1.52, marginBottom: 5 },
+  observationSource: { color: colors.blue, fontSize: 7.8, lineHeight: 1.35, marginBottom: 2 },
   candidateRow: {
-    display: "flex",
-    flexDirection: "row",
     borderBottomWidth: 0.5,
     borderBottomColor: colors.line,
     paddingVertical: 7,
   },
-  candidateName: { width: "30%", fontFamily: "Helvetica-Bold", fontSize: 8.2 },
-  candidateState: { width: "18%", fontSize: 8 },
-  candidateSignals: { width: "52%", color: colors.muted, fontSize: 8, lineHeight: 1.35 },
+  candidateName: { fontFamily: "Helvetica-Bold", fontSize: 8.5 },
+  candidateState: { color: colors.muted, fontSize: 8, marginTop: 2 },
+  candidateSignals: { color: colors.muted, fontSize: 8, lineHeight: 1.4, marginTop: 2 },
   findingCard: {
     borderBottomWidth: 0.7,
     borderBottomColor: colors.line,
@@ -157,6 +209,8 @@ const styles = StyleSheet.create({
   findingDescription: { fontSize: 8.7, lineHeight: 1.48, marginBottom: 7 },
   citationLine: { color: colors.blue, fontFamily: "Helvetica-Bold", fontSize: 8 },
   citationLink: { color: colors.blue, textDecoration: "underline" },
+  findingCitationGroup: { marginTop: 6 },
+  findingCitationItem: { color: colors.muted, fontSize: 7.8, lineHeight: 1.4, marginTop: 2 },
   evidenceCard: {
     borderTopWidth: 1.2,
     borderTopColor: colors.blue,
@@ -224,45 +278,21 @@ function percent(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
-function identityMetric(label: ReportViewModel["identity"]["decisionLabel"]): string {
-  if (label === "High-confidence match") return "High confidence";
-  if (label === "Best-supported candidate") return "Best supported";
-  if (label === "Leading query branch") return "Leading branch";
-  if (label === "Competing candidates") return "Competing";
-  if (label === "No eligible candidate") return "No candidate";
-  return "Resolved match";
+function pdfText(value: string): string {
+  return value.replace(/[\u2013\u2014]/g, "-");
 }
 
 function contextHuman(value: string): string {
   return human(value.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("-", " "));
 }
 
-function evidencePageWeight(evidence: ReportEvidenceView): number {
-  const textWeight = Math.min(0.7, (evidence.claim.length + (evidence.exactExcerpt?.length ?? 0)) / 900);
-  return 1 + textWeight + (evidence.temporalComparison ? 1.25 : 0) + (evidence.pageFootprint ? 1.25 : 0);
-}
-
 /**
- * Keep variable-height context cards from being grouped onto an explicit page
- * that React-PDF must immediately abandon. Context-rich records receive their
- * own page; two compact records may share one page.
+ * Keep every source record on its own explicit page so a compact trailing card
+ * cannot begin at the bottom of another source page and lose its heading when
+ * React-PDF continues it.
  */
 function evidencePagesFor(viewModel: ReportViewModel): ReportEvidenceView[][] {
-  const pages: ReportEvidenceView[][] = [];
-  let current: ReportEvidenceView[] = [];
-  let weight = 0;
-  for (const evidence of viewModel.evidence) {
-    const nextWeight = evidencePageWeight(evidence);
-    if (current.length > 0 && (current.length >= 2 || weight + nextWeight > 2.6)) {
-      pages.push(current);
-      current = [];
-      weight = 0;
-    }
-    current.push(evidence);
-    weight += nextWeight;
-  }
-  if (current.length > 0) pages.push(current);
-  return pages.length > 0 ? pages : [[]];
+  return viewModel.evidence.length > 0 ? viewModel.evidence.map((evidence) => [evidence]) : [[]];
 }
 
 function safeMetadataDate(value: string): Date | undefined {
@@ -272,11 +302,9 @@ function safeMetadataDate(value: string): Date | undefined {
 
 function Section({ index, title, children }: { index: string; title: string; children: ReactNode }) {
   return (
-    <View style={styles.section} minPresenceAhead={72}>
+    <View style={styles.section}>
       <Text style={styles.sectionKicker}>{index}</Text>
-      <Text style={styles.sectionTitle} minPresenceAhead={42}>
-        {title}
-      </Text>
+      <Text style={styles.sectionTitle}>{title}</Text>
       {children}
     </View>
   );
@@ -293,12 +321,12 @@ function BodyPage({
 }) {
   return (
     <Page size="LETTER" style={styles.bodyPage} wrap bookmark={bookmark}>
-      <View style={styles.header}>
+      <View style={styles.header} fixed>
         <Text>ATLAS / PUBLIC-SOURCE INTELLIGENCE</Text>
         <Text>{viewModel.subject}</Text>
       </View>
       {children}
-      <View style={styles.footer}>
+      <View style={styles.footer} fixed>
         <Text>{viewModel.run.id}</Text>
         <Text>ATLAS REPORT</Text>
       </View>
@@ -343,37 +371,101 @@ function CoverPath({ viewModel }: { viewModel: ReportViewModel }) {
   );
 }
 
-function FindingCard({ finding, index }: { finding: ReportFindingView; index: number }) {
+function BriefingObservation({ observation }: { observation: ReportBriefingObservationView }) {
   return (
-    <View style={styles.findingCard}>
+    <View style={styles.observationCard} wrap={false}>
+      <View style={styles.observationTop}>
+        <Text style={styles.observationHeading}>{pdfText(observation.heading)}</Text>
+        <Text style={styles.observationKind}>
+          {observation.kind === "finding" ? "EVIDENCE-BACKED FINDING" : "PUBLIC OBSERVATION"}
+        </Text>
+      </View>
+      <Text style={styles.observationDetail}>{pdfText(observation.detail)}</Text>
+      {observation.sources.map((source) => (
+        <Link key={`${observation.id}-${source.ref}-${source.url}`} src={source.url} style={styles.observationSource}>
+          {source.ref} / {pdfText(source.title ?? source.domain)} / {source.domain}
+        </Link>
+      ))}
+      {observation.caveats.map((caveat) => (
+        <View key={caveat} style={[styles.bullet, { marginTop: 3 }]}>
+          <Text style={styles.bulletMark}>!</Text>
+          <Text style={styles.bulletText}>{pdfText(caveat)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function FindingCitationGroup({
+  label,
+  citations,
+  evidenceByRef,
+}: {
+  label: string;
+  citations: readonly string[];
+  evidenceByRef: ReadonlyMap<string, ReportEvidenceView>;
+}) {
+  return (
+    <View style={styles.findingCitationGroup}>
+      <Text style={styles.citationLine}>{label}</Text>
+      {citations.length > 0 ? (
+        citations.map((ref, index) => {
+          const evidence = evidenceByRef.get(ref);
+          const title = evidence?.title ?? evidence?.sourceFamily ?? "Evidence record";
+          const text = `${ref} / ${pdfText(title)} / ${evidence?.sourceFamily ?? "source unavailable"}`;
+          return evidence?.sourceUrl ? (
+            <Link
+              key={`${label}-${ref}-${index}`}
+              src={evidence.sourceUrl}
+              style={[styles.findingCitationItem, styles.citationLink]}
+            >
+              {text}
+            </Link>
+          ) : (
+            <Text key={`${label}-${ref}-${index}`} style={styles.findingCitationItem}>
+              {text}
+            </Text>
+          );
+        })
+      ) : (
+        <Text style={styles.findingCitationItem}>None retained</Text>
+      )}
+    </View>
+  );
+}
+
+function FindingCard({
+  finding,
+  index,
+  evidenceByRef,
+}: {
+  finding: ReportFindingView;
+  index: number;
+  evidenceByRef: ReadonlyMap<string, ReportEvidenceView>;
+}) {
+  return (
+    <View style={styles.findingCard} minPresenceAhead={56}>
       <View style={styles.findingTop}>
         <Text style={styles.findingIndex}>{String(index + 1).padStart(2, "0")}</Text>
-        <Text style={styles.findingHeading}>{finding.title}</Text>
+        <Text style={styles.findingHeading}>{pdfText(finding.title)}</Text>
         <Text style={styles.badge}>
           {human(finding.confidenceLabel)} {percent(finding.confidenceScore)}
         </Text>
       </View>
       <Text style={styles.evidenceLabel}>
-        CANDIDATE / {finding.candidateName} / {finding.candidateId}
+        CANDIDATE / {pdfText(finding.candidateName)} / {finding.candidateId}
       </Text>
-      <Text style={styles.findingDescription}>{finding.description}</Text>
-      <Text style={styles.citationLine}>
-        Sources:{" "}
-        {finding.sources.length > 0
-          ? finding.sources.map((source, sourceIndex) => (
-              <Text key={`${source.url}-${sourceIndex}`}>
-                {sourceIndex > 0 ? ", " : ""}
-                <Link src={source.url} style={styles.citationLink}>
-                  {source.title} — {source.domain}
-                </Link>
-              </Text>
-            ))
-          : "None"}
-      </Text>
+      <Text style={styles.findingDescription}>{pdfText(finding.description)}</Text>
+      <FindingCitationGroup label="SUPPORTING CITATIONS" citations={finding.citations} evidenceByRef={evidenceByRef} />
+      <FindingCitationGroup
+        label="COUNTER-EVIDENCE CITATIONS"
+        citations={finding.counterCitations}
+        evidenceByRef={evidenceByRef}
+      />
       {finding.caveats.map((caveat) => (
         <View key={caveat} style={[styles.bullet, { marginTop: 5 }]}>
           <Text style={styles.bulletMark}>!</Text>
-          <Text style={styles.bulletText}>{caveat}</Text>
+          <Text style={styles.bulletText}>{pdfText(caveat)}</Text>
         </View>
       ))}
     </View>
@@ -538,9 +630,9 @@ function EvidenceCard({ evidence }: { evidence: ReportEvidenceView }) {
 }
 
 function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
-  const lead = viewModel.identity.lead;
   const created = safeMetadataDate(viewModel.run.generatedAt);
   const evidencePages = evidencePagesFor(viewModel);
+  const evidenceByRef = new Map(viewModel.evidence.map((evidence) => [evidence.ref, evidence] as const));
   const uniqueLimitations = [...new Set([...viewModel.coverage.gaps, ...viewModel.limitations])];
   const statusCounts =
     viewModel.searchStrategy.nodeStatusCounts.map((item) => `${human(item.label)} ${item.count}`).join(" / ") ||
@@ -565,11 +657,11 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
       <Page size="LETTER" style={styles.cover} bookmark="Cover">
         <View style={styles.coverRule} />
         <Text style={styles.classification}>{viewModel.classification}</Text>
-        <Text style={styles.coverTitle}>Atlas intelligence report</Text>
-        <Text style={styles.coverSubject}>{viewModel.subject}</Text>
+        <Text style={styles.coverTitle}>{pdfText(viewModel.briefing.headline)}</Text>
+        <Text style={styles.coverSubject}>Atlas public-source briefing</Text>
         <CoverPath viewModel={viewModel} />
         <Text style={{ color: "#e0e5e1", fontSize: 11, lineHeight: 1.55, maxWidth: 460 }}>
-          {viewModel.executiveSummary}
+          {pdfText(viewModel.briefing.leadStatement)}
         </Text>
         <View style={styles.coverMeta}>
           <View style={styles.coverMetaRow}>
@@ -591,129 +683,43 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
         </View>
       </Page>
 
-      <BodyPage viewModel={viewModel} bookmark="Assessment">
-        <Section index="01 / ASSESSMENT" title="Executive summary">
-          <View style={styles.metricGrid}>
-            <View style={styles.metricCard} wrap={false}>
-              <View style={styles.metricInner}>
-                <Text style={styles.metricValue}>{identityMetric(viewModel.identity.decisionLabel)}</Text>
-                <Text style={styles.metricLabel}>IDENTITY / FORMAL {human(viewModel.identity.status)}</Text>
-              </View>
-            </View>
-            <View style={styles.metricCard} wrap={false}>
-              <View style={styles.metricInner}>
-                <Text style={styles.metricValue}>{viewModel.findings.length}</Text>
-                <Text style={styles.metricLabel}>FINDINGS</Text>
-              </View>
-            </View>
-            <View style={styles.metricCard} wrap={false}>
-              <View style={styles.metricInner}>
-                <Text style={styles.metricValue}>{viewModel.evidence.length}</Text>
-                <Text style={styles.metricLabel}>EVIDENCE</Text>
-              </View>
-            </View>
-            <View style={styles.metricCard} wrap={false}>
-              <View style={styles.metricInner}>
-                <Text style={styles.metricValue}>{percent(viewModel.coverage.score)}</Text>
-                <Text style={styles.metricLabel}>COVERAGE</Text>
-              </View>
-            </View>
-          </View>
-          <Text style={styles.paragraph}>{viewModel.executiveSummary}</Text>
-          <View style={styles.detailRow}>
-            <View style={styles.detailCell}>
-              <Text style={styles.label}>STATUS</Text>
-              <Text style={styles.value}>{human(viewModel.run.status)}</Text>
-            </View>
-            <View style={styles.detailCell}>
-              <Text style={styles.label}>STOP REASON</Text>
-              <Text style={styles.value}>{human(viewModel.run.stopReason)}</Text>
-            </View>
-          </View>
-        </Section>
-
-        <Section index="02 / IDENTITY" title="Identity resolution">
-          <View style={styles.decision}>
-            <Text style={styles.decisionTitle}>
-              {lead
-                ? `${viewModel.identity.decisionLabel} / ${lead.name} / ${percent(viewModel.identity.resolutionScore)} identity match score`
-                : viewModel.identity.decisionLabel}
+      <BodyPage viewModel={viewModel} bookmark="Public briefing">
+        <Section index="01 / PUBLIC BRIEFING" title={pdfText(viewModel.briefing.headline)}>
+          <Text style={styles.briefingLead}>{pdfText(viewModel.briefing.leadStatement)}</Text>
+          <Text style={styles.briefingOverview}>{pdfText(viewModel.briefing.overview)}</Text>
+          {viewModel.briefing.emptyState ? (
+            <Text style={[styles.paragraph, styles.muted]}>{pdfText(viewModel.briefing.emptyState)}</Text>
+          ) : null}
+          <View style={styles.confirmation} wrap={false}>
+            <Text style={styles.confirmationTitle}>
+              {viewModel.audit.formalIdentityStatus === "resolved"
+                ? "IDENTITY AND SOURCE NOTE"
+                : "WHAT STILL NEEDS CONFIRMATION"}
             </Text>
-            <Text style={styles.decisionText}>{viewModel.identity.rationale}</Text>
+            <Text style={styles.confirmationText}>{pdfText(viewModel.briefing.statusCaveat)}</Text>
+            <Text style={styles.confirmationText}>{pdfText(viewModel.briefing.sourceCaveat)}</Text>
           </View>
-          {viewModel.identity.missingCorroboration.length > 0 ? (
-            <View style={{ marginBottom: 8 }}>
-              <Text style={[styles.label, { marginBottom: 3 }]}>WHAT IS STILL MISSING</Text>
-              {viewModel.identity.missingCorroboration.map((item) => (
-                <View key={item} style={styles.bullet}>
-                  <Text style={styles.bulletMark}>-</Text>
-                  <Text style={styles.bulletText}>{item}</Text>
-                </View>
+          {viewModel.briefing.sections.map((section) => (
+            <View key={section.key} style={styles.briefingSection}>
+              <Text style={styles.briefingSectionTitle}>{pdfText(section.heading).toLocaleUpperCase("en-US")}</Text>
+              {section.observations.map((observation) => (
+                <BriefingObservation key={observation.id} observation={observation} />
               ))}
             </View>
-          ) : null}
-          <Text style={[styles.paragraph, styles.muted]}>
-            {viewModel.identity.retainedCandidateCount} distinct candidate branch
-            {viewModel.identity.retainedCandidateCount === 1 ? "" : "es"} retained / top five profiled below
-          </Text>
-          <Text style={[styles.paragraph, styles.muted]}>
-            Resolution basis {human(viewModel.identity.resolutionBasis)} / resolution margin{" "}
-            {percent(viewModel.identity.resolutionMargin)} / required margin{" "}
-            {percent(viewModel.identity.marginThreshold)}
-            {" / "}base candidate margin {percent(viewModel.identity.runnerUpMargin)} / resolution threshold{" "}
-            {percent(viewModel.identity.resolutionThreshold)}
-          </Text>
-          {viewModel.identity.profiles.length > 0 ? (
-            <View>
-              <Text style={[styles.label, { marginBottom: 3 }]}>TOP RETAINED CANDIDATE PROFILES</Text>
-              {viewModel.identity.profiles.map((candidate) => (
-                <View key={candidate.id} style={styles.candidateRow}>
-                  <Text style={styles.candidateName}>{candidate.name}</Text>
-                  <Text style={styles.candidateState}>
-                    {human(candidate.status)} / base {percent(candidate.score)}
-                  </Text>
-                  <Text style={styles.candidateSignals}>
-                    {candidate.directSourceCount} direct / {candidate.evidenceRefs.length} evidence /{" "}
-                    {candidate.findingIds.length} findings; supporting families{" "}
-                    {candidate.supportingSourceFamilies.join(", ") || "none"}; matched context{" "}
-                    {candidate.matchedContextSignals.map(human).join(", ") || "none"}; conflicts{" "}
-                    {candidate.conflictingSignals.join(", ") || "none"}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ) : (
-            <Text style={styles.paragraph}>No alternative candidate was retained.</Text>
-          )}
-          {lead?.profileFacts.length ? (
-            <View style={{ marginTop: 9 }}>
-              <Text style={[styles.label, { marginBottom: 4 }]}>
-                {viewModel.identity.status === "resolved"
-                  ? "CITED PROFILE FACTS"
-                  : "CANDIDATE-SCOPED CITED OBSERVATIONS"}
-              </Text>
-              {viewModel.identity.status !== "resolved" ? (
-                <Text style={[styles.paragraph, styles.muted]}>
-                  These observations are bound only to the leading retained branch. They do not independently establish
-                  that it is the queried person.
-                </Text>
-              ) : null}
-              {lead.profileFacts.slice(0, 5).map((fact) => (
-                <View key={`${fact.evidenceRef}-${fact.claim}`} style={styles.bullet}>
-                  <Text style={styles.bulletMark}>-</Text>
-                  <Text style={styles.bulletText}>
-                    [{fact.evidenceRef}] {fact.claim}
-                    {fact.source ? ` / ${fact.source.domain}` : ""}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
+          ))}
         </Section>
+      </BodyPage>
 
-        <Section index="03 / FINDINGS" title="Evidence-backed findings">
+      <BodyPage viewModel={viewModel} bookmark="Findings">
+        <Section index="02 / FINDINGS" title="Evidence-backed findings">
+          <Text style={[styles.paragraph, styles.muted]}>
+            Every finding remains bound to its retained candidate branch. Supporting and counter-evidence references map
+            directly to the source ledger.
+          </Text>
           {viewModel.findings.length > 0 ? (
-            viewModel.findings.map((finding, index) => <FindingCard key={finding.id} finding={finding} index={index} />)
+            viewModel.findings.map((finding, index) => (
+              <FindingCard key={finding.id} finding={finding} index={index} evidenceByRef={evidenceByRef} />
+            ))
           ) : (
             <Text style={styles.paragraph}>No finding met the admission and confidence rules.</Text>
           )}
@@ -727,7 +733,7 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
           bookmark={pageIndex === 0 ? "Evidence ledger" : `Evidence ledger ${pageIndex + 1}`}
         >
           <Section
-            index={pageIndex === 0 ? "04 / SOURCES" : `04 / SOURCES · ${pageIndex + 1}`}
+            index={pageIndex === 0 ? "03 / SOURCES" : `03 / SOURCES / ${pageIndex + 1}`}
             title={pageIndex === 0 ? "Evidence and source ledger" : "Evidence ledger continued"}
           >
             {pageIndex === 0 ? (
@@ -746,7 +752,7 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
       ))}
 
       <BodyPage viewModel={viewModel} bookmark="Search strategy">
-        <Section index="05 / SEARCH" title="Search strategy and retained paths">
+        <Section index="04 / SEARCH" title="Search strategy and retained paths">
           <Text style={styles.paragraph}>{viewModel.searchStrategy.narrative}</Text>
           <View style={styles.metricGrid}>
             <View style={styles.metricCard} wrap={false}>
@@ -809,8 +815,10 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
             <Text style={styles.paragraph}>No canonical path summary was available.</Text>
           )}
         </Section>
+      </BodyPage>
 
-        <Section index="06 / LIMITS" title="Coverage gaps and limitations">
+      <BodyPage viewModel={viewModel} bookmark="Limitations">
+        <Section index="05 / LIMITS" title="Coverage gaps and limitations">
           {uniqueLimitations.map((item) => (
             <View key={item} style={styles.bullet}>
               <Text style={styles.bulletMark}>-</Text>
@@ -823,7 +831,93 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
         </Section>
       </BodyPage>
 
-      <BodyPage viewModel={viewModel} bookmark="Execution and methodology">
+      <BodyPage viewModel={viewModel} bookmark="Technical audit and methodology">
+        <Section index="06 / TECHNICAL AUDIT" title="Identity decision mechanics">
+          <View style={styles.decision}>
+            <Text style={styles.decisionTitle}>
+              {viewModel.audit.assessment} / formal {human(viewModel.audit.formalIdentityStatus)}
+            </Text>
+            <Text style={styles.decisionText}>{pdfText(viewModel.identity.rationale)}</Text>
+          </View>
+          <Text style={[styles.paragraph, styles.muted]}>
+            All scores on this page are rule-based decision metadata, not probabilities.
+          </Text>
+          <View style={styles.detailRow}>
+            <View style={styles.detailCell}>
+              <Text style={styles.label}>{viewModel.audit.decisionScoreLabel.toLocaleUpperCase("en-US")}</Text>
+              <Text style={styles.value}>{percent(viewModel.audit.decisionScore)}</Text>
+            </View>
+            <View style={styles.detailCell}>
+              <Text style={styles.label}>RESOLUTION THRESHOLD</Text>
+              <Text style={styles.value}>{percent(viewModel.audit.resolutionThreshold)}</Text>
+            </View>
+          </View>
+          <View style={styles.detailRow}>
+            <View style={styles.detailCell}>
+              <Text style={styles.label}>{viewModel.audit.baseCandidateScoreLabel.toLocaleUpperCase("en-US")}</Text>
+              <Text style={styles.value}>
+                {viewModel.audit.baseCandidateScore === null
+                  ? "Not applicable"
+                  : percent(viewModel.audit.baseCandidateScore)}
+              </Text>
+            </View>
+            <View style={styles.detailCell}>
+              <Text style={styles.label}>RESOLUTION MARGIN / REQUIRED</Text>
+              <Text style={styles.value}>
+                {percent(viewModel.audit.resolutionMargin)} / {percent(viewModel.audit.marginThreshold)}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.detailRow}>
+            <View style={styles.detailCell}>
+              <Text style={styles.label}>IDENTITY-SUPPORTING SOURCE FAMILIES</Text>
+              <Text style={styles.value}>{viewModel.audit.identitySupportingSourceFamilyCount}</Text>
+            </View>
+            <View style={styles.detailCell}>
+              <Text style={styles.label}>FINDING-BACKED COVERAGE</Text>
+              <Text style={styles.value}>{percent(viewModel.audit.coverageScore)}</Text>
+            </View>
+          </View>
+          <Text style={[styles.paragraph, styles.muted]}>
+            Resolution basis {human(viewModel.audit.resolutionBasis)} / retained branches{" "}
+            {viewModel.audit.retainedCandidateCount} / admitted independent source families{" "}
+            {viewModel.audit.admittedIndependentSourceFamilyCount}
+          </Text>
+          {viewModel.identity.missingCorroboration.length > 0 ? (
+            <View style={{ marginBottom: 8 }}>
+              <Text style={[styles.label, { marginBottom: 3 }]}>DECISION GAPS</Text>
+              {viewModel.identity.missingCorroboration.map((item) => (
+                <View key={item} style={styles.bullet}>
+                  <Text style={styles.bulletMark}>-</Text>
+                  <Text style={styles.bulletText}>{pdfText(item)}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+          {viewModel.identity.profiles.length > 0 ? (
+            <View>
+              <Text style={[styles.label, { marginBottom: 3 }]}>RETAINED CANDIDATE BRANCHES</Text>
+              {viewModel.identity.profiles.map((candidate) => (
+                <View key={candidate.id} style={styles.candidateRow}>
+                  <Text style={styles.candidateName}>{pdfText(candidate.name)}</Text>
+                  <Text style={styles.candidateState}>
+                    {human(candidate.status)} / rule score {percent(candidate.score)}
+                  </Text>
+                  <Text style={styles.candidateSignals}>
+                    {candidate.directSourceCount} direct / {candidate.evidenceRefs.length} evidence /{" "}
+                    {candidate.findingIds.length} findings; supporting families{" "}
+                    {candidate.supportingSourceFamilies.join(", ") || "none"}; matched context{" "}
+                    {candidate.matchedContextSignals.map(human).join(", ") || "none"}; conflicts{" "}
+                    {candidate.conflictingSignals.join(", ") || "none"}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </Section>
+      </BodyPage>
+
+      <BodyPage viewModel={viewModel} bookmark="Execution">
         <Section index="07 / EXECUTION" title="Usage, latency, and stopping">
           <View style={styles.metricGrid}>
             {viewModel.execution.usage.map((metric) => (
@@ -838,7 +932,9 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
           <Text style={styles.label}>STOP DETAIL</Text>
           <Text style={styles.value}>{viewModel.execution.stopDetail}</Text>
         </Section>
+      </BodyPage>
 
+      <BodyPage viewModel={viewModel} bookmark="Methodology">
         <Section index="08 / METHOD" title="Methodology and safety">
           {[
             ["EVIDENCE STANDARD", viewModel.methodology.evidenceStandard],

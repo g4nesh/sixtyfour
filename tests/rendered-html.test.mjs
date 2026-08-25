@@ -160,6 +160,7 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
     sourceLadder,
     traceRail,
     report,
+    pdfReport,
     layout,
     css,
     packageJson,
@@ -174,6 +175,7 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
     readFile(new URL("../app/components/source-ladder.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/trace-rail.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/report-sheet.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/report/pdf-download.client.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -268,11 +270,32 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(report, /Web discovery path/);
   assert.match(report, /Structured indexes/);
   assert.match(report, /not cited sources until hardened fetch succeeds/);
+  assert.match(report, /createReportViewModel/);
+  assert.match(report, /viewModel\.briefing\.headline/);
+  assert.match(report, /viewModel\.briefing\.sections\.map/);
+  assert.match(report, /Evidence-backed finding/);
+  assert.match(report, /What still needs confirmation/);
+  assert.match(report, /<details className="report-technical-audit">/);
+  assert.match(report, /viewModel\.audit\.decisionScoreLabel/);
+  assert.doesNotMatch(report, /Math\.round\(score \* 100\)/);
+  assert.doesNotMatch(report, /Private emails|Breach data|Passwords|IP addresses|Private contacts/i);
   assert.match(report, /Candidate assessment/);
   assert.match(report, /Best-supported candidate/);
   assert.match(report, /Formal identity status/);
   assert.match(report, /Cited profile facts/);
   assert.doesNotMatch(report, /selectedCandidate.*filter|candidateId.*filter/);
+
+  assert.match(pdfReport, /viewModel\.briefing\.headline/);
+  assert.match(pdfReport, /BriefingObservation/);
+  assert.match(pdfReport, /WHAT STILL NEEDS CONFIRMATION/);
+  assert.match(pdfReport, /02 \/ FINDINGS/);
+  assert.match(pdfReport, /viewModel\.findings\.map/);
+  assert.match(pdfReport, /FindingCard/);
+  assert.match(pdfReport, /SUPPORTING CITATIONS/);
+  assert.match(pdfReport, /COUNTER-EVIDENCE CITATIONS/);
+  assert.match(pdfReport, /06 \/ TECHNICAL AUDIT/);
+  assert.match(pdfReport, /viewModel\.audit\.decisionScore/);
+  assert.doesNotMatch(pdfReport, /identityMetric/);
 
   assert.match(css, /--atlas-bg:\s*#030604/);
   assert.match(css, /\.atlas-shell/);

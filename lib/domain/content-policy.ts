@@ -1,6 +1,17 @@
 import type { JsonValue } from "./types";
 
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b/gi;
+const DEFAULT_IGNORABLE_POLICY_CHARACTERS = /\p{Default_Ignorable_Code_Point}/gu;
+
+/**
+ * Build the comparison-only representation used by every safety matcher.
+ * Default-ignorable Unicode characters include zero-width and bidi format
+ * controls that remain visually invisible but otherwise split policy tokens.
+ * The retained source text is not rewritten by this helper.
+ */
+function normalizePolicyText(value: string): string {
+  return value.toWellFormed().normalize("NFKC").replace(DEFAULT_IGNORABLE_POLICY_CHARACTERS, "");
+}
 
 const CREDENTIAL_LITERAL_PATTERNS = [
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/,
@@ -16,8 +27,78 @@ const CREDENTIAL_LITERAL_PATTERNS = [
 
 /** Known high-entropy credential formats that must never enter durable OSINT output. */
 export function containsCredentialLiteral(value: string): boolean {
-  const normalized = value.normalize("NFKC");
+  const normalized = normalizePolicyText(value);
   return CREDENTIAL_LITERAL_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+const CREDENTIAL_HASH_PATTERNS = [
+  /(?:^|[^$A-Za-z0-9])\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}(?=$|[^./A-Za-z0-9])/,
+  /(?:^|[^$A-Za-z0-9])\$argon2(?:i|d|id)\$v=\d+\$m=\d+,t=\d+,p=\d+\$[A-Za-z0-9+/=.-]{8,}\$[A-Za-z0-9+/=.-]{8,}(?=$|\s)/i,
+  /(?:^|[^$A-Za-z0-9])\$scrypt\$ln=\d+,r=\d+,p=\d+\$[A-Za-z0-9+/=.-]{8,}\$[A-Za-z0-9+/=.-]{8,}(?=$|\s)/i,
+  /(?:^|[^$A-Za-z0-9])\$(?:1|5|6)\$[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{20,128}(?=$|[^./A-Za-z0-9])/,
+  /\{(?:SSHA(?:256|512)?|SHA|MD5|PBKDF2)\}[A-Za-z0-9+/]{16,}={0,2}\b/i,
+  /\b(?:password|passwd|pwd|credential|ntlm|lanman|lm)\s*(?:hash|digest)?\s*(?::|=|is)\s*(?:[a-f0-9]{16,128}|[A-Za-z0-9+/]{20,}={0,2})\b/i,
+  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\s*[:|]\s*[a-f0-9]{16,128}\b/i,
+  /\b[A-Za-z0-9._-]{1,64}:\d{1,10}:[a-f0-9]{32}:[a-f0-9]{32}(?:::)?\b/i,
+] as const;
+
+const BREACH_ARTIFACT_PATTERNS = [
+  /\b(?:breached|compromised|pwned)\s+(?:accounts?|credentials?|passwords?|emails?|identities|records?|databases?)\b/i,
+  /\b(?:breach|compromise)\s+(?:data|records?|results?|accounts?|credentials?|passwords?|emails?|databases?)\b/i,
+  /\b(?:credentials?|passwords?|accounts?|emails?|usernames?|identities)\s+(?:dump|paste|leak|combo\s*list)s?\b/i,
+  /\b(?:dump|paste|leak)s?\s+(?:of\s+)?(?:credentials?|passwords?|accounts?|emails?|usernames?|identities)\b/i,
+  /\b(?:appears?|listed|found|included|exposed)\b.{0,64}\b(?:breach(?:ed)?\s+(?:data|accounts?)?|credential\s+dump|password\s+dump|account\s+paste|combo\s*list)\b/i,
+  /\b(?:combo\s*lists?|stealer\s*logs?|infostealer\s*logs?)\b/i,
+  /\b(?:pastebin|ghostbin|hastebin|dpaste|breach[-_. ]?vault|credential[-_. ]?paste)\b/i,
+] as const;
+
+function parseIpv4(value: string): number[] | null {
+  const parts = value.split(".");
+  if (parts.length !== 4) return null;
+  const octets = parts.map((part) => (/^(0|[1-9]\d{0,2})$/.test(part) ? Number(part) : -1));
+  return octets.every((part) => part >= 0 && part <= 255) ? octets : null;
+}
+
+function expandIpv6(value: string): number[] | null {
+  if (value.includes("%")) return null;
+  let source = value.toLocaleLowerCase("en-US");
+  const embeddedMatch = source.match(/(?:^|:)(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (embeddedMatch) {
+    const ipv4 = parseIpv4(embeddedMatch[1]);
+    if (!ipv4) return null;
+    const replacement = `${((ipv4[0] << 8) | ipv4[1]).toString(16)}:${((ipv4[2] << 8) | ipv4[3]).toString(16)}`;
+    source = source.slice(0, source.length - embeddedMatch[1].length) + replacement;
+  }
+
+  if ((source.match(/::/g) ?? []).length > 1) return null;
+  const halves = source.split("::");
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  if (halves.length === 1 && left.length !== 8) return null;
+  const missing = 8 - left.length - right.length;
+  if (missing < 0 || (halves.length === 2 && missing < 1)) return null;
+  const groups = [...left, ...Array.from({ length: missing }, () => "0"), ...right];
+  if (groups.length !== 8 || groups.some((part) => !/^[0-9a-f]{1,4}$/.test(part))) return null;
+  return groups.map((part) => Number.parseInt(part, 16));
+}
+
+/** Raw network identifiers are never public-professional report content. */
+export function containsRawIpLiteral(value: string): boolean {
+  const normalized = normalizePolicyText(value);
+  for (const match of normalized.matchAll(/\d{1,3}(?:\.\d{1,3}){3}/g)) {
+    const before = match.index === 0 ? "" : normalized[match.index - 1];
+    const afterIndex = match.index + match[0].length;
+    const after = normalized[afterIndex] ?? "";
+    const afterNext = normalized[afterIndex + 1] ?? "";
+    if (/[0-9.]/.test(before) || /\d/.test(after) || (after === "." && /\d/.test(afterNext))) continue;
+    if (parseIpv4(match[0])) return true;
+  }
+  for (const match of normalized.matchAll(/(?:^|[^0-9A-Fa-f:.%])(\[?[0-9A-Fa-f:.%]{2,}\]?)(?=$|[^0-9A-Fa-f:.%])/g)) {
+    const candidate = match[1].replace(/^\[/, "").replace(/\]$/, "").replace(/\.+$/, "");
+    const withoutZone = candidate.split("%", 1)[0];
+    if (candidate.includes(":") && expandIpv6(withoutZone)) return true;
+  }
+  return false;
 }
 
 const RESTRICTED_URL_QUERY_KEYS = new Set([
@@ -118,8 +199,7 @@ const RESTRICTED_URL_QUERY_KEYS = new Set([
 ]);
 
 export function normalizeRestrictedUrlQueryKey(value: string): string {
-  return value
-    .normalize("NFKC")
+  return normalizePolicyText(boundedDecode(value))
     .toLocaleLowerCase("en-US")
     .replace(/[^a-z0-9]/g, "");
 }
@@ -201,7 +281,7 @@ export function isCompactPhoneNumberValue(value: unknown): boolean {
   if (typeof value === "number") {
     return Number.isSafeInteger(value) && /^\d{10,15}$/.test(String(value));
   }
-  return typeof value === "string" && /^\p{Decimal_Number}{10,15}$/u.test(value.normalize("NFKC").trim());
+  return typeof value === "string" && /^\p{Decimal_Number}{10,15}$/u.test(normalizePolicyText(value).trim());
 }
 
 function boundedDecode(value: string): string {
@@ -216,6 +296,26 @@ function boundedDecode(value: string): string {
     }
   }
   return decoded;
+}
+
+function decodedTextVariants(value: string): string[] {
+  const normalized = normalizePolicyText(value);
+  const decoded = normalizePolicyText(boundedDecode(normalized));
+  return decoded === normalized ? [normalized] : [normalized, decoded];
+}
+
+/**
+ * Report-only artifact gate. Unlike the broader public-content predicate, this
+ * rejects leaked-account material and network identifiers without treating an
+ * ordinary professional discussion of security as private evidence.
+ */
+export function containsRestrictedReportArtifact(value: string): boolean {
+  return decodedTextVariants(value).some(
+    (variant) =>
+      containsRawIpLiteral(variant) ||
+      CREDENTIAL_HASH_PATTERNS.some((pattern) => pattern.test(variant)) ||
+      BREACH_ARTIFACT_PATTERNS.some((pattern) => pattern.test(variant)),
+  );
 }
 
 function containsRestrictedAssignment(value: string): boolean {
@@ -349,9 +449,10 @@ export interface ContentPolicyOptions {
 }
 
 function phoneLike(value: string): boolean {
-  const withoutMachineIds = value
-    .normalize("NFKC")
-    .replace(/(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![0-9a-f])/gi, " ");
+  const withoutMachineIds = normalizePolicyText(value).replace(
+    /(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![0-9a-f])/gi,
+    " ",
+  );
   // JavaScript's `\d` is ASCII-only. Mapping every Unicode decimal digit to a
   // neutral ASCII digit makes full-width and Arabic-Indic phone strings pass
   // through the same boundary without attempting to interpret their value.
@@ -608,14 +709,15 @@ function minorAgeLike(value: string, currentYear: number): boolean {
 
 /** Explicit present-minor markers used to fail closed on a bounded profile. */
 export function containsExplicitMinorPublicContent(value: string, options: ContentPolicyOptions = {}): boolean {
-  return minorAgeLike(value.normalize("NFKC"), options.currentYear ?? new Date().getUTCFullYear());
+  return minorAgeLike(normalizePolicyText(value), options.currentYear ?? new Date().getUTCFullYear());
 }
 
 /** Fail-closed final-output policy for content, independent of field names. */
 export function containsRestrictedPublicContent(value: string, options: ContentPolicyOptions = {}): boolean {
-  const normalizedValue = value.normalize("NFKC");
+  const normalizedValue = normalizePolicyText(value);
   const policyText = withoutClearlyProfessionalConceptContext(normalizedValue);
   if (
+    urlContainsRestrictedParameters(normalizedValue) ||
     RESTRICTED_TEXT_PATTERNS.some((pattern) => pattern.test(policyText)) ||
     STREET_ADDRESS_PATTERN.test(normalizedValue) ||
     CONTEXTUAL_STREET_ADDRESS_PATTERN.test(normalizedValue) ||
@@ -664,5 +766,110 @@ export function restrictedJsonContentPaths(value: JsonValue, options: ContentPol
     }
   };
   visit(value, root);
+  return paths;
+}
+
+const RESTRICTED_REPORT_ARTIFACT_FIELD_KEYS = new Set([
+  "ip",
+  "ipaddress",
+  "ipv4",
+  "ipv6",
+  "sourceip",
+  "clientip",
+  "lastip",
+  "breach",
+  "breachdata",
+  "breachrecord",
+  "breachedaccount",
+  "credentialdump",
+  "passworddump",
+  "accountpaste",
+  "pastecontent",
+  "passwordhash",
+  "passwdhash",
+  "pwdhash",
+  "credentialhash",
+  "ntlmhash",
+  "lmhash",
+]);
+
+const PREFIXED_PROVENANCE_HASH_FIELDS = new Set([
+  "contenthash",
+  "pagefootprinthash",
+  "sourcepagecontenthash",
+  "parentsourcecontenthash",
+  "fulltextcontenthash",
+  "footprinthash",
+]);
+
+const RAW_SHA256_PROVENANCE_HASH_FIELDS = new Set([
+  "bodyhashsha256",
+  "contenthashsha256",
+  "metadatahashsha256",
+  "structurehashsha256",
+]);
+
+const CREDENTIAL_ARTIFACT_FIELD_CONCEPT =
+  "(?:accesskey|accesstoken|apikey|authtoken|bearer|clientsecret|cookie|credential|jwt|oauth|passcode|passwd|password|privatekey|pwd|recoverycode|refreshtoken|secret|seedphrase|sessiontoken|token)";
+const HASH_OR_DIGEST_FIELD_CONCEPT =
+  "(?:argon|bcrypt|checksum|digest|fingerprint|hash|lanman|md5|ntlm|pbkdf|scrypt|sha(?:1|2|224|256|384|512)?)";
+const CREDENTIAL_HASH_ARTIFACT_KEY_PATTERN = new RegExp(
+  `${CREDENTIAL_ARTIFACT_FIELD_CONCEPT}(?:content|data|material|record|value)?${HASH_OR_DIGEST_FIELD_CONCEPT}|${HASH_OR_DIGEST_FIELD_CONCEPT}(?:of|content|data|material|record|value)?${CREDENTIAL_ARTIFACT_FIELD_CONCEPT}`,
+);
+
+function isCredentialHashArtifactFieldKey(value: string): boolean {
+  const key = normalizeRestrictedUrlQueryKey(value);
+  return CREDENTIAL_HASH_ARTIFACT_KEY_PATTERN.test(key);
+}
+
+function isAtlasProvenanceHashValue(field: string, value: string): boolean {
+  const key = normalizeRestrictedUrlQueryKey(field);
+  if (PREFIXED_PROVENANCE_HASH_FIELDS.has(key)) {
+    return /^(?:sha256:[a-f0-9]{64}|fnv1a32:[a-f0-9]{8})$/.test(value);
+  }
+  return RAW_SHA256_PROVENANCE_HASH_FIELDS.has(key) && /^[a-f0-9]{64}$/.test(value);
+}
+
+function isAtlasProvenanceHashField(field: string): boolean {
+  const key = normalizeRestrictedUrlQueryKey(field);
+  return PREFIXED_PROVENANCE_HASH_FIELDS.has(key) || RAW_SHA256_PROVENANCE_HASH_FIELDS.has(key);
+}
+
+/**
+ * Recursively locates report-only private artifacts while preserving only
+ * explicitly typed Atlas provenance hashes with their canonical encoding.
+ */
+export function restrictedReportArtifactJsonPaths(value: JsonValue, root = "$"): string[] {
+  const paths: string[] = [];
+  const visit = (entry: JsonValue, path: string, field: string | null): void => {
+    if (typeof entry === "string") {
+      if (field !== null && isAtlasProvenanceHashValue(field, entry)) return;
+      if (containsRestrictedReportArtifact(entry)) paths.push(path);
+      return;
+    }
+    if (Array.isArray(entry)) {
+      entry.forEach((item, index) => visit(item, path + "[" + index + "]", null));
+      return;
+    }
+    if (entry === null || typeof entry !== "object") return;
+    for (const [key, child] of Object.entries(entry)) {
+      const childPath = path + "." + key;
+      if (isAtlasProvenanceHashField(key)) {
+        if (child !== null && (typeof child !== "string" || !isAtlasProvenanceHashValue(key, child))) {
+          paths.push(childPath);
+        }
+        continue;
+      }
+      if (
+        RESTRICTED_REPORT_ARTIFACT_FIELD_KEYS.has(normalizeRestrictedUrlQueryKey(key)) ||
+        isCredentialHashArtifactFieldKey(key)
+      ) {
+        paths.push(childPath);
+        continue;
+      }
+      visit(child, childPath, key);
+    }
+  };
+  visit(value, root, null);
   return paths;
 }

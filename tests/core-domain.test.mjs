@@ -1340,6 +1340,89 @@ test("evidence admission rejects exact durable URLs that the final report conten
   assert.deepEqual(admission, { admitted: false, reason: "sensitive_content" });
 });
 
+test("report artifact policy rejects private technical artifacts while preserving typed provenance hashes", () => {
+  const bcrypt = "$2b$12$" + "A".repeat(53);
+  const argon2 = "$argon2id$v=19$m=65536,t=3,p=1$c2FsdHNhbHQ$ZGlnZXN0ZGlnZXN0";
+  for (const artifact of [
+    "The page exposed 198.51.100.42.",
+    "The page exposed 2001:db8::42.",
+    "Jordan Vale appears in breached accounts.",
+    "A credential dump lists Jordan Vale.",
+    "An account paste contains Jordan Vale.",
+    "A creden\u200btial dump lists Jordan Vale.",
+    bcrypt,
+    argon2,
+    "credential hash: " + "a".repeat(64),
+    "jordan.vale@example.test:" + "b".repeat(32),
+    "https%3A%2F%2F%5B2001%3Adb8%3A%3A42%5D%2Fprofile",
+  ]) {
+    assert.equal(domain.containsRestrictedReportArtifact(artifact), true, artifact);
+  }
+
+  for (const ordinaryProfessionalText of [
+    "Jordan Vale published a paper on data breach prevention.",
+    "Jordan Vale maintains a core dump analysis tool.",
+    "Jordan Vale built a code paste formatter.",
+    "sha256:" + "a".repeat(64),
+    "fnv1a32:deadbeef",
+    "The release identifier is 999.999.999.999.",
+  ]) {
+    assert.equal(domain.containsRestrictedReportArtifact(ordinaryProfessionalText), false, ordinaryProfessionalText);
+  }
+
+  const sha256 = "sha256:" + "c".repeat(64);
+  const rawSha256 = "d".repeat(64);
+  for (const obfuscated of [
+    "private\u200b-contact@example.test",
+    "password\u200b=" + "x".repeat(32),
+    "https://example.test/?access\u200b_token=secret",
+  ]) {
+    assert.equal(domain.containsRestrictedPublicContent(obfuscated), true, obfuscated);
+  }
+  const paths = domain.restrictedReportArtifactJsonPaths(
+    {
+      contentHash: sha256,
+      pageFootprintHash: sha256,
+      sourcePageContentHash: sha256,
+      parentSourceContentHash: sha256,
+      fullTextContentHash: sha256,
+      footprintHash: sha256,
+      bodyHashSha256: rawSha256,
+      contentHashSha256: rawSha256,
+      metadataHashSha256: rawSha256,
+      structureHashSha256: rawSha256,
+      arbitraryDigest: rawSha256,
+      publicationDigest: rawSha256,
+      tokenizationHash: rawSha256,
+      hostile: {
+        apiKeyFingerprint: rawSha256,
+        credentialSha256: rawSha256,
+        digestOfRefreshToken: rawSha256,
+        passwordHash: "e".repeat(64),
+        "password\u200bDigest": rawSha256,
+        ipAddress: "198.51.100.42",
+        note: bcrypt,
+      },
+      malformedProvenance: {
+        contentHash: 42,
+        pageFootprintHash: "sha256:not-a-hash",
+      },
+    },
+    "report",
+  );
+  assert.deepEqual(paths.sort(), [
+    "report.hostile.apiKeyFingerprint",
+    "report.hostile.credentialSha256",
+    "report.hostile.digestOfRefreshToken",
+    "report.hostile.ipAddress",
+    "report.hostile.note",
+    "report.hostile.passwordHash",
+    "report.hostile.password\u200bDigest",
+    "report.malformedProvenance.contentHash",
+    "report.malformedProvenance.pageFootprintHash",
+  ]);
+});
+
 test("search snippets cannot support findings and spoofable-only evidence is confidence capped", () => {
   const clock = domain.createSequenceClock();
   const ids = domain.createDeterministicIdFactory("confidence");

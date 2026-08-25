@@ -1,11 +1,11 @@
 import { markdownInline, markdownUrl, stableSlug } from "./sanitize";
 import type {
+  ReportBriefingObservationView,
   ReportCitedSource,
   ReportCandidateView,
   ReportEvidenceView,
   ReportFindingView,
   ReportPathView,
-  ReportProfileFactView,
   ReportViewModel,
 } from "./types";
 
@@ -19,6 +19,12 @@ function human(value: string): string {
 
 function contextHuman(value: string): string {
   return human(value.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("-", " "));
+}
+
+function briefingHeadline(value: string): string {
+  const suffix = " — here’s what’s publicly available.";
+  if (!value.endsWith(suffix)) return markdownInline(value);
+  return `${markdownInline(value.slice(0, -suffix.length))}${suffix}`;
 }
 
 function row(values: readonly (string | number)[]): string {
@@ -48,7 +54,6 @@ function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
     row([
       "Candidate",
       "Branch status",
-      "Base candidate score",
       "Direct evidence",
       "Supporting families",
       "Evidence",
@@ -56,14 +61,13 @@ function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
       "Matched context",
       "Conflicts",
     ]),
-    row(["---", "---", "---:", "---:", "---", "---", "---", "---", "---"]),
+    row(["---", "---", "---:", "---", "---", "---", "---", "---"]),
   ];
   for (const candidate of candidates) {
     lines.push(
       row([
         candidate.name,
         human(candidate.status),
-        percent(candidate.score),
         candidate.directSourceCount,
         candidate.supportingSourceFamilies.join(", ") || "None",
         candidate.evidenceRefs.join(", ") || "None",
@@ -76,13 +80,16 @@ function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
   return lines;
 }
 
-function profileFactLine(fact: ReportProfileFactView): string {
-  const evidence = `[${markdownInline(fact.evidenceRef)}](#${fact.evidenceRef.toLocaleLowerCase("en-US")})`;
-  if (!fact.source) return `- ${evidence} ${markdownInline(fact.claim)}`;
-  const target = markdownUrl(fact.source.url);
-  const label = fact.source.title ? `${fact.source.title} — ${fact.source.domain}` : fact.source.domain;
-  const source = target ? `[${markdownInline(label)}](${target})` : markdownInline(label);
-  return `- ${evidence} ${markdownInline(fact.claim)} — ${source}`;
+function briefingObservationLines(observation: ReportBriefingObservationView): string[] {
+  const lines = [
+    `- **${markdownInline(observation.heading)}.** ${markdownInline(observation.detail)}`,
+    `  - Evidence: ${referenceLinks(observation.evidenceRefs)}`,
+    `  - Sources: ${citedSourceLinks(observation.sources)}`,
+  ];
+  if (observation.caveats.length > 0) {
+    lines.push(...observation.caveats.map((caveat) => `  - Caveat: ${markdownInline(caveat)}`));
+  }
+  return lines;
 }
 
 function findingSection(finding: ReportFindingView, index: number): string[] {
@@ -234,87 +241,48 @@ export function reportPdfFilename(viewModel: ReportViewModel): string {
 /** Serialize the sanitized view model into byte-stable CommonMark. */
 export function reportViewModelToMarkdown(viewModel: ReportViewModel): string {
   const lines: string[] = [
-    `# ${markdownInline(viewModel.title)}`,
+    `# ${briefingHeadline(viewModel.briefing.headline)}`,
     "",
     `> ${viewModel.classification}`,
     "",
-    row(["Run metadata", "Value"]),
-    row(["---", "---"]),
-    row(["Run ID", viewModel.run.id]),
-    row(["Query", viewModel.run.query]),
-    row(["Objective", viewModel.run.objective ?? "Not supplied"]),
-    row(["Target kind", human(viewModel.run.targetKind)]),
-    row(["Depth", human(viewModel.run.depth)]),
-    row(["Requested categories", viewModel.run.requestedCategories.map(human).join(", ") || "None"]),
-    row(["Explicit identifiers", viewModel.run.explicitIdentifierKinds.map(human).join(", ") || "None"]),
-    row(["Scope", viewModel.run.scope]),
-    row(["Status", human(viewModel.run.status)]),
-    row(["Generated", viewModel.run.generatedAt]),
-    row(["Stop reason", human(viewModel.run.stopReason)]),
+    "## Public briefing",
     "",
-    "## Executive summary",
+    markdownInline(viewModel.briefing.leadStatement),
     "",
-    markdownInline(viewModel.executiveSummary),
+    markdownInline(viewModel.briefing.overview),
     "",
-    "## Identity resolution",
+    `> ${markdownInline(viewModel.briefing.statusCaveat)}`,
     "",
-    `**Assessment:** ${markdownInline(viewModel.identity.decisionLabel)}`,
+    `> ${markdownInline(viewModel.briefing.sourceCaveat)}`,
     "",
-    `**Formal identity status:** ${markdownInline(human(viewModel.identity.status))}`,
-    "",
-    markdownInline(viewModel.identity.rationale),
-    "",
-    `**Distinct candidate branches retained:** ${viewModel.identity.retainedCandidateCount}`,
+    "## Source-backed public record",
     "",
   ];
-
-  if (viewModel.identity.lead) {
-    const lead = viewModel.identity.lead;
+  if (viewModel.briefing.sections.length === 0) {
     lines.push(
-      `**${viewModel.identity.selected ? "Selected" : "Leading"} candidate:** ${markdownInline(lead.name)} (base score ${percent(lead.score)}; ${markdownInline(human(lead.status))})`,
-      "",
-      `**Identity match score:** ${percent(viewModel.identity.resolutionScore)} (${markdownInline(human(viewModel.identity.resolutionBasis))})`,
-      "",
-      `**Direct supporting source families:** ${markdownInline(lead.supportingSourceFamilies.join(", ") || "None")}`,
-      "",
-      `**Matched non-name context:** ${markdownInline(lead.matchedContextSignals.map(human).join(", ") || "None")}`,
+      markdownInline(viewModel.briefing.emptyState ?? "No cited public-professional observation was retained."),
       "",
     );
   } else {
-    lines.push("**Leading candidate:** None", "");
-  }
-  if (viewModel.identity.missingCorroboration.length > 0) {
-    lines.push(
-      "### What is still missing",
-      "",
-      ...viewModel.identity.missingCorroboration.map((item) => `- ${markdownInline(item)}`),
-      "",
-    );
+    for (const section of viewModel.briefing.sections) {
+      lines.push(
+        `### ${markdownInline(section.heading)}`,
+        "",
+        ...section.observations.flatMap(briefingObservationLines),
+        "",
+      );
+    }
   }
   lines.push(
-    `**Resolution margin:** ${percent(viewModel.identity.resolutionMargin)} (required ${percent(viewModel.identity.marginThreshold)}; base candidate margin ${percent(viewModel.identity.runnerUpMargin)})`,
+    "## Retained candidate branches",
     "",
-    "### Top retained candidate profiles",
+    "Candidate branches remain separate. Facts in the public briefing belong only to its displayed branch.",
     "",
     ...candidateTable(viewModel.identity.profiles),
     "",
+    "## Findings",
+    "",
   );
-  if (viewModel.identity.lead?.profileFacts.length) {
-    const resolvedProfile = viewModel.identity.status === "resolved";
-    lines.push(
-      resolvedProfile ? "### Cited profile facts" : "### Candidate-scoped cited observations",
-      "",
-      ...(resolvedProfile
-        ? []
-        : [
-            "These cited observations are bound only to the leading retained branch. They do not independently establish that it is the queried person.",
-            "",
-          ]),
-      ...viewModel.identity.lead.profileFacts.map(profileFactLine),
-      "",
-    );
-  }
-  lines.push("## Findings", "");
   if (viewModel.findings.length === 0) {
     lines.push("No finding met the admission and confidence rules.");
   } else {
@@ -395,12 +363,10 @@ export function reportViewModelToMarkdown(viewModel: ReportViewModel): string {
     "",
     "## Coverage gaps and limitations",
     "",
-    row(["Coverage", "Value"]),
+    row(["Requested-category coverage", "Value"]),
     row(["---", "---"]),
-    row(["Score", percent(viewModel.coverage.score)]),
     row(["Covered categories", viewModel.coverage.coveredCategories.map(human).join(", ") || "None"]),
     row(["Missing categories", viewModel.coverage.missingCategories.map(human).join(", ") || "None"]),
-    row(["Independent source families", viewModel.coverage.independentSourceFamilyCount]),
     "",
     "### Gaps",
     "",
@@ -414,17 +380,52 @@ export function reportViewModelToMarkdown(viewModel: ReportViewModel): string {
       ? viewModel.limitations.map((limitation) => `- ${markdownInline(limitation)}`)
       : ["- No additional limitation was recorded."]),
     "",
-    "## Execution",
+    "## Methodology and audit",
+    "",
+    "The scores below are deterministic rule-based decision aids, not probabilities about a person.",
+    "",
+    row(["Audit field", "Value"]),
+    row(["---", "---"]),
+    row(["Formal identity status", human(viewModel.audit.formalIdentityStatus)]),
+    row(["Assessment", viewModel.audit.assessment]),
+    row(["Resolution basis", human(viewModel.audit.resolutionBasis)]),
+    row([viewModel.audit.decisionScoreLabel, percent(viewModel.audit.decisionScore)]),
+    row([
+      viewModel.audit.baseCandidateScoreLabel,
+      viewModel.audit.baseCandidateScore === null ? "Not available" : percent(viewModel.audit.baseCandidateScore),
+    ]),
+    row(["Rule-based resolution threshold", percent(viewModel.audit.resolutionThreshold)]),
+    row(["Rule-based resolution margin", percent(viewModel.audit.resolutionMargin)]),
+    row(["Required rule-based margin", percent(viewModel.audit.marginThreshold)]),
+    row(["Identity-supporting source families", viewModel.audit.identitySupportingSourceFamilyCount]),
+    row(["Independent admitted source families", viewModel.audit.admittedIndependentSourceFamilyCount]),
+    row(["Candidate branches retained", viewModel.audit.retainedCandidateCount]),
+    row(["Requested-category coverage", percent(viewModel.audit.coverageScore)]),
+    row(["Stop reason", human(viewModel.audit.stopReason)]),
+    row(["Stop detail", viewModel.audit.stopDetail]),
+    "",
+    "### Run metadata",
+    "",
+    row(["Run field", "Value"]),
+    row(["---", "---"]),
+    row(["Run ID", viewModel.run.id]),
+    row(["Query", viewModel.run.query]),
+    row(["Objective", viewModel.run.objective ?? "Not supplied"]),
+    row(["Target kind", human(viewModel.run.targetKind)]),
+    row(["Depth", human(viewModel.run.depth)]),
+    row(["Requested categories", viewModel.run.requestedCategories.map(human).join(", ") || "None"]),
+    row(["Explicit identifiers", viewModel.run.explicitIdentifierKinds.map(human).join(", ") || "None"]),
+    row(["Scope", viewModel.run.scope]),
+    row(["Status", human(viewModel.run.status)]),
+    row(["Generated", viewModel.run.generatedAt]),
+    "",
+    "### Execution usage",
     "",
     row(["Usage", "Value"]),
     row(["---", "---:"]),
     ...viewModel.execution.usage.map((metric) => row([metric.label, metric.value])),
     "",
-    `**Stop reason:** ${markdownInline(human(viewModel.execution.stopReason))}`,
-    "",
-    `**Stop detail:** ${markdownInline(viewModel.execution.stopDetail)}`,
-    "",
-    "## Methodology and safety",
+    "### Standards and safety",
     "",
     `**Evidence standard.** ${markdownInline(viewModel.methodology.evidenceStandard)}`,
     "",

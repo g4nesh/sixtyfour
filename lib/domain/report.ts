@@ -13,7 +13,11 @@ import type {
   SourceSummary,
 } from "./types";
 import { SCHEMA_VERSION } from "./types";
-import { containsRestrictedPublicContent, restrictedJsonContentPaths } from "./content-policy";
+import {
+  containsRestrictedPublicContent,
+  restrictedJsonContentPaths,
+  restrictedReportArtifactJsonPaths,
+} from "./content-policy";
 import { assessCandidateContextCorroboration, type CandidateContextCorroboration } from "./candidates";
 
 export const IDENTITY_RESOLUTION_THRESHOLD = 0.78;
@@ -277,7 +281,8 @@ export function restrictedReportContentPaths(report: InvestigationReport): strin
     ...restrictedJsonContentPaths(evidence.attributes, options, `evidence[${evidenceIndex}].attributes`),
   ]);
   const graphPaths = restrictedJsonContentPaths(report.searchGraph as unknown as JsonValue, options, "searchGraph");
-  return [...new Set([...prosePaths, ...arbitraryJsonPaths, ...graphPaths])].sort();
+  const reportArtifactPaths = restrictedReportArtifactJsonPaths(report as unknown as JsonValue, "report");
+  return [...new Set([...prosePaths, ...arbitraryJsonPaths, ...graphPaths, ...reportArtifactPaths])].sort();
 }
 
 export function buildInvestigationReport(state: InvestigationState, clock: Clock): InvestigationReport {

@@ -3,16 +3,100 @@ import { readFile } from "node:fs/promises";
 const exampleOutputUrl = new URL("../../examples/chris-anderson-ted/output.json", import.meta.url);
 const exampleTraceUrl = new URL("../../examples/chris-anderson-ted/trace.json", import.meta.url);
 
+export const fictionalResearchQuery = "Avery Rowan, Northstar Forum";
+
+const forbiddenFictionalFixturePatterns = [
+  ["real target name", /chris|anderson/i],
+  ["real target organization or domain", /(?:^|[^a-z])ted(?:$|[^a-z])|ted\.com/i],
+  ["real secondary organization or domain", /wired|3d robotics|airware/i],
+  ["real-target distinctive claim", /third-largest producer of drones/i],
+  ["gendered pronoun", /\b(?:he|him|his|she|her|hers)\b/i],
+];
+
+function fictionalizeFixtureText(value) {
+  return value
+    .replace(
+      /\(He is not, however, to be confused with the curator of TED, who has the same name\.\)/gi,
+      "A separate same-name professional branch is not the Northstar Forum curator.",
+    )
+    .replace(
+      /he is not however to be confused with the curator of ted who has the same name\.?/gi,
+      "a separate same-name professional branch is not the northstar forum curator.",
+    )
+    .replace(/confused with the curator of TED/gi, "separate same-name professional branch")
+    .replace(
+      /CEO of the world's third-largest producer of drones \(and a former editor-in-chief of WIRED US\)/gi,
+      "a public robotics executive and former editor of Northstar Review",
+    )
+    .replace(
+      /ceo of the world s third-largest producer of drones and a former editor-in-chief of wired us/gi,
+      "a public robotics executive and former editor of northstar review",
+    )
+    .replaceAll("chris_anderson_ted", "avery_rowan_forum")
+    .replaceAll("chris_anderson_wired", "avery_rowan_review")
+    .replaceAll("chris_anderson", "avery_rowan")
+    .replaceAll("chris-anderson-ted", "avery-rowan-northstar")
+    .replaceAll("chris-anderson", "avery-rowan")
+    .replaceAll("chris_replay", "avery_replay")
+    .replaceAll("chris replay", "avery replay")
+    .replaceAll("Chris Anderson", "Avery Rowan")
+    .replaceAll("chris anderson", "avery rowan")
+    .replace(/www\.ted\.com/gi, "profiles.example.org")
+    .replace(/ted\.com/gi, "profiles.example.org")
+    .replace(/www\.wired\.com/gi, "review.example.net")
+    .replace(/wired\.com/gi, "review.example.net")
+    .replace(/\bTED Conference\b/g, "Northstar Forum")
+    .replace(/\bted conference\b/g, "northstar forum")
+    .replace(/\bTED\b/g, "Northstar Forum")
+    .replace(/\bted\b/g, "northstar forum")
+    .replace(/\bWIRED US\b/g, "Northstar Review")
+    .replace(/\bWIRED\b/g, "Northstar Review")
+    .replace(/\bwired\b/g, "northstar review")
+    .replace(/\b3D Robotics\b/gi, "Stratos Robotics")
+    .replace(/airware-drones/gi, "skyloom-systems")
+    .replace(/\bAirware\b/gi, "Skyloom Systems");
+}
+
+function fictionalizeReplay(value) {
+  if (typeof value === "string") return fictionalizeFixtureText(value);
+  if (Array.isArray(value)) return value.map(fictionalizeReplay);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, fictionalizeReplay(item)]));
+  }
+  return value;
+}
+
+export function assertFictionalReplay(value, path = "fixture") {
+  if (typeof value === "string") {
+    for (const [label, pattern] of forbiddenFictionalFixturePatterns) {
+      if (pattern.test(value)) throw new Error(`${path} retained ${label}: ${JSON.stringify(value)}`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertFictionalReplay(item, `${path}[${index}]`));
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      for (const [label, pattern] of forbiddenFictionalFixturePatterns) {
+        if (pattern.test(key)) throw new Error(`${path} retained ${label} in key ${JSON.stringify(key)}`);
+      }
+      assertFictionalReplay(item, `${path}.${key}`);
+    }
+  }
+}
+
 export const reportEvidenceContextFixture = {
   footprint: {
     schemaVersion: "public_page_footprint_v1",
-    title: "Chris Anderson — TED speaker profile",
+    title: "Avery Rowan — Northstar Forum profile",
     description: "Public page metadata retained from the already-fetched profile.",
-    canonicalUrl: "https://www.ted.com/speakers/chris_anderson_ted",
+    canonicalUrl: "https://profiles.example.org/people/avery_rowan",
     canonicalStatus: "accepted_same_page",
     language: "en",
-    openGraph: { type: "profile", siteName: "TED" },
-    declaredApplications: { generators: ["Next.js"], applicationNames: ["TED"] },
+    openGraph: { type: "profile", siteName: "Northstar Forum" },
+    declaredApplications: { generators: ["Next.js"], applicationNames: ["Northstar Forum"] },
     jsonLdTypes: ["Person", "Organization"],
     observedResourceHosts: ["cdn.jsdelivr.net", "static.cloudflareinsights.com"],
     observedProviderFamilies: ["jsdelivr", "cloudflare"],
@@ -23,15 +107,15 @@ export const reportEvidenceContextFixture = {
   temporal: {
     observedAfter: "2020-01-01T00:00:00.000Z",
     observedOnOrBefore: "2024-01-01T00:00:00.000Z",
-    thenCaptureUrl: "https://web.archive.org/web/20200101000000id_/https://www.ted.com/speakers/chris_anderson_ted",
-    nowCaptureUrl: "https://web.archive.org/web/20240101000000id_/https://www.ted.com/speakers/chris_anderson_ted",
+    thenCaptureUrl: "https://web.archive.org/web/20200101000000id_/https://profiles.example.org/people/avery_rowan",
+    nowCaptureUrl: "https://web.archive.org/web/20240101000000id_/https://profiles.example.org/people/avery_rowan",
     bodyChanged: true,
     visibleTextChanged: true,
     metadataChanged: true,
     structureChanged: false,
     changedMetadataFields: ["title", "description"],
-    addedTextFragments: ["Chris Anderson became TED's founder and chairman."],
-    removedTextFragments: ["Chris Anderson served as TED's curator."],
+    addedTextFragments: ["Avery Rowan became Northstar Forum's founder and chair."],
+    removedTextFragments: ["Avery Rowan served as Northstar Forum's curator."],
     addedFragmentCount: 1,
     removedFragmentCount: 1,
     unchangedFragmentCount: 3,
@@ -73,10 +157,14 @@ function prefixGraph(graph, nodeCount) {
 }
 
 export async function denseReplayFixture() {
-  const [report, trace] = await Promise.all([
+  const [sourceReport, sourceTrace] = await Promise.all([
     readFile(exampleOutputUrl, "utf8").then(JSON.parse),
     readFile(exampleTraceUrl, "utf8").then(JSON.parse),
   ]);
+  const report = fictionalizeReplay(sourceReport);
+  const trace = fictionalizeReplay(sourceTrace);
+  assertFictionalReplay(report, "denseReplayFixture.report");
+  assertFictionalReplay(trace, "denseReplayFixture.trace");
   if (report.evidence.length < 2) {
     throw new Error("The dense browser fixture needs separate footprint and temporal evidence records.");
   }
@@ -189,12 +277,14 @@ export async function denseReplayFixture() {
   terminal.seq = snapshots.length + 1;
   terminal.eventId = "browser_fixture_terminal";
   terminal.payload.report = report;
-  return {
+  const fixture = {
     graph,
     report,
     events: [...snapshots, terminal],
     ndjson: [...snapshots, terminal].map((event) => JSON.stringify(event)).join("\n") + "\n",
   };
+  assertFictionalReplay(fixture, "denseReplayFixture");
+  return fixture;
 }
 
 /**
@@ -221,40 +311,81 @@ export async function highNodeCountGraphFixture(nodeCount = 249, snapshotNodeCou
   const fixture = await denseReplayFixture();
   const report = structuredClone(fixture.report);
   const baseGraph = fixture.graph;
-  const seed = structuredClone(baseGraph.nodes.find((node) => node.id === baseGraph.seedNodeId));
-  const template = structuredClone(baseGraph.nodes.find((node) => node.kind !== "seed"));
-  const edgeTemplate = structuredClone(baseGraph.edges[0]);
-  if (!seed || !template || !edgeTemplate) {
-    throw new Error("The high-node-count browser fixture needs seed, node, and edge templates.");
+  const nodes = structuredClone(baseGraph.nodes);
+  const edges = structuredClone(baseGraph.edges);
+  const frontier = structuredClone(baseGraph.frontier);
+  const rootEntry = frontier.find(
+    (entry) => entry.parentFrontierEntryId === null && entry.parentNodeId === baseGraph.seedNodeId,
+  );
+  const pivotTemplate = rootEntry ? nodes.find((node) => node.id === rootEntry.nodeId) : undefined;
+  const edgeTemplate = rootEntry
+    ? edges.find(
+        (edge) =>
+          edge.kind === "expands" &&
+          edge.fromNodeId === rootEntry.parentNodeId &&
+          edge.toNodeId === rootEntry.nodeId &&
+          edge.frontierEntryId === rootEntry.id,
+      )
+    : undefined;
+  if (!rootEntry || !pivotTemplate || !edgeTemplate) {
+    throw new Error("The high-node-count browser fixture needs one canonical root frontier branch.");
   }
-  const nodes = [seed];
-  const edges = [];
-  for (let index = 1; index < nodeCount; index += 1) {
-    const id = `high_density_graph_node_${String(index + 1).padStart(4, "0")}`;
+  if (nodeCount <= nodes.length) {
+    throw new Error(`The high-node-count browser fixture must exceed its ${nodes.length}-node canonical base graph.`);
+  }
+  let nextOrdinal = Math.max(
+    baseGraph.nextOrdinal,
+    ...nodes.map((node) => node.ordinal + 1),
+    ...edges.map((edge) => edge.ordinal + 1),
+  );
+  for (let index = nodes.length; index < nodeCount; index += 1) {
+    const suffix = String(index + 1).padStart(4, "0");
+    const id = `high_density_graph_node_${suffix}`;
+    const frontierEntryId = `high_density_graph_frontier_${suffix}`;
+    const status = index % 2 === 0 ? "rejected" : "exhausted";
+    const queryHint = `synthetic public-source render branch ${index}`;
+    const intent = `Exercise bounded graph rendering for synthetic branch ${index}.`;
+    frontier.push({
+      ...structuredClone(rootEntry),
+      id: frontierEntryId,
+      frontierEntryId,
+      actionId: frontierEntryId,
+      nodeId: id,
+      status,
+      intent,
+      queryHint,
+      candidateId: null,
+      ordinal: nextOrdinal++,
+      dedupeKey: `high-density-render:${suffix}`,
+      mutation: null,
+    });
     nodes.push({
-      ...structuredClone(template),
+      ...structuredClone(pivotTemplate),
       id,
       label: `Bounded public-source branch ${index}`,
-      status: index % 11 === 0 ? "rejected" : index % 7 === 0 ? "exhausted" : "verified",
-      frontierEntryId: null,
-      actionId: null,
+      status,
+      sourceTier: rootEntry.sourceTier,
+      sourceLaneId: rootEntry.sourceLaneId,
+      frontierEntryId,
+      actionId: frontierEntryId,
       candidateId: null,
       evidenceId: null,
       findingId: null,
-      ordinal: index * 2 + 1,
-      data: { renderStressFixture: true },
+      ordinal: nextOrdinal++,
+      data: { renderStressFixture: true, intent, queryHint },
     });
     edges.push({
       ...structuredClone(edgeTemplate),
-      id: `high_density_graph_edge_${String(index).padStart(4, "0")}`,
-      fromNodeId: nodes[Math.floor((index - 1) / 3)].id,
+      id: `high_density_graph_edge_${suffix}`,
+      fromNodeId: rootEntry.parentNodeId,
       toNodeId: id,
-      status: "verified",
-      frontierEntryId: null,
-      actionId: null,
-      edgeCost: 1,
-      pathCost: 1,
-      ordinal: index * 2 + 2,
+      kind: "expands",
+      status,
+      frontierEntryId,
+      actionId: frontierEntryId,
+      edgeCost: rootEntry.edgeCost,
+      pathCost: rootEntry.pathCost,
+      ordinal: nextOrdinal++,
     });
   }
   const graph = {
@@ -262,14 +393,14 @@ export async function highNodeCountGraphFixture(nodeCount = 249, snapshotNodeCou
     status: "completed",
     nodes,
     edges,
-    frontier: [],
-    selectedFrontierEntryIds: [],
-    nextOrdinal: nodeCount * 2 + 1,
+    frontier,
+    nextOrdinal,
     telemetry: {
       ...baseGraph.telemetry,
-      enqueued: nodeCount - 1,
-      selected: nodeCount - 1,
-      expanded: nodeCount - 1,
+      enqueued: frontier.length,
+      selected: frontier.length,
+      expanded: frontier.filter((entry) => entry.status === "verified").length,
+      exhausted: frontier.filter((entry) => entry.status === "exhausted").length,
     },
   };
   report.searchGraph = graph;
@@ -285,7 +416,9 @@ export async function highNodeCountGraphFixture(nodeCount = 249, snapshotNodeCou
   terminal.eventId = "browser_high_density_terminal";
   terminal.payload.searchGraph = graph;
   terminal.payload.report = report;
-  return { graph, report, events: [...snapshots, terminal] };
+  const result = { graph, report, events: [...snapshots, terminal] };
+  assertFictionalReplay(result, "highNodeCountGraphFixture");
+  return result;
 }
 
 export function intersectingRectangles(rectangles, tolerance = 0.75) {

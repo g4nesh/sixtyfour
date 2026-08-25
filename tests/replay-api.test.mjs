@@ -474,6 +474,100 @@ test("schema guards reject invalid report enums, identity objects, trace phases,
   assert.equal(traceContract.isTraceEvent(spanEvent), false, "top-level span ID phone");
 });
 
+test("replay hydration rejects private report artifacts at the canonical boundary", () => {
+  const example = replay.getReplayExample("python-creator");
+  assert.deepEqual(domain.restrictedReportContentPaths(example.output), []);
+
+  const bcrypt = "$2b$12$" + "A".repeat(53);
+  for (const [label, expectedPath, mutate] of [
+    [
+      "query IPv4",
+      "report.input.query",
+      (bundle) => {
+        bundle.input.query = "Jordan Vale public profile 198.51.100.42";
+        bundle.output.input.query = bundle.input.query;
+        bundle.output.target = domain.parseTarget(bundle.input);
+      },
+    ],
+    [
+      "objective IPv6",
+      "report.input.objective",
+      (bundle) => {
+        bundle.input.objective = "Resolve Jordan Vale at 2001:db8::42.";
+        bundle.output.input.objective = bundle.input.objective;
+      },
+    ],
+    [
+      "evidence title breach claim",
+      "report.evidence[0].title",
+      (bundle) => {
+        bundle.output.evidence[0].title = "Breach data record for Jordan Vale";
+      },
+    ],
+    [
+      "evidence claim credential dump",
+      "report.evidence[0].claim",
+      (bundle) => {
+        const claim = "A credential dump lists Jordan Vale.";
+        bundle.output.evidence[0].claim = claim;
+        bundle.output.evidence[0].normalizedClaim = domain.normalizeComparable(claim);
+        bundle.output.evidence[0].excerpt = claim;
+      },
+    ],
+    [
+      "evidence excerpt account paste",
+      "report.evidence[0].excerpt",
+      (bundle) => {
+        const excerpt = "An account paste contains Jordan Vale.";
+        bundle.output.evidence[0].claim = excerpt;
+        bundle.output.evidence[0].normalizedClaim = domain.normalizeComparable(excerpt);
+        bundle.output.evidence[0].excerpt = excerpt;
+      },
+    ],
+    [
+      "source URL encoded IPv6",
+      "report.evidence[0].canonicalUrl",
+      (bundle) => {
+        const sourceUrl = "https://profiles.example.test/profile/%5B2001%3Adb8%3A%3A42%5D";
+        bundle.output.evidence[0].sourceUrl = sourceUrl;
+        bundle.output.evidence[0].canonicalUrl = sourceUrl;
+      },
+    ],
+    [
+      "credential hash in provenance field",
+      "report.evidence[0].contentHash",
+      (bundle) => {
+        bundle.output.evidence[0].contentHash = bcrypt;
+      },
+    ],
+    [
+      "zero-width obfuscated private contact",
+      "evidence[0].title",
+      (bundle) => {
+        bundle.output.evidence[0].title = "private\u200b-contact@example.test";
+      },
+    ],
+    [
+      "semantic credential digest field",
+      "report.evidence[0].canonicalSubset.passwordDigest",
+      (bundle) => {
+        bundle.output.evidence[0].canonicalSubset = { passwordDigest: "b".repeat(64) };
+      },
+    ],
+  ]) {
+    const bundle = rawReplay(example);
+    mutate(bundle);
+    syncTerminalReport(bundle);
+    const paths = domain.restrictedReportContentPaths(bundle.output);
+    assert.ok(paths.includes(expectedPath), label + ": " + paths.join(", "));
+    assert.throws(
+      () => replay.validateReplayBundle("python-creator", bundle),
+      /report contains restricted public content/i,
+      label,
+    );
+  }
+});
+
 test("replay hydration fails closed on report graph, run, sequence, and span corruption", () => {
   const example = replay.getReplayExample("python-creator");
 
