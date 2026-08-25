@@ -1048,6 +1048,13 @@ export interface FrontierSelectionOptions {
   /** Defer only optional candidate-link fetches until finite compiler searches have run once. */
   reserveCanonicalCompilerBreadth?: boolean;
   /**
+   * Permit one persisted-priority lead probe while compiler breadth remains.
+   * The caller opens this window only after its first bounded T1 batch; the
+   * kernel requires that no earlier quality probe was attempted. Ordinary
+   * neutral/deprioritized leads remain behind canonical breadth.
+   */
+  interleaveOnePrioritizedProbeDuringCanonicalBreadth?: boolean;
+  /**
    * Run a bounded trust-neutral, source-shape-prioritized discovery lead
    * before ordinary candidate fanout. This changes traversal order only:
    * source tier, evidence admission, and candidate scope remain immutable.
@@ -1178,14 +1185,27 @@ export function selectFrontierBatch(
     (entry) => isExactCandidateUrlDependency(entry) || isGroundedKeybaseDependency(graph, entry),
   );
   const attemptedPriorityProbeCount = options.attemptedPrioritizedDiscoveryLeadProbeEntryIds?.size ?? 0;
+  const interleavedPriorityProbeEligible =
+    options.interleaveOnePrioritizedProbeDuringCanonicalBreadth === true &&
+    pendingCanonicalSearches.length > 0 &&
+    attemptedPriorityProbeCount === 0;
+  const priorityProbePool = interleavedPriorityProbeEligible
+    ? initiallyExecutable.filter((entry) => {
+        if (!isClassifiedLeadDependency(graph, entry) || typeof entry.leadId !== "string") return false;
+        return options.discoveryLeadSchedulingDecisions?.[entry.leadId]?.disposition === "prioritize";
+      })
+    : initiallyExecutable;
+  const ordinaryPriorityProbeEligible =
+    pendingCanonicalSearches.length === 0 &&
+    normallyEligible.length > 0 &&
+    normallyEligible.every(isCandidateLeadFetchEntry);
   const priorityProbeEntries =
     qualitySchedulingEnabled &&
-    pendingCanonicalSearches.length === 0 &&
+    (ordinaryPriorityProbeEligible || interleavedPriorityProbeEligible) &&
     !pendingMandatoryDependency &&
-    normallyEligible.length > 0 &&
-    normallyEligible.every(isCandidateLeadFetchEntry) &&
+    priorityProbePool.length > 0 &&
     attemptedPriorityProbeCount < maximumPrioritizedDiscoveryLeadProbes
-      ? initiallyExecutable
+      ? priorityProbePool
           .filter((entry) => leadSchedulingDecision(entry)?.disposition === "prioritize")
           .sort((left, right) =>
             compareQualityProbeEntries(
@@ -1231,15 +1251,16 @@ export function selectFrontierBatch(
     normallyEligibleAreOnlyDeprioritizedLeads && nextNonDeprioritizedTier !== null
       ? nonDeprioritizedLeadDependencies.filter((entry) => entry.sourceTier === nextNonDeprioritizedTier)
       : [];
-  const eligible = reserveCanonicalBreadth
-    ? pendingCanonicalSearches.filter((entry) => entry.sourceTier === nextCanonicalTier)
-    : priorityProbeEntries.length > 0
+  const eligible =
+    priorityProbeEntries.length > 0
       ? priorityProbeEntries
-      : normallyEligibleNonDeprioritizedLeads.length > 0 && normallyEligible.every(isCandidateLeadFetchEntry)
-        ? normallyEligibleNonDeprioritizedLeads
-        : deferredQualityEntries.length > 0
-          ? deferredQualityEntries
-          : normallyEligible;
+      : reserveCanonicalBreadth
+        ? pendingCanonicalSearches.filter((entry) => entry.sourceTier === nextCanonicalTier)
+        : normallyEligibleNonDeprioritizedLeads.length > 0 && normallyEligible.every(isCandidateLeadFetchEntry)
+          ? normallyEligibleNonDeprioritizedLeads
+          : deferredQualityEntries.length > 0
+            ? deferredQualityEntries
+            : normallyEligible;
   const selected: SearchFrontierEntry[] = [];
   let selectedMutations = 0;
   const selectedIds = new Set<string>();
@@ -1293,6 +1314,7 @@ export function selectFrontierBatch(
         schedulingDisposition: decision?.disposition ?? "neutral",
         schedulingReason: decision?.reason ?? "neutral",
         probeOrdinal: attemptedPriorityProbeCount + 1,
+        interleavedBeforeCanonicalBreadth: pendingCanonicalSearches.length > 0,
       },
     });
   }

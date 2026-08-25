@@ -5,6 +5,7 @@ import type {
   ReportEvidenceView,
   ReportFindingView,
   ReportPathView,
+  ReportProfileFactView,
   ReportViewModel,
 } from "./types";
 
@@ -44,8 +45,18 @@ function citedSourceLinks(sources: readonly ReportCitedSource[]): string {
 function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
   if (candidates.length === 0) return ["No alternative candidate was retained."];
   const lines = [
-    row(["Candidate", "Status", "Score", "Direct sources", "Evidence", "Findings", "Source domains", "Context"]),
-    row(["---", "---", "---:", "---:", "---", "---", "---", "---"]),
+    row([
+      "Candidate",
+      "Branch status",
+      "Base candidate score",
+      "Direct evidence",
+      "Supporting families",
+      "Evidence",
+      "Findings",
+      "Matched context",
+      "Conflicts",
+    ]),
+    row(["---", "---", "---:", "---:", "---", "---", "---", "---", "---"]),
   ];
   for (const candidate of candidates) {
     lines.push(
@@ -54,19 +65,24 @@ function candidateTable(candidates: readonly ReportCandidateView[]): string[] {
         human(candidate.status),
         percent(candidate.score),
         candidate.directSourceCount,
+        candidate.supportingSourceFamilies.join(", ") || "None",
         candidate.evidenceRefs.join(", ") || "None",
         candidate.findingIds.join(", ") || "None",
-        candidate.sourceDomains.join(", ") || "None",
-        [
-          candidate.matchedSignals.length > 0 ? `matched ${candidate.matchedSignals.join(", ")}` : "no matched context",
-          candidate.conflictingSignals.length > 0
-            ? `conflicts ${candidate.conflictingSignals.join(", ")}`
-            : "no recorded conflicts",
-        ].join("; "),
+        candidate.matchedContextSignals.map(human).join(", ") || "None",
+        candidate.conflictingSignals.map(human).join(", ") || "None",
       ]),
     );
   }
   return lines;
+}
+
+function profileFactLine(fact: ReportProfileFactView): string {
+  const evidence = `[${markdownInline(fact.evidenceRef)}](#${fact.evidenceRef.toLocaleLowerCase("en-US")})`;
+  if (!fact.source) return `- ${evidence} ${markdownInline(fact.claim)}`;
+  const target = markdownUrl(fact.source.url);
+  const label = fact.source.title ? `${fact.source.title} — ${fact.source.domain}` : fact.source.domain;
+  const source = target ? `[${markdownInline(label)}](${target})` : markdownInline(label);
+  return `- ${evidence} ${markdownInline(fact.claim)} — ${source}`;
 }
 
 function findingSection(finding: ReportFindingView, index: number): string[] {
@@ -242,7 +258,9 @@ export function reportViewModelToMarkdown(viewModel: ReportViewModel): string {
     "",
     "## Identity resolution",
     "",
-    `**Decision:** ${markdownInline(human(viewModel.identity.status))}`,
+    `**Assessment:** ${markdownInline(viewModel.identity.decisionLabel)}`,
+    "",
+    `**Formal identity status:** ${markdownInline(human(viewModel.identity.status))}`,
     "",
     markdownInline(viewModel.identity.rationale),
     "",
@@ -250,27 +268,53 @@ export function reportViewModelToMarkdown(viewModel: ReportViewModel): string {
     "",
   ];
 
-  if (viewModel.identity.selected) {
-    const selected = viewModel.identity.selected;
+  if (viewModel.identity.lead) {
+    const lead = viewModel.identity.lead;
     lines.push(
-      `**Selected candidate:** ${markdownInline(selected.name)} (${percent(selected.score)}; ${markdownInline(human(selected.status))})`,
+      `**${viewModel.identity.selected ? "Selected" : "Leading"} candidate:** ${markdownInline(lead.name)} (base score ${percent(lead.score)}; ${markdownInline(human(lead.status))})`,
       "",
-      `**Independent source families:** ${markdownInline(selected.independentSourceFamilies.join(", ") || "None")}`,
+      `**Identity match score:** ${percent(viewModel.identity.resolutionScore)} (${markdownInline(human(viewModel.identity.resolutionBasis))})`,
+      "",
+      `**Direct supporting source families:** ${markdownInline(lead.supportingSourceFamilies.join(", ") || "None")}`,
+      "",
+      `**Matched non-name context:** ${markdownInline(lead.matchedContextSignals.map(human).join(", ") || "None")}`,
       "",
     );
   } else {
-    lines.push("**Selected candidate:** None", "");
+    lines.push("**Leading candidate:** None", "");
+  }
+  if (viewModel.identity.missingCorroboration.length > 0) {
+    lines.push(
+      "### What is still missing",
+      "",
+      ...viewModel.identity.missingCorroboration.map((item) => `- ${markdownInline(item)}`),
+      "",
+    );
   }
   lines.push(
-    `**Runner-up margin:** ${percent(viewModel.identity.runnerUpMargin)} (required ${percent(viewModel.identity.marginThreshold)})`,
+    `**Resolution margin:** ${percent(viewModel.identity.resolutionMargin)} (required ${percent(viewModel.identity.marginThreshold)}; base candidate margin ${percent(viewModel.identity.runnerUpMargin)})`,
     "",
     "### Top retained candidate profiles",
     "",
     ...candidateTable(viewModel.identity.profiles),
     "",
-    "## Findings",
-    "",
   );
+  if (viewModel.identity.lead?.profileFacts.length) {
+    const resolvedProfile = viewModel.identity.status === "resolved";
+    lines.push(
+      resolvedProfile ? "### Cited profile facts" : "### Candidate-scoped cited observations",
+      "",
+      ...(resolvedProfile
+        ? []
+        : [
+            "These cited observations are bound only to the leading retained branch. They do not independently establish that it is the queried person.",
+            "",
+          ]),
+      ...viewModel.identity.lead.profileFacts.map(profileFactLine),
+      "",
+    );
+  }
+  lines.push("## Findings", "");
   if (viewModel.findings.length === 0) {
     lines.push("No finding met the admission and confidence rules.");
   } else {

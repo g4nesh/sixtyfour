@@ -224,6 +224,15 @@ function percent(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
+function identityMetric(label: ReportViewModel["identity"]["decisionLabel"]): string {
+  if (label === "High-confidence match") return "High confidence";
+  if (label === "Best-supported candidate") return "Best supported";
+  if (label === "Leading query branch") return "Leading branch";
+  if (label === "Competing candidates") return "Competing";
+  if (label === "No eligible candidate") return "No candidate";
+  return "Resolved match";
+}
+
 function contextHuman(value: string): string {
   return human(value.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("-", " "));
 }
@@ -529,7 +538,7 @@ function EvidenceCard({ evidence }: { evidence: ReportEvidenceView }) {
 }
 
 function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
-  const selected = viewModel.identity.selected;
+  const lead = viewModel.identity.lead;
   const created = safeMetadataDate(viewModel.run.generatedAt);
   const evidencePages = evidencePagesFor(viewModel);
   const uniqueLimitations = [...new Set([...viewModel.coverage.gaps, ...viewModel.limitations])];
@@ -587,8 +596,8 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
           <View style={styles.metricGrid}>
             <View style={styles.metricCard} wrap={false}>
               <View style={styles.metricInner}>
-                <Text style={styles.metricValue}>{human(viewModel.identity.status)}</Text>
-                <Text style={styles.metricLabel}>IDENTITY</Text>
+                <Text style={styles.metricValue}>{identityMetric(viewModel.identity.decisionLabel)}</Text>
+                <Text style={styles.metricLabel}>IDENTITY / FORMAL {human(viewModel.identity.status)}</Text>
               </View>
             </View>
             <View style={styles.metricCard} wrap={false}>
@@ -626,19 +635,32 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
         <Section index="02 / IDENTITY" title="Identity resolution">
           <View style={styles.decision}>
             <Text style={styles.decisionTitle}>
-              {selected
-                ? `${selected.name} / ${human(selected.status)} / ${percent(selected.score)}`
-                : "No selected candidate"}
+              {lead
+                ? `${viewModel.identity.decisionLabel} / ${lead.name} / ${percent(viewModel.identity.resolutionScore)} identity match score`
+                : viewModel.identity.decisionLabel}
             </Text>
             <Text style={styles.decisionText}>{viewModel.identity.rationale}</Text>
           </View>
+          {viewModel.identity.missingCorroboration.length > 0 ? (
+            <View style={{ marginBottom: 8 }}>
+              <Text style={[styles.label, { marginBottom: 3 }]}>WHAT IS STILL MISSING</Text>
+              {viewModel.identity.missingCorroboration.map((item) => (
+                <View key={item} style={styles.bullet}>
+                  <Text style={styles.bulletMark}>-</Text>
+                  <Text style={styles.bulletText}>{item}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
           <Text style={[styles.paragraph, styles.muted]}>
             {viewModel.identity.retainedCandidateCount} distinct candidate branch
             {viewModel.identity.retainedCandidateCount === 1 ? "" : "es"} retained / top five profiled below
           </Text>
           <Text style={[styles.paragraph, styles.muted]}>
-            Runner-up margin {percent(viewModel.identity.runnerUpMargin)} / required margin{" "}
-            {percent(viewModel.identity.marginThreshold)} / resolution threshold{" "}
+            Resolution basis {human(viewModel.identity.resolutionBasis)} / resolution margin{" "}
+            {percent(viewModel.identity.resolutionMargin)} / required margin{" "}
+            {percent(viewModel.identity.marginThreshold)}
+            {" / "}base candidate margin {percent(viewModel.identity.runnerUpMargin)} / resolution threshold{" "}
             {percent(viewModel.identity.resolutionThreshold)}
           </Text>
           {viewModel.identity.profiles.length > 0 ? (
@@ -648,12 +670,13 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
                 <View key={candidate.id} style={styles.candidateRow}>
                   <Text style={styles.candidateName}>{candidate.name}</Text>
                   <Text style={styles.candidateState}>
-                    {human(candidate.status)} / {percent(candidate.score)}
+                    {human(candidate.status)} / base {percent(candidate.score)}
                   </Text>
                   <Text style={styles.candidateSignals}>
                     {candidate.directSourceCount} direct / {candidate.evidenceRefs.length} evidence /{" "}
-                    {candidate.findingIds.length} findings; {candidate.sourceDomains.join(", ") || "no source domains"};
-                    matched {candidate.matchedSignals.join(", ") || "none"}; conflicts{" "}
+                    {candidate.findingIds.length} findings; supporting families{" "}
+                    {candidate.supportingSourceFamilies.join(", ") || "none"}; matched context{" "}
+                    {candidate.matchedContextSignals.map(human).join(", ") || "none"}; conflicts{" "}
                     {candidate.conflictingSignals.join(", ") || "none"}
                   </Text>
                 </View>
@@ -662,6 +685,30 @@ function ReportDocument({ viewModel }: { viewModel: ReportViewModel }) {
           ) : (
             <Text style={styles.paragraph}>No alternative candidate was retained.</Text>
           )}
+          {lead?.profileFacts.length ? (
+            <View style={{ marginTop: 9 }}>
+              <Text style={[styles.label, { marginBottom: 4 }]}>
+                {viewModel.identity.status === "resolved"
+                  ? "CITED PROFILE FACTS"
+                  : "CANDIDATE-SCOPED CITED OBSERVATIONS"}
+              </Text>
+              {viewModel.identity.status !== "resolved" ? (
+                <Text style={[styles.paragraph, styles.muted]}>
+                  These observations are bound only to the leading retained branch. They do not independently establish
+                  that it is the queried person.
+                </Text>
+              ) : null}
+              {lead.profileFacts.slice(0, 5).map((fact) => (
+                <View key={`${fact.evidenceRef}-${fact.claim}`} style={styles.bullet}>
+                  <Text style={styles.bulletMark}>-</Text>
+                  <Text style={styles.bulletText}>
+                    [{fact.evidenceRef}] {fact.claim}
+                    {fact.source ? ` / ${fact.source.domain}` : ""}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
         </Section>
 
         <Section index="03 / FINDINGS" title="Evidence-backed findings">

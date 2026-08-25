@@ -187,6 +187,118 @@ test("discovery scheduling prioritizes bounded person-page shapes without changi
   );
 });
 
+test("discovery scheduling recognizes an exact-title personal-domain profile without fuzzy host matching", () => {
+  const context = { personNames: ["Alex Rivera"] };
+  const personalProfile = "https://alexrivera.example/profile";
+
+  assert.deepEqual(search.discoveryLeadSchedulingDecision(personalProfile, "Alex Rivera", context), {
+    disposition: "prioritize",
+    reason: "candidate_bio_path",
+  });
+  assert.equal(search.deterministicSourceTypeForUrl(personalProfile, context), "other");
+  assert.equal(search.sourceTierForUrl(personalProfile, "other", false, context), 6);
+  for (const url of ["https://www.alexrivera.com/profile", "https://profile.alexrivera.co.uk/bio"]) {
+    assert.deepEqual(search.discoveryLeadSchedulingDecision(url, "Alex Rivera", context), {
+      disposition: "prioritize",
+      reason: "candidate_bio_path",
+    });
+  }
+
+  for (const [url, title] of [
+    ["https://alexriverajr.example/profile", "Alex Rivera"],
+    ["https://notalexrivera.example/profile", "Alex Rivera"],
+    ["https://alexrivera.attacker.example/profile", "Alex Rivera"],
+    [personalProfile, "Alex Rivera Smith"],
+    ["https://alexrivera.example/portfolio", "Alex Rivera"],
+  ]) {
+    assert.deepEqual(
+      search.discoveryLeadSchedulingDecision(url, title, context),
+      { disposition: "neutral", reason: "neutral" },
+      `${url} — ${title}`,
+    );
+  }
+});
+
+test("page-scoped completed education selects only an exact past credential row", () => {
+  const observedAt = "2026-08-25T04:00:00.000Z";
+  const positive = "Education BASIS Peoria High School Diploma August 2022 - May 2026";
+  assert.equal(domain.extractPageScopedCompletedEducationExcerpt(positive, "BASIS Peoria", observedAt), positive);
+  assert.equal(domain.matchPageScopedCompletedEducationRelation(positive, "BASIS Peoria", observedAt), "alumni");
+
+  for (const excerpt of [
+    "Education BASIS Peoria High School Diploma August 2022 - Present",
+    "Education BASIS Peoria Expected High School Diploma August 2022 - May 2027",
+    "Education BASIS Peoria Current student High School Diploma August 2022 - May 2026",
+    "Education BASIS Peoria High School senior Diploma August 2022 - May 2026",
+    "Education BASIS Peoria 17-year-old High School Diploma August 2022 - May 2026",
+    "Education BASIS Peoria Robotics Club team High School Diploma August 2022 - May 2026",
+    "Education BASIS Peoria Jordan Lee — High School Diploma August 2022 - May 2026",
+    "Education Jordan Lee — BASIS Peoria — High School Diploma August 2022 - May 2026",
+    "Education Jordan Lee BASIS Peoria High School Diploma August 2022 - May 2026",
+    "Education BASIS Peoria May 2020 - May 2021 High School Diploma Program",
+    "Education BASIS Peoria High School Diploma August 2022 - September 2026",
+    "Education BASIS Peoria High School Diploma Program August 2022 - May 2026",
+    "Education BASIS Peoria Graduate Program August 2022 - May 2026",
+    "Education BASIS Peoria Graduate Researcher August 2022 - May 2026",
+    "Education BASIS Peoria Alumni Association August 2022 - May 2026",
+    "Education BASIS Peoria High School Diploma",
+    "BASIS Peoria High School Diploma August 2022 - May 2026",
+    "Education BASIS Peoria High School Diploma August 2022 - May 2026 — current student",
+    "Education BASIS Peoria High School Diploma August 2022 - May 2026 — expected completion",
+    "Education BASIS Peoria High School Diploma August 2022 - May 2026 — Robotics Club team",
+    "Education BASIS Peoria High School Diploma August 2022 - May 2026 — Jordan Lee",
+    "About I am 17 years old. Education BASIS Peoria High School Diploma August 2022 - May 2026",
+    "Born 2008. Education BASIS Peoria High School Diploma August 2022 - May 2026",
+    "Current student at BASIS Peoria. Education BASIS Peoria High School Diploma August 2022 - May 2026",
+    "Student at BASIS Peoria. Education BASIS Peoria High School Diploma August 2022 - May 2026",
+    "Attends BASIS Peoria. Education BASIS Peoria High School Diploma August 2022 - May 2026",
+  ]) {
+    assert.equal(domain.extractPageScopedCompletedEducationExcerpt(excerpt, "BASIS Peoria", observedAt), null, excerpt);
+    assert.equal(domain.matchPageScopedCompletedEducationRelation(excerpt, "BASIS Peoria", observedAt), null, excerpt);
+  }
+  assert.equal(domain.extractPageScopedCompletedEducationExcerpt(positive, "BASIS Peoria", "invalid"), null);
+  assert.equal(domain.extractPageScopedCompletedEducationExcerpt(positive, "BASIS Peoria", "2035"), null);
+  const actualShape = "Education Meridian Academy High School Diploma Aug 2020 – May 2024";
+  assert.equal(
+    domain.extractPageScopedCompletedEducationExcerpt(actualShape, "Meridian Academy", observedAt),
+    actualShape,
+  );
+  assert.equal(
+    domain.extractPageScopedCompletedEducationExcerpt(
+      `${actualShape} Arizona State University Bachelor of Science August 2024 - Present`,
+      "Meridian Academy",
+      observedAt,
+    ),
+    actualShape,
+    "a separate adult current-university row does not rewrite completed-school history",
+  );
+  assert.equal(
+    domain.extractPageScopedCompletedEducationExcerpt(
+      `${actualShape} Arizona State University — Student at the School of Computing`,
+      "Meridian Academy",
+      observedAt,
+    ),
+    actualShape,
+    "a separate adult university student row is not bound to the requested completed-school context",
+  );
+  assert.equal(
+    domain.extractPageScopedCompletedEducationExcerpt(
+      `${actualShape} Cumulative GPA: 4.7/5.0 Experience Research Fellow`,
+      "Meridian Academy",
+      observedAt,
+    ),
+    actualShape,
+    "a benign education metric before the next section is not mistaken for another person",
+  );
+  const concreteAdapterShape =
+    "Education BASIS Peoria High School Diploma Aug 2022 – May 2026 Cumulative GPA: 4.7/5.0 15 APs, 1510 SAT Attended the top-ranked public hackathon (U.S. News 2024) National Merit Scholarship Commended Scholar AP Scholar with Distinction and public research awards";
+  assert.equal(
+    domain.extractPageScopedCompletedEducationExcerpt(concreteAdapterShape, "Basis Peoria", observedAt),
+    "Education BASIS Peoria High School Diploma Aug 2022 – May 2026",
+    "benign education metrics and an attended-event sentence cannot resemble another person",
+  );
+});
+
 test("exact fetched person-bio paths require an exact title, terminal slug, and non-document route marker", () => {
   const context = { personNames: ["Alex Rivera"] };
 

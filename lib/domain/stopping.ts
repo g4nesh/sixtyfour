@@ -5,7 +5,15 @@ import {
   resolveIdentity,
   summarizeCoverage,
 } from "./report";
-import type { Candidate, InvestigationState, StopDecision, StopReason, TerminalStatus } from "./types";
+import type {
+  Candidate,
+  EvidenceRecord,
+  InvestigationState,
+  ParsedTarget,
+  StopDecision,
+  StopReason,
+  TerminalStatus,
+} from "./types";
 
 function hasUniqueOfficialAnchor(state: InvestigationState, selectedCandidateId: string | undefined): boolean {
   if (!selectedCandidateId) return false;
@@ -23,13 +31,18 @@ export interface StopEvaluationOptions {
 }
 
 /** One canonical stop-reason to terminal-status mapping for engine and replay. */
-export function terminalStatusForStop(reason: StopReason, candidates: readonly Candidate[]): TerminalStatus {
+export function terminalStatusForStop(
+  reason: StopReason,
+  candidates: readonly Candidate[],
+  evidence: readonly EvidenceRecord[] = [],
+  target?: ParsedTarget,
+): TerminalStatus {
   if (reason === "unsafe_request") return "blocked";
   if (reason === "cancelled") return "canceled";
   if (reason === "configuration_error") return "configuration_error";
   if (reason === "fatal_error") return "failed";
   if (reason === "goal_satisfied") return "completed";
-  return resolveIdentity(candidates).status === "ambiguous" ? "ambiguous" : "partial";
+  return resolveIdentity(candidates, evidence, target).status === "ambiguous" ? "ambiguous" : "partial";
 }
 
 export function evaluateStop(state: InvestigationState, options: StopEvaluationOptions = {}): StopDecision {
@@ -50,7 +63,7 @@ export function evaluateStop(state: InvestigationState, options: StopEvaluationO
     };
   }
 
-  const identity = resolveIdentity(state.candidates, state.evidence);
+  const identity = resolveIdentity(state.candidates, state.evidence, state.target);
   const coverage = summarizeCoverage(state, requestedCategoriesForInput(state.input));
   const minimumFindings = Math.min(options.minimumFindings ?? 2, Math.max(1, coverage.requestedCategories.length));
   const enoughFindings = coverage.supportedFindingCount >= minimumFindings;

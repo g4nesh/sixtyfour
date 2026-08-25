@@ -86,7 +86,14 @@ export interface Candidate {
   conflicts?: string[];
   matchedSignals?: string[];
   separationReason?: string;
-  signals?: Array<{ kind?: string; value?: string; strength?: string }>;
+  signals?: Array<{
+    kind?: string;
+    value?: string;
+    strength?: string;
+    assurance?: string;
+    sourceEvidenceId?: string;
+    sourceFamily?: string;
+  }>;
 }
 
 export interface Evidence {
@@ -174,8 +181,19 @@ export interface Report {
     runnerUpCandidate?: Candidate | null;
     selectedCandidateId?: string | null;
     runnerUpCandidateId?: string | null;
+    selectedScore?: number | null;
+    runnerUpScore?: number | null;
+    resolutionBasis?: "candidate_score" | "context_corroboration";
+    resolutionScore?: number | null;
+    runnerUpResolutionScore?: number | null;
+    resolutionMargin?: number | null;
+    resolutionEvidenceIds?: string[];
+    resolutionSourceFamilies?: string[];
+    resolutionContextKeys?: string[];
     runnerUpMargin?: number | null;
     margin?: number | null;
+    resolutionThreshold?: number | null;
+    marginThreshold?: number | null;
     status?: string;
     rationale?: string;
   };

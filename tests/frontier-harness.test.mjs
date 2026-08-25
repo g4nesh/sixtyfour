@@ -1155,7 +1155,7 @@ test("deep provider fanout reserves every canonical search before candidate fetc
   assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
 });
 
-test("deep runner routes canonical batches mechanically before opaque lead planning", async () => {
+test("deep runner routes canonical batches mechanically without synthesizing discovery-only search rows", async () => {
   const targetRaw = "Elon Musk";
   const input = domain.parseInvestigationInput({
     schemaVersion: domain.SCHEMA_VERSION,
@@ -1293,10 +1293,21 @@ test("deep runner routes canonical batches mechanically before opaque lead plann
   );
   assert.ok(opaqueFetchCalls > 0, "remaining Deep budget must reach at least one legal opaque lead fetch");
   assert.ok(fetchExtractionAttempts > 0, "noncanonical lead extraction may use budget above the final reserve");
-  assert.equal(synthesisCalls, 1, "intermediate synthesis must be deferred until the reserved final opportunity");
+  assert.equal(
+    completed.state.evidence.filter(
+      (evidence) => evidence.disposition === "discovery_only" && evidence.sourceType === "search_result",
+    ).length,
+    9,
+    "the regression must retain enough discovery rows to expose raw evidence-count scheduling",
+  );
+  assert.equal(synthesisCalls, 0, "discovery-only search rows must never spend a finding-synthesis call");
   assert.ok(completed.report.usage.toolCalls < completed.state.budget.limits.maxToolCalls);
   assert.ok(completed.report.usage.searchCalls < completed.state.budget.limits.maxSearchCalls);
-  assert.equal(completed.report.usage.llmCalls, completed.state.budget.limits.maxLlmCalls);
+  assert.equal(
+    completed.report.usage.llmCalls,
+    nonCanonicalPlannerCalls + fetchExtractionAttempts,
+    "LLM accounting must contain only planner and fetch work, with no discovery-triggered synthesis charge",
+  );
 
   const compilerEntries = completed.report.searchGraph.frontier.filter((entry) =>
     search.isCanonicalCompilerSearchEntry(entry),
@@ -1332,9 +1343,8 @@ test("deep runner routes canonical batches mechanically before opaque lead plann
   const synthesisStarts = completed.trace.events.filter(
     (event) => event.kind === "span_start" && event.name === "synthesis.findings",
   );
-  assert.equal(synthesisStarts.length, 1);
-  assert.ok(Math.max(...fetchStarts.map((event) => event.seq)) < synthesisStarts[0].seq);
-  assert.equal(completed.trace.events.filter((event) => event.name === "synthesis.final_call_reserved").length, 1);
+  assert.equal(synthesisStarts.length, 0);
+  assert.equal(completed.trace.events.filter((event) => event.name === "synthesis.final_call_reserved").length, 0);
   const deterministicRoutes = completed.trace.events.filter(
     (event) => event.name === "scheduler.canonical_batch_routed",
   );
@@ -1868,9 +1878,9 @@ test("deep runner tries one deterministic backup after a bare-name quality probe
       scheduling: { disposition: "prioritize", reason: "exact_subject_slug_probe" },
     },
     {
-      leadId: "lead_exact_person_slug",
-      sourceUrl: "https://alex.example/alex-rivera",
-      title: "Alex Rivera | Alex",
+      leadId: "lead_exact_personal_profile",
+      sourceUrl: "https://alexrivera.example/profile",
+      title: "Alex Rivera",
       lane: "t6.candidate_public_source",
       tier: 6,
       type: "other",
@@ -1988,7 +1998,7 @@ test("deep runner tries one deterministic backup after a bare-name quality probe
               meta: { requests: 1, bytesRead: 64, incomplete: false, llmCalls: 0 },
             };
           }
-          if (lead.leadId === "lead_exact_person_slug") {
+          if (lead.leadId === "lead_exact_personal_profile") {
             return {
               status: "succeeded",
               evidence: [
@@ -2034,7 +2044,7 @@ test("deep runner tries one deterministic backup after a bare-name quality probe
   assert.equal(completed.type, "completed");
   assert.deepEqual(
     fetchedLeadIds.slice(0, 2),
-    ["lead_exact_subject_probe", "lead_exact_person_slug"],
+    ["lead_exact_subject_probe", "lead_exact_personal_profile"],
     "the stable quality comparator must order both bounded attempts ahead of ordinary path cost",
   );
   assert.equal(fetchedLeadIds.length, leads.length, "ordinary candidate fanout must resume after two failed probes");
@@ -2044,8 +2054,28 @@ test("deep runner tries one deterministic backup after a bare-name quality probe
     qualityEvents.map((event) => [event.payload.leadId, event.payload.probeOrdinal]),
     [
       ["lead_exact_subject_probe", 1],
-      ["lead_exact_person_slug", 2],
+      ["lead_exact_personal_profile", 2],
     ],
+  );
+  assert.deepEqual(
+    qualityEvents.map((event) => event.payload.interleavedBeforeCanonicalBreadth),
+    [true, false],
+    "only the first persisted-priority probe may interleave with canonical breadth",
+  );
+  const canonicalSearchEnds = completed.trace.events.filter(
+    (event) => event.kind === "span_end" && event.name === "tool.search_web",
+  );
+  const leadFetchStarts = completed.trace.events.filter(
+    (event) => event.kind === "span_start" && event.name === "tool.fetch_public_source",
+  );
+  assert.equal(canonicalSearchEnds.length, plan.queries.length);
+  assert.ok(
+    leadFetchStarts[0].seq < Math.max(...canonicalSearchEnds.map((event) => event.seq)),
+    "the persisted-priority probe must run before the remaining canonical searches",
+  );
+  assert.ok(
+    leadFetchStarts[1].seq > Math.max(...canonicalSearchEnds.map((event) => event.seq)),
+    "no second lead fetch may run until every canonical search settles exactly once",
   );
   assert.equal(
     completed.trace.events.filter((event) => event.name === "scheduler.quality_probe_routed").length,
@@ -2054,7 +2084,7 @@ test("deep runner tries one deterministic backup after a bare-name quality probe
   );
   assert.deepEqual(
     qualityRoleLeadIds,
-    ["lead_exact_subject_probe", "lead_exact_person_slug"],
+    ["lead_exact_subject_probe", "lead_exact_personal_profile"],
     "only mechanically selected probes may receive the server-owned execution role",
   );
   assert.equal(
@@ -2371,15 +2401,35 @@ test("deep runner spends the reserved final synthesis call after the last opaque
           assert.equal(context.modelAccounting.reserve(), true);
           context.modelAccounting.settle({ networkRequests: 1 });
           return {
-            status: "not_found",
-            evidence: [],
-            meta: { requests: 1, bytesRead: 0, incomplete: false, llmCalls: 0 },
+            status: "succeeded",
+            evidence: [
+              {
+                candidateId: action.candidateId,
+                claim: targetRaw,
+                excerpt: targetRaw,
+                sourceUrl: "https://github.com/jordan-lee",
+                sourceType: "code_profile",
+                httpStatus: 200,
+                verificationMethod: "direct_fetch",
+              },
+            ],
+            meta: { requests: 1, bytesRead: 64, incomplete: false, llmCalls: 0 },
           };
         }
         throw new Error(`Unexpected test action ${action.tool}`);
       },
-      synthesize: async (_state, context) => {
+      synthesize: async (state, context) => {
         synthesisCalls += 1;
+        assert.ok(
+          state.evidence.some(
+            (evidence) =>
+              evidence.disposition === "supports" &&
+              evidence.sourceType === "code_profile" &&
+              evidence.verificationMethod === "direct_fetch" &&
+              evidence.excerpt === targetRaw,
+          ),
+          "the final synthesis call must follow newly admitted useful direct support",
+        );
         assert.equal(context.modelAccounting.reserve(), true, "the post-last-lead synthesis call must remain callable");
         context.modelAccounting.settle({ networkRequests: 1 });
         return { decisionSummary: "The exhausted lead set was synthesized once.", findings: [], openQuestions: [] };
@@ -2398,6 +2448,7 @@ test("deep runner spends the reserved final synthesis call after the last opaque
   assert.equal(fetchCalls, 1);
   assert.equal(synthesisCalls, 1);
   assert.equal(completed.report.usage.llmCalls, 3);
+  assert.deepEqual(completed.report.findings, [], "successful empty synthesis remains an intentional abstention");
   assert.equal(
     completed.report.searchGraph.frontier.filter(
       (entry) => entry.leadId && ["queued", "mutated", "selected", "running"].includes(entry.status),
@@ -2501,16 +2552,35 @@ test("a Deep synthesis outage is deferred until canonical frontier work is exhau
         plannerCalls += 1;
         return {
           kind: "actions",
-          decisionSummary: "Execute only the selected canonical public-professional frontier entries.",
+          decisionSummary: "Execute only the selected bounded public-professional frontier entries.",
           actions: selectedFrontierEntries.map((entry) => ({
             frontierEntryId: entry.id,
-            tool: "search_web",
-            purpose: "Search the selected public-professional source lane.",
-            arguments: { query: entry.queryHint },
+            tool: entry.allowedTools[0],
+            purpose: "Execute the selected public-professional source lane.",
+            arguments:
+              entry.allowedTools[0] === "search_web" ? { query: entry.queryHint } : { leadId: entry.queryHint },
+            ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
           })),
         };
       },
       executeAction: async (action) => {
+        if (action.tool === "fetch_public_source") {
+          return {
+            status: "succeeded",
+            evidence: [
+              {
+                claim: "Chinmay Bhat has a public professional profile.",
+                excerpt: "Chinmay Bhat has a public professional profile.",
+                candidateId: action.candidateId,
+                sourceUrl: "https://github.com/chinmay-bhat",
+                sourceType: "code_profile",
+                httpStatus: 200,
+                verificationMethod: "direct_fetch",
+              },
+            ],
+            meta: { requests: 0, bytesRead: 96, incomplete: false, llmCalls: 0 },
+          };
+        }
         executedQueries.push(action.arguments.query);
         if (firstAction) {
           firstAction = false;
@@ -2526,6 +2596,14 @@ test("a Deep synthesis outage is deferred until canonical frontier work is exhau
                 sourceType: "search_result",
                 canonicalSubset: { providerAttestedUrl: true },
                 verificationMethod: "search_discovery",
+                attributes: {
+                  leadId: "lead_chinmay_profile",
+                  classifiedSourceLaneId: "t2.structured_professional",
+                  classifiedSourceTier: 2,
+                  classifiedSourceType: "code_profile",
+                  leadSchedulingDisposition: "prioritize",
+                  leadSchedulingReason: "exact_subject_slug_probe",
+                },
               },
             ],
             meta: { requests: 0, bytesRead: 0, incomplete: false, llmCalls: 0 },
@@ -2543,7 +2621,7 @@ test("a Deep synthesis outage is deferred until canonical frontier work is exhau
       },
     },
     {
-      availableTools: ["search_web"],
+      availableTools: ["search_web", "fetch_public_source"],
       budget: {
         maxTurns: 8,
         maxLlmCalls: 12,
@@ -2565,9 +2643,13 @@ test("a Deep synthesis outage is deferred until canonical frontier work is exhau
   const toolStarts = completed.trace.events.filter(
     (event) => event.kind === "span_start" && event.name === "tool.search_web",
   );
+  const directFetchStarts = completed.trace.events.filter(
+    (event) => event.kind === "span_start" && event.name === "tool.fetch_public_source",
+  );
   const executedFrontierIds = new Set(toolStarts.map((event) => event.payload.frontierEntryId));
   assert.equal(toolStarts.length, executedQueries.length);
-  assert.equal(completed.report.usage.toolCalls, executedQueries.length);
+  assert.equal(directFetchStarts.length, 1);
+  assert.equal(completed.report.usage.toolCalls, executedQueries.length + directFetchStarts.length);
   assert.equal(completed.report.usage.llmCalls, plannerCalls + synthesisCalls);
   assert.ok(completed.report.usage.llmCalls < completed.state.budget.limits.maxLlmCalls);
   assert.equal(executedFrontierIds.size, toolStarts.length, "frontier actions remain at-most-once");

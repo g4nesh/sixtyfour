@@ -1,4 +1,12 @@
-import { clamp, normalizeComparable, normalizeWhitespace, roundScore } from "./runtime";
+import {
+  clamp,
+  labelOccursAsTokenPhrase,
+  normalizeComparable,
+  normalizeLabelTokens,
+  normalizeOrganizationIdentity,
+  normalizeWhitespace,
+  roundScore,
+} from "./runtime";
 import {
   SCHEMA_VERSION,
   type Candidate,
@@ -9,6 +17,13 @@ import {
   type IdentitySignalKind,
   type ParsedTarget,
 } from "./types";
+import { canonicalizeSourceUrl, isExactPersonalProfilePageScope } from "./evidence";
+import {
+  bareNameContextHypotheses,
+  hasInterveningNamedSubject,
+  matchBareContextRelation,
+  matchPageScopedCompletedEducationRelation,
+} from "./target";
 
 const SIGNAL_WEIGHTS: Record<IdentitySignalKind, number> = {
   name: 0.18,
@@ -34,6 +49,45 @@ const MERGE_GRADE_SIGNAL_KINDS = new Set<IdentitySignalKind>([
   "keybase_proof",
   "cross_profile_link",
 ]);
+
+const CONTEXT_CORROBORATION_SIGNAL_KINDS = new Set<IdentitySignalKind>([
+  "name",
+  "organization",
+  "role",
+  "location",
+  "bio_phrase",
+]);
+
+const HUMAN_LABEL_SIGNAL_KINDS = new Set<IdentitySignalKind>([
+  "name",
+  "organization",
+  "role",
+  "location",
+  "bio_phrase",
+]);
+
+export interface CandidateContextCorroboration {
+  score: number;
+  evidenceIds: string[];
+  sourceFamilies: string[];
+  authoritativeSourceFamilies: string[];
+  matchedContextKeys: string[];
+  allSourcesSpoofable: boolean;
+  contextBasis: "explicit_target" | "bare_name_context_hypothesis";
+  decision: "resolved_eligible" | "probable";
+  decisionBasis:
+    | "two_authoritative_families"
+    | "authoritative_plus_identifier"
+    | "needs_nonspoofable_authority"
+    | "needs_second_family"
+    | "context_only";
+  identifierEvidenceIds: string[];
+}
+
+export const CONTEXT_CORROBORATION_PROBABLE_CAP = 0.77;
+export const CONTEXT_CORROBORATION_ONE_FAMILY_CAP = 0.62;
+
+const STRUCTURALLY_AUTHORITATIVE_CONTEXT_SOURCE_TYPES = new Set(["official_profile", "company_page"]);
 
 function isResolutionGrade(signal: IdentitySignal): boolean {
   return (
@@ -180,8 +234,466 @@ export function identitySignalGroundedByEvidence(signal: IdentitySignal, evidenc
     const email = signal.value.toLocaleLowerCase("en-US");
     return rawMaterial.some((value) => value.toLocaleLowerCase("en-US").includes(email));
   }
+  if (HUMAN_LABEL_SIGNAL_KINDS.has(signal.kind)) {
+    return rawMaterial.some((value) => labelOccursAsTokenPhrase(value, signal.value));
+  }
   const tokenPhrase = ` ${needle} `;
   return rawMaterial.some((value) => ` ${normalizeComparable(value)} `.includes(tokenPhrase));
+}
+
+interface RequestedContextSignal {
+  key: string;
+  kind: Extract<IdentitySignalKind, "name" | "organization" | "role" | "location" | "bio_phrase">;
+  value: string;
+  normalizedValue: string;
+}
+
+function requestedContextSignals(
+  candidate: Candidate,
+  target: ParsedTarget,
+): { basis: CandidateContextCorroboration["contextBasis"]; signals: RequestedContextSignal[] } | null {
+  if (target.kind !== "named_person" || !target.normalizedName) return null;
+  if (candidate.normalizedName !== target.normalizedName) {
+    const hypothesis = bareNameContextHypotheses(target).find(
+      (item) => item.normalizedSubjectName === candidate.normalizedName,
+    );
+    if (!hypothesis) return null;
+    return {
+      basis: "bare_name_context_hypothesis",
+      signals: [
+        {
+          key: `name:${hypothesis.normalizedSubjectName}`,
+          kind: "name",
+          value: hypothesis.subjectName,
+          normalizedValue: hypothesis.normalizedSubjectName,
+        },
+        {
+          key: `bio_phrase:${hypothesis.normalizedContextPhrase}`,
+          kind: "bio_phrase",
+          value: hypothesis.contextPhrase,
+          normalizedValue: hypothesis.normalizedContextPhrase,
+        },
+      ],
+    };
+  }
+  const requested: RequestedContextSignal[] = [
+    {
+      key: `name:${target.normalizedName}`,
+      kind: "name",
+      value: target.name ?? target.normalizedName,
+      normalizedValue: target.normalizedName,
+    },
+    ...target.organizationHints.map((organization) => ({
+      key: `organization:${organization.normalizedName}`,
+      kind: "organization" as const,
+      value: organization.name,
+      normalizedValue: organization.normalizedName,
+    })),
+    ...target.roleHints.map((role) => ({
+      key: `role:${normalizeComparable(role)}`,
+      kind: "role" as const,
+      value: role,
+      normalizedValue: normalizeComparable(role),
+    })),
+    ...target.locationHints.map((location) => ({
+      key: `location:${normalizeComparable(location)}`,
+      kind: "location" as const,
+      value: location,
+      normalizedValue: normalizeComparable(location),
+    })),
+  ];
+  return {
+    basis: "explicit_target",
+    signals: [...new Map(requested.map((item) => [item.key, item])).values()],
+  };
+}
+
+function isResolutionEvidence(record: EvidenceRecord, candidate: Candidate): boolean {
+  return (
+    record.candidateId === candidate.id &&
+    candidate.evidenceIds.includes(record.id) &&
+    record.disposition === "supports" &&
+    record.sourceType !== "search_result" &&
+    record.verificationMethod === "direct_fetch" &&
+    record.reliability >= 0.45 &&
+    record.httpStatus === 200 &&
+    /^sha256:[a-f0-9]{64}$/.test(record.contentHash ?? "") &&
+    Boolean(record.excerpt) &&
+    record.claim === record.excerpt
+  );
+}
+
+/**
+ * Recompute the title/body page-scoped education contract from durable ledger
+ * fields. The scope attribute selects the contract but cannot satisfy it: URL
+ * shape, unchanged authorization, exact fetched title, exact body claim,
+ * completion time, low trust, and candidate ownership are all checked again.
+ */
+export function isPageScopedCompletedEducationEvidence(
+  record: EvidenceRecord,
+  candidate: Candidate,
+  subjectName: string,
+  contextPhrase: string,
+): boolean {
+  const authorizedUrl = record.attributes.pageScopedAuthorizedUrl;
+  const rawProof = record.canonicalSubset?.pageScopedEducationProof;
+  const proof =
+    typeof rawProof === "object" && rawProof !== null && !Array.isArray(rawProof)
+      ? (rawProof as Record<string, unknown>)
+      : null;
+  const safetyWindow = proof?.safetyWindow;
+  if (
+    record.attributes.pageScopedSubjectScope !== "exact_fetched_title_personal_profile" ||
+    record.attributes.extractionMethod !== "deterministic_page_scoped_completed_education" ||
+    normalizeLabelTokens(String(record.attributes.matchedBareContextPhrase ?? "")) !==
+      normalizeLabelTokens(contextPhrase) ||
+    record.attributes.matchedBareContextRelation !== "alumni" ||
+    record.attributes.extractiveClaim !== true ||
+    typeof authorizedUrl !== "string" ||
+    record.candidateId !== candidate.id ||
+    !candidate.evidenceIds.includes(record.id) ||
+    normalizeLabelTokens(candidate.displayName) !== normalizeLabelTokens(subjectName) ||
+    record.disposition !== "supports" ||
+    record.sourceType !== "other" ||
+    record.verificationMethod !== "direct_fetch" ||
+    record.temporalStatus !== "historical" ||
+    record.httpStatus !== 200 ||
+    !/^sha256:[a-f0-9]{64}$/.test(record.contentHash ?? "") ||
+    record.claim !== record.excerpt ||
+    record.reliability !== 0.55 ||
+    record.spoofable !== true ||
+    record.attributes.untrustedContent !== true ||
+    record.attributes.fullBodyRetained !== false ||
+    record.attributes.ownershipVerified !== false ||
+    record.canonicalSubset?.mimeType !== "text/html" ||
+    proof?.schemaVersion !== "page_scoped_completed_education_v1" ||
+    typeof safetyWindow !== "string" ||
+    safetyWindow.length === 0 ||
+    safetyWindow.length > 640 ||
+    proof.safetyWindowLength !== safetyWindow.length ||
+    proof.fullTextContentHash !== record.contentHash ||
+    typeof proof.fullTextLength !== "number" ||
+    !Number.isInteger(proof.fullTextLength) ||
+    proof.fullTextLength < safetyWindow.length ||
+    proof.fullTextLength > 200_000 ||
+    proof.fetchedTitle !== record.title ||
+    proof.observedAt !== record.observedAt ||
+    proof.authorizedUrl !== authorizedUrl ||
+    typeof proof.finalUrl !== "string" ||
+    proof.explicitMinorMarkersAbsent !== true ||
+    proof.requestedContextContradictionAbsent !== true ||
+    typeof record.observedAt !== "string" ||
+    !record.title ||
+    !isExactPersonalProfilePageScope(record.sourceUrl, record.title, subjectName) ||
+    matchPageScopedCompletedEducationRelation(record.claim, contextPhrase, record.observedAt, safetyWindow) !== "alumni"
+  )
+    return false;
+  try {
+    const canonicalRecordUrl = canonicalizeSourceUrl(record.sourceUrl);
+    return (
+      canonicalizeSourceUrl(authorizedUrl) === canonicalRecordUrl &&
+      canonicalizeSourceUrl(proof.finalUrl) === canonicalRecordUrl
+    );
+  } catch {
+    return false;
+  }
+}
+
+export interface CrossSourceEvidenceIdentityTuple {
+  subject: string;
+  organization: string;
+  normalizedSubject: string;
+  normalizedOrganization: string;
+}
+
+/**
+ * Recompute the exact subject/organization tuple carried by one hardened
+ * candidate-bound record. Extractor attributes are only selectors: both
+ * labels must occur in the immutable exact claim before they can participate
+ * in a derived cross-source identity signal.
+ */
+export function crossSourceEvidenceIdentityTuple(
+  record: EvidenceRecord,
+  candidate: Candidate,
+): CrossSourceEvidenceIdentityTuple | null {
+  const subjectAttribute = record.attributes.extractedSubjectName;
+  const organizationAttribute = record.attributes.extractedOrganization;
+  const subject = typeof subjectAttribute === "string" ? normalizeWhitespace(subjectAttribute) : "";
+  const organization = typeof organizationAttribute === "string" ? normalizeWhitespace(organizationAttribute) : "";
+  if (
+    !subject ||
+    !organization ||
+    record.candidateId !== candidate.id ||
+    !candidate.evidenceIds.includes(record.id) ||
+    record.disposition !== "supports" ||
+    record.sourceType === "search_result" ||
+    record.verificationMethod !== "direct_fetch" ||
+    record.attributes.untrustedContent !== true ||
+    record.httpStatus !== 200 ||
+    !/^sha256:[a-f0-9]{64}$/.test(record.contentHash ?? "") ||
+    !record.excerpt ||
+    record.claim !== record.excerpt ||
+    normalizeLabelTokens(candidate.displayName) !== normalizeLabelTokens(subject) ||
+    !labelOccursAsTokenPhrase(record.claim, subject) ||
+    !labelOccursAsTokenPhrase(record.claim, organization)
+  )
+    return null;
+
+  const normalizedSubject = normalizeLabelTokens(subject);
+  const normalizedOrganization = normalizeOrganizationIdentity(organization);
+  if (!normalizedSubject || !normalizedOrganization) return null;
+  return { subject, organization, normalizedSubject, normalizedOrganization };
+}
+
+function regexPhrase(value: string): string {
+  return normalizeWhitespace(value)
+    .split(/\s+/u)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
+}
+
+function claimRelatesSubjectToContext(
+  claim: string,
+  subject: RequestedContextSignal,
+  context: RequestedContextSignal,
+): boolean {
+  if (!labelOccursAsTokenPhrase(claim, subject.value) || !labelOccursAsTokenPhrase(claim, context.value)) return false;
+  if (hasInterveningNamedSubject(claim, subject.value, context.value)) return false;
+  const subjectPattern = regexPhrase(subject.value);
+  const contextPattern = regexPhrase(context.value);
+  const bounded = "[^.!?;]{0,220}";
+  if (context.kind === "organization") {
+    return [
+      new RegExp(
+        `${subjectPattern}${bounded}(?:works|worked|serves|served|researches|researched|joined|led|leads|founded|co[- ]?founded)${bounded}(?:at|for|with|of)?${bounded}${contextPattern}`,
+        "iu",
+      ),
+      new RegExp(
+        `${subjectPattern}${bounded}(?:attends|attended|studies|studied)\\s+at${bounded}${contextPattern}`,
+        "iu",
+      ),
+      new RegExp(
+        `${subjectPattern}${bounded}(?:graduated\\s+from|alumn(?:us|a|i)\\s+of)${bounded}${contextPattern}`,
+        "iu",
+      ),
+      new RegExp(
+        `${subjectPattern}${bounded}(?:is|was|became|remains)\\s+(?:(?:an?|the)\\s+)?(?:researcher|scientist|engineer|founder|executive|director|professor|employee|intern|fellow|advisor|consultant)${bounded}(?:at|for|with|of)${bounded}${contextPattern}`,
+        "iu",
+      ),
+    ].some((pattern) => pattern.test(claim));
+  }
+  if (context.kind === "role") {
+    return [
+      new RegExp(
+        `${subjectPattern}${bounded}(?:is|was|became|remains|serves\\s+as|served\\s+as|works\\s+as|worked\\s+as)${bounded}${contextPattern}`,
+        "iu",
+      ),
+      new RegExp(`${contextPattern}\\s*(?:[,—-]\\s*)?${subjectPattern}`, "iu"),
+    ].some((pattern) => pattern.test(claim));
+  }
+  if (context.kind === "location") {
+    return new RegExp(
+      `${subjectPattern}${bounded}(?:(?:is|was|works|worked|serves|served|studies|studied|lives|resides)${bounded})?(?:based\\s+in|located\\s+in|in|from)\\s+${contextPattern}`,
+      "iu",
+    ).test(claim);
+  }
+  return context.kind === "bio_phrase";
+}
+
+/**
+ * Assess whether direct evidence has corroborated the exact requested person
+ * context strongly enough to resolve one already-separated candidate branch.
+ *
+ * This is not a merge rule. The exact target name and every explicit
+ * organization, role, and location constraint must be grounded by admitted
+ * same-candidate signals. Every requested non-name constraint must be quoted
+ * with the exact subject by at least two canonical source families. Formal
+ * resolution additionally requires at least one genuinely non-spoofable
+ * authoritative direct record, plus either two structurally authoritative
+ * families or one such family and a strong identifier grounded by another
+ * exact fetched record. Repeated arbitrary/self-asserted pages and spoofable
+ * structural-looking routes remain probable leads below the formal threshold.
+ * One exact direct family may surface as a bounded lead, but is capped
+ * separately and can never resolve. Search snippets, forged metadata, and
+ * relevant contradiction fail closed.
+ */
+export function assessCandidateContextCorroboration(
+  candidate: Candidate,
+  evidence: readonly EvidenceRecord[],
+  target: ParsedTarget,
+): CandidateContextCorroboration | null {
+  const request = requestedContextSignals(candidate, target);
+  if (!request) return null;
+  const requested = request.signals;
+  const requestedContext = requested.filter((item) => item.kind !== "name");
+  const requestedSubject = requested.find((item) => item.kind === "name");
+  if (!requestedSubject || requestedContext.length === 0 || candidate.status === "rejected") return null;
+
+  const candidateEvidence = evidence.filter((record) => record.candidateId === candidate.id);
+  const requestedContextLabels = requestedContext.map((item) => item.normalizedValue);
+  if (
+    candidateEvidence.some(
+      (record) =>
+        candidate.evidenceIds.includes(record.id) &&
+        record.disposition === "contradicts" &&
+        record.sourceType !== "search_result" &&
+        record.verificationMethod === "direct_fetch" &&
+        record.reliability >= 0.45 &&
+        record.httpStatus === 200 &&
+        /^sha256:[a-f0-9]{64}$/.test(record.contentHash ?? "") &&
+        Boolean(record.excerpt) &&
+        record.claim === record.excerpt &&
+        labelOccursAsTokenPhrase(record.claim, requestedSubject.value) &&
+        requestedContextLabels.some((label) => labelOccursAsTokenPhrase(record.claim, label)),
+    )
+  )
+    return null;
+
+  const resolutionEvidence = new Map(
+    candidateEvidence.filter((record) => isResolutionEvidence(record, candidate)).map((record) => [record.id, record]),
+  );
+  const requestedByKind = new Map<IdentitySignalKind, RequestedContextSignal[]>();
+  for (const item of requested) {
+    const matches = requestedByKind.get(item.kind) ?? [];
+    matches.push(item);
+    requestedByKind.set(item.kind, matches);
+  }
+
+  const matchedKeys = new Set<string>();
+  const matchedEvidence = new Map<string, EvidenceRecord>();
+  const supportFamiliesByKey = new Map<string, Set<string>>();
+  for (const signal of candidate.signals) {
+    if (!CONTEXT_CORROBORATION_SIGNAL_KINDS.has(signal.kind) || !signal.sourceEvidenceId) continue;
+    const record = resolutionEvidence.get(signal.sourceEvidenceId);
+    if (!record || !identitySignalGroundedByEvidence(signal, record)) continue;
+    const match = (requestedByKind.get(signal.kind) ?? []).find(
+      (item) => item.normalizedValue === signal.normalizedValue,
+    );
+    const pageScopedEducationContext = requestedContext.find(
+      (item) =>
+        item.kind === "bio_phrase" &&
+        isPageScopedCompletedEducationEvidence(record, candidate, requestedSubject.value, item.value),
+    );
+    const pageScopedSubject = Boolean(pageScopedEducationContext);
+    const signalValueAttested =
+      labelOccursAsTokenPhrase(record.claim, signal.value) || (match?.kind === "name" && pageScopedSubject);
+    const subjectAttested = labelOccursAsTokenPhrase(record.claim, requestedSubject.value) || pageScopedSubject;
+    const bareContextRelationAttested =
+      match?.kind !== "bio_phrase" ||
+      matchBareContextRelation(record.claim, requestedSubject.value, match.value) !== null ||
+      isPageScopedCompletedEducationEvidence(record, candidate, requestedSubject.value, match.value);
+    if (
+      !match ||
+      !signalValueAttested ||
+      (match.kind !== "name" && !subjectAttested) ||
+      (match.kind === "bio_phrase" &&
+        (typeof record.attributes.matchedBareContextPhrase !== "string" ||
+          normalizeComparable(record.attributes.matchedBareContextPhrase) !== match.normalizedValue ||
+          !bareContextRelationAttested)) ||
+      (match.kind !== "name" &&
+        match.kind !== "bio_phrase" &&
+        !claimRelatesSubjectToContext(record.claim, requestedSubject, match))
+    )
+      continue;
+    matchedKeys.add(match.key);
+    matchedEvidence.set(record.id, record);
+    const supportFamilies = supportFamiliesByKey.get(match.key) ?? new Set<string>();
+    supportFamilies.add(record.sourceFamily);
+    supportFamiliesByKey.set(match.key, supportFamilies);
+  }
+
+  if (requested.some((item) => !matchedKeys.has(item.key))) return null;
+  const families = [...new Set([...matchedEvidence.values()].map((record) => record.sourceFamily))].sort();
+  if (families.length === 0) return null;
+  const hasTwoFamiliesPerRequestedSignal = requested.every(
+    (item) => (supportFamiliesByKey.get(item.key)?.size ?? 0) >= 2,
+  );
+  const authoritativeFamilies = [
+    ...new Set(
+      [...matchedEvidence.values()]
+        .filter((record) => STRUCTURALLY_AUTHORITATIVE_CONTEXT_SOURCE_TYPES.has(record.sourceType))
+        .map((record) => record.sourceFamily),
+    ),
+  ].sort();
+  const nonSpoofableAuthoritativeFamilies = [
+    ...new Set(
+      [...matchedEvidence.values()]
+        .filter(
+          (record) =>
+            record.spoofable === false && STRUCTURALLY_AUTHORITATIVE_CONTEXT_SOURCE_TYPES.has(record.sourceType),
+        )
+        .map((record) => record.sourceFamily),
+    ),
+  ].sort();
+  const allSourcesSpoofable = [...matchedEvidence.values()].every((record) => record.spoofable);
+  const evidenceById = new Map(candidateEvidence.map((record) => [record.id, record]));
+  const identifierEvidenceIds = [
+    ...new Set(
+      candidate.signals.filter(isMergeGrade).flatMap((signal) => {
+        if (!signal.sourceEvidenceId) return [];
+        const record = evidenceById.get(signal.sourceEvidenceId);
+        return record &&
+          isResolutionEvidence(record, candidate) &&
+          record.reliability >= 0.55 &&
+          labelOccursAsTokenPhrase(record.claim, requestedSubject.value) &&
+          identitySignalGroundedByEvidence(signal, record)
+          ? [record.id]
+          : [];
+      }),
+    ),
+  ].sort();
+  const hasIndependentIdentifier = identifierEvidenceIds.some((evidenceId) => {
+    const identifierFamily = evidenceById.get(evidenceId)?.sourceFamily;
+    return Boolean(identifierFamily && !authoritativeFamilies.includes(identifierFamily));
+  });
+  const resolutionEligible =
+    hasTwoFamiliesPerRequestedSignal &&
+    nonSpoofableAuthoritativeFamilies.length >= 1 &&
+    (authoritativeFamilies.length >= 2 || (authoritativeFamilies.length >= 1 && hasIndependentIdentifier));
+  const decisionBasis: CandidateContextCorroboration["decisionBasis"] = !hasTwoFamiliesPerRequestedSignal
+    ? "needs_second_family"
+    : nonSpoofableAuthoritativeFamilies.length === 0 && authoritativeFamilies.length >= 1
+      ? "needs_nonspoofable_authority"
+      : authoritativeFamilies.length >= 2
+        ? "two_authoritative_families"
+        : authoritativeFamilies.length >= 1 && hasIndependentIdentifier
+          ? "authoritative_plus_identifier"
+          : "context_only";
+
+  const records = [...matchedEvidence.values()];
+  const averageReliability = records.reduce((total, record) => total + record.reliability, 0) / records.length;
+  // Evidence-weighted identity decision score: exact name and complete requested
+  // context form the base, while independent families, source reliability,
+  // and structural-authority breadth determine how far above the resolution threshold
+  // the candidate can move. Eligibility gates above do the safety work; this
+  // score only ranks eligible candidate branches against one another.
+  const rawScore = roundScore(
+    clamp(
+      0.32 +
+        0.22 +
+        Math.min(1, families.length / 3) * 0.18 +
+        averageReliability * 0.16 +
+        Math.min(1, authoritativeFamilies.length / 2) * 0.12,
+    ),
+  );
+  const score = resolutionEligible
+    ? rawScore
+    : Math.min(
+        rawScore,
+        hasTwoFamiliesPerRequestedSignal ? CONTEXT_CORROBORATION_PROBABLE_CAP : CONTEXT_CORROBORATION_ONE_FAMILY_CAP,
+      );
+  return {
+    score,
+    evidenceIds: [...matchedEvidence.keys()].sort(),
+    sourceFamilies: families,
+    authoritativeSourceFamilies: authoritativeFamilies,
+    matchedContextKeys: [...matchedKeys].sort(),
+    allSourcesSpoofable,
+    contextBasis: request.basis,
+    decision: resolutionEligible ? "resolved_eligible" : "probable",
+    decisionBasis,
+    identifierEvidenceIds,
+  };
 }
 
 export const QUERY_SUBJECT_ANCHOR_ATTRIBUTE = "querySubjectAnchor" as const;
@@ -314,9 +826,16 @@ export function scoreCandidate(
     if (signal.assurance === "self_asserted") weight *= 0.9;
     weight = clamp(weight);
 
-    const family = isIndependent(signal)
-      ? (signal.sourceFamily ?? `${signal.kind}:${signal.normalizedValue}`)
-      : signal.kind;
+    // Multiple A+B / A+C reconciliations for the same candidate are alternate
+    // observations of one derived cross-source identity feature, not new
+    // independent evidence families. Direct evidence remains the source of
+    // family breadth for contextual resolution.
+    const family =
+      signal.kind === "cross_source_match"
+        ? "cross_source_match"
+        : isIndependent(signal)
+          ? (signal.sourceFamily ?? `${signal.kind}:${signal.normalizedValue}`)
+          : signal.kind;
     const current = positiveByFamily.get(family);
     if (!current || weight > current.weight) {
       positiveByFamily.set(family, { weight, signal });
@@ -334,7 +853,9 @@ export function scoreCandidate(
   );
   const hasIndependentCorroboration = identityBearing.some(
     (signal) =>
-      signal.kind !== "github_commit_email" && (signal.assurance === "verified" || signal.assurance === "corroborated"),
+      signal.kind !== "github_commit_email" &&
+      signal.kind !== "cross_source_match" &&
+      (signal.assurance === "verified" || signal.assurance === "corroborated"),
   );
   const onlySpoofableIdentity = hasSpoofableIdentity && !hasIndependentCorroboration;
   if (onlySpoofableIdentity) total = Math.min(total, 0.69);

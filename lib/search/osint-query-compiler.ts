@@ -1,6 +1,7 @@
 import { containsRestrictedPublicContent } from "../domain/content-policy";
 import { normalizeWhitespace } from "../domain/runtime";
 import type { ParsedTarget, TargetKind } from "../domain/types";
+import { bareNameContextHypotheses } from "../domain/target";
 
 export const OSINT_QUERY_COMPILER_VERSION = 1 as const;
 export const MAX_OSINT_QUERY_VARIANTS = 16 as const;
@@ -44,6 +45,7 @@ export type OsintQueryVariantKind =
   | "exact_baseline"
   | "exact_refinement"
   | "exact_context"
+  | "bare_context_hypothesis"
   | "orthographic_name"
   | "initial_name"
   | "professional_site"
@@ -61,6 +63,11 @@ export interface CompiledOsintQuery {
   query: string;
   /** Exact subject phrase used by the query; never an invented alias. */
   subjectPhrase: string;
+  /**
+   * Present only for a bounded bare search-context hypothesis. It remains
+   * discovery metadata until hardened direct text relates it to subjectPhrase.
+   */
+  hypothesisContextPhrase?: string;
   /** Present only for a validated, compiler-admitted site scope. */
   site: string | null;
   /** Negative operators are legal only when this field names the refinement. */
@@ -70,6 +77,7 @@ export interface CompiledOsintQuery {
     | "target_subject_baseline"
     | "compiler_public_professional_refinement"
     | "target_context"
+    | "target_bare_context_hypothesis"
     | "target_name_orthography"
     | "target_name_initials"
     | "compiler_professional_allowlist"
@@ -121,6 +129,7 @@ interface QueryDraft {
   kind: OsintQueryVariantKind;
   body: string;
   subjectPhrase: string;
+  hypothesisContextPhrase?: string;
   site: string | null;
   refinement: CompiledOsintQuery["refinement"];
   derivedFrom: CompiledOsintQuery["derivedFrom"];
@@ -417,6 +426,21 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     }
   }
 
+  for (const hypothesis of bareNameContextHypotheses(target)) {
+    const hypothesisSubject = quotePhrase(hypothesis.subjectName);
+    const bounded = boundedContextBody(hypothesisSubject, [hypothesis.contextPhrase]);
+    if (!bounded.body) continue;
+    drafts.push({
+      kind: "bare_context_hypothesis",
+      body: bounded.body,
+      subjectPhrase: hypothesis.subjectName,
+      hypothesisContextPhrase: hypothesis.contextPhrase,
+      site: null,
+      refinement: "public_web_noise_exclusions",
+      derivedFrom: "target_bare_context_hypothesis",
+    });
+  }
+
   if (target.kind === "named_person") {
     const orthographic = orthographicNameVariant(context.subjectPhrase);
     if (orthographic) {
@@ -582,6 +606,7 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     kind: draft.kind,
     query: renderedQuery(draft),
     subjectPhrase: draft.subjectPhrase,
+    ...(draft.hypothesisContextPhrase ? { hypothesisContextPhrase: draft.hypothesisContextPhrase } : {}),
     site: draft.site,
     refinement: draft.refinement,
     derivedFrom: draft.derivedFrom,

@@ -13,6 +13,7 @@ import type {
   ReportCandidateView,
   ReportEvidenceView,
   ReportGraphCount,
+  ReportIdentityDecisionLabel,
   ReportPathView,
   ReportSearchStrategyView,
   ReportSourceTierView,
@@ -45,6 +46,7 @@ const TIER_LABELS: Record<number, string> = {
 
 const ACCEPTED_STATUSES = new Set(["verified", "mutated"]);
 const REJECTED_STATUSES = new Set(["rejected"]);
+const PROFILE_CONTEXT_SIGNAL_KINDS = new Set(["organization", "role", "location", "bio_phrase"]);
 
 function finiteScore(value: number): number {
   return Number.isFinite(value) ? value : 0;
@@ -54,12 +56,41 @@ function percentage(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, finiteScore(value))) * 100)}%`;
 }
 
+function isDirectEvidence(item: ReportEvidenceView): boolean {
+  return (
+    item.disposition !== "discovery_only" &&
+    item.contentLabel !== "Passive page metadata observation" &&
+    item.contentLabel !== "Unverified discovery lead"
+  );
+}
+
+function citedSource(item: ReportEvidenceView) {
+  if (!item.sourceUrl) return null;
+  let domain = item.sourceFamily;
+  try {
+    domain = new URL(item.sourceUrl).hostname.replace(/^www\./, "");
+  } catch {
+    /* keep bounded source family */
+  }
+  return { ref: item.ref, url: item.sourceUrl, title: item.title, domain };
+}
+
 function candidateView(
   candidate: Candidate,
   evidence: readonly ReportEvidenceView[],
   findingIds: readonly string[],
 ): ReportCandidateView {
   const candidateEvidence = evidence.filter((item) => item.candidateId === candidate.id);
+  const directSupportingEvidence = candidateEvidence.filter(
+    (item) => item.disposition === "supports" && item.verificationMethod === "direct_fetch" && isDirectEvidence(item),
+  );
+  const persistedConflictKinds = candidate.signals
+    .filter((signal) => signal.kind === "conflict")
+    .map((signal) => signal.kind);
+  if (candidateEvidence.some((item) => item.disposition === "contradicts")) {
+    persistedConflictKinds.push("conflict");
+  }
+  const directSupportingEvidenceIds = new Set(directSupportingEvidence.map((item) => item.id));
   const sourceDomains = candidateEvidence
     .map((item) => {
       if (!item.sourceUrl) return item.sourceFamily;
@@ -70,23 +101,49 @@ function candidateView(
       }
     })
     .filter(Boolean);
+  const seenProfileFacts = new Set<string>();
+  const profileFacts = directSupportingEvidence
+    .filter((item) => {
+      const key = item.claim.toLocaleLowerCase("en-US");
+      if (seenProfileFacts.has(key)) return false;
+      seenProfileFacts.add(key);
+      return true;
+    })
+    .slice(0, 5)
+    .map((item) => ({ claim: item.claim, evidenceRef: item.ref, source: citedSource(item) }));
   return {
     id: cleanInlineReportText(candidate.id),
     name: cleanInlineReportText(candidate.displayName),
     status: candidate.status,
     score: finiteScore(candidate.score.total),
     matchedSignals: [...new Set(candidate.score.matchedSignals.map(cleanInlineReportText))].sort(),
-    conflictingSignals: [...new Set(candidate.score.conflictingSignals.map(cleanInlineReportText))].sort(),
+    // Candidate scoring deliberately penalizes an alternate parse of a bare
+    // multi-token query as a name mismatch. That parser-interpretation penalty
+    // is not an evidence contradiction and must not be presented as one.
+    conflictingSignals: [...new Set(persistedConflictKinds.map(cleanInlineReportText))].sort(),
     independentSourceFamilies: [...new Set(candidate.score.independentFamilies.map(cleanInlineReportText))].sort(),
     evidenceRefs: candidateEvidence.map((item) => item.ref),
     findingIds: [...findingIds].map(cleanInlineReportText).sort(),
     sourceDomains: [...new Set(sourceDomains.map(cleanInlineReportText))].sort(),
-    directSourceCount: candidateEvidence.filter(
-      (item) =>
-        item.disposition !== "discovery_only" &&
-        item.contentLabel !== "Passive page metadata observation" &&
-        item.contentLabel !== "Unverified discovery lead",
-    ).length,
+    directSourceCount: candidateEvidence.filter(isDirectEvidence).length,
+    supportingSourceFamilies: [...new Set(directSupportingEvidence.map((item) => item.sourceFamily))].sort(),
+    matchedContextSignals: [
+      ...new Set(
+        candidate.signals
+          .filter(
+            (signal) =>
+              PROFILE_CONTEXT_SIGNAL_KINDS.has(signal.kind) &&
+              signal.assurance !== "self_asserted" &&
+              Boolean(signal.sourceEvidenceId && directSupportingEvidenceIds.has(signal.sourceEvidenceId)),
+          )
+          .map((signal) => signal.kind),
+      ),
+    ]
+      .map(cleanInlineReportText)
+      .sort(),
+    allSupportingEvidenceSpoofable:
+      directSupportingEvidence.length > 0 && directSupportingEvidence.every((item) => item.spoofable),
+    profileFacts,
   };
 }
 
@@ -292,22 +349,153 @@ function usageRows(usage: BudgetUsage): Array<{ label: string; value: string }> 
   ].map(([label, value]) => ({ label: String(label), value: String(value) }));
 }
 
+function countPhrase(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function identityPresentation(
+  status: InvestigationReport["identity"]["status"],
+  selected: ReportCandidateView | null,
+  profiles: readonly ReportCandidateView[],
+  resolutionBasis: "candidate_score" | "context_corroboration",
+  resolutionSourceFamilies: readonly string[],
+  resolutionContextKeys: readonly string[],
+  resolutionEvidenceRefs: readonly string[],
+  allResolutionEvidenceSpoofable: boolean,
+  resolutionScore: number,
+  resolutionThreshold: number,
+  resolutionMargin: number,
+  marginThreshold: number,
+): {
+  lead: ReportCandidateView | null;
+  decisionLabel: ReportIdentityDecisionLabel;
+  missingCorroboration: string[];
+  resolutionBasis: "candidate_score" | "context_corroboration";
+  resolutionSourceFamilies: string[];
+  resolutionContextKeys: string[];
+  resolutionEvidenceRefs: string[];
+  allResolutionEvidenceSpoofable: boolean;
+  resolutionScore: number;
+  resolutionMargin: number;
+  rationale: string;
+} {
+  const lead = selected ?? profiles[0] ?? null;
+  if (!lead) {
+    return {
+      lead: null,
+      decisionLabel: "No eligible candidate",
+      missingCorroboration: ["No candidate-bound direct evidence was admitted."],
+      resolutionBasis,
+      resolutionSourceFamilies: [...resolutionSourceFamilies],
+      resolutionContextKeys: [...resolutionContextKeys],
+      resolutionEvidenceRefs: [...resolutionEvidenceRefs],
+      allResolutionEvidenceSpoofable,
+      resolutionScore,
+      resolutionMargin,
+      rationale:
+        "No candidate profile survived the identity and evidence gates. Resolution requires at least one candidate-bound direct source with corroborating identity context.",
+    };
+  }
+
+  const sourceFamilyCount = resolutionSourceFamilies.length;
+  const contextCount = resolutionContextKeys.length;
+  const highConfidence =
+    status === "resolved" &&
+    resolutionScore >= resolutionThreshold &&
+    resolutionScore >= 0.75 &&
+    sourceFamilyCount >= 2 &&
+    contextCount >= 1 &&
+    lead.conflictingSignals.length === 0 &&
+    !allResolutionEvidenceSpoofable;
+  if (status === "resolved") {
+    const decisionLabel: ReportIdentityDecisionLabel = highConfidence ? "High-confidence match" : "Resolved match";
+    return {
+      lead,
+      decisionLabel,
+      missingCorroboration: [],
+      resolutionBasis,
+      resolutionSourceFamilies: [...resolutionSourceFamilies],
+      resolutionContextKeys: [...resolutionContextKeys],
+      resolutionEvidenceRefs: [...resolutionEvidenceRefs],
+      allResolutionEvidenceSpoofable,
+      resolutionScore,
+      resolutionMargin,
+      rationale: `${decisionLabel}: Atlas formally selected ${lead.name} with a ${resolutionBasis === "context_corroboration" ? `context-corroboration identity match score of ${percentage(resolutionScore)} (base candidate score ${percentage(lead.score)})` : `candidate match score of ${percentage(resolutionScore)}`}. The branch retains ${countPhrase(lead.directSourceCount, "direct evidence record")} across ${countPhrase(sourceFamilyCount, "supporting source family", "supporting source families")}, with ${countPhrase(contextCount, "grounded professional context signal")}; the resolution margin is ${percentage(resolutionMargin)}.`,
+    };
+  }
+
+  const missingCorroboration: string[] = [];
+  if (resolutionScore < resolutionThreshold) {
+    missingCorroboration.push(
+      `the ${percentage(resolutionScore)} identity match score is below the ${percentage(resolutionThreshold)} resolution threshold`,
+    );
+  }
+  if (sourceFamilyCount === 0) {
+    missingCorroboration.push("no direct supporting source family was admitted");
+  } else if (sourceFamilyCount === 1) {
+    missingCorroboration.push("direct support comes from only one source family");
+  }
+  if (contextCount === 0) {
+    missingCorroboration.push("no directly grounded professional context was retained");
+  }
+  if (lead.conflictingSignals.length > 0) {
+    missingCorroboration.push(`${countPhrase(lead.conflictingSignals.length, "conflicting identity signal")} remain`);
+  }
+  if (status === "ambiguous" && resolutionMargin < marginThreshold) {
+    missingCorroboration.push(
+      `the ${percentage(resolutionMargin)} lead over the runner-up is below the ${percentage(marginThreshold)} separation margin`,
+    );
+  }
+  if (allResolutionEvidenceSpoofable) {
+    missingCorroboration.push("every direct supporting observation remains spoofable");
+  }
+  if (missingCorroboration.length === 0) {
+    missingCorroboration.push("the formal identity-resolution rules were not cleared by the admitted evidence");
+  }
+  const decisionLabel: ReportIdentityDecisionLabel =
+    status === "ambiguous"
+      ? "Competing candidates"
+      : sourceFamilyCount >= 1 && contextCount >= 1
+        ? "Best-supported candidate"
+        : "Leading query branch";
+  const leadSentence = `${lead.name} leads the retained branches at a ${percentage(resolutionScore)} identity match score${resolutionBasis === "context_corroboration" ? ` (base candidate score ${percentage(lead.score)})` : ""}, with ${countPhrase(lead.directSourceCount, "direct evidence record")} across ${countPhrase(sourceFamilyCount, "supporting source family", "supporting source families")} and ${countPhrase(contextCount, "grounded professional context signal")}.`;
+  return {
+    lead,
+    decisionLabel,
+    missingCorroboration,
+    resolutionBasis,
+    resolutionSourceFamilies: [...resolutionSourceFamilies],
+    resolutionContextKeys: [...resolutionContextKeys],
+    resolutionEvidenceRefs: [...resolutionEvidenceRefs],
+    allResolutionEvidenceSpoofable,
+    resolutionScore,
+    resolutionMargin,
+    rationale: `${decisionLabel}: ${leadSentence} Formal identity is ${status} because ${missingCorroboration.join("; ")}.`,
+  };
+}
+
 function executiveSummary(
   report: InvestigationReport,
-  subject: string,
+  assessment: ReturnType<typeof identityPresentation>,
   findingCount: number,
-  retainedCandidateCount: number,
 ): string {
-  const retained = `Atlas retained ${retainedCandidateCount} distinct candidate branch${retainedCandidateCount === 1 ? "" : "es"}; name equality alone was never used to merge them.`;
-  const identity =
+  const identity = assessment.lead
+    ? `${assessment.decisionLabel}: ${assessment.lead.name} is the ${report.identity.status === "resolved" ? "formally selected" : "highest-ranked"} profile at a ${percentage(assessment.resolutionScore)} identity match score${assessment.resolutionBasis === "context_corroboration" ? ` (base candidate score ${percentage(assessment.lead.score)})` : ""}, grounded in ${countPhrase(assessment.lead.directSourceCount, "direct evidence record")} from ${countPhrase(assessment.resolutionSourceFamilies.length, "identity-supporting source family", "identity-supporting source families")}.`
+    : "No eligible candidate profile was retained from the admitted public-professional evidence.";
+  const decisionBoundary =
     report.identity.status === "resolved"
-      ? `Identity resolved to ${subject} with a ${percentage(report.identity.selectedScore)} candidate score and ${percentage(report.identity.runnerUpMargin)} margin over the retained runner-up.`
+      ? "The formal identity decision is resolved."
       : report.identity.status === "ambiguous"
-        ? `Identity remains ambiguous; Atlas retained competing candidates instead of merging them.`
-        : "Identity remains unresolved; the available public-professional evidence did not clear the resolution threshold.";
-  const findings = `${findingCount} finding${findingCount === 1 ? "" : "s"} cite${findingCount === 1 ? "s" : ""} admitted evidence across ${report.coverage.independentSourceFamilyCount} independent source famil${report.coverage.independentSourceFamilyCount === 1 ? "y" : "ies"}.`;
-  const coverage = `Coverage reached ${percentage(report.coverage.score)} for the requested categories; the run stopped with ${report.stop.reason.replaceAll("_", " ")}.`;
-  return cleanReportText(`${identity} ${retained} ${findings} ${coverage}`);
+        ? "Competing branches remain separate pending stronger corroboration."
+        : assessment.lead
+          ? "Formal resolution is still pending; the Identity section lists the missing corroboration."
+          : "Identity resolution cannot proceed without candidate-bound direct evidence.";
+  const findings =
+    findingCount > 0
+      ? `${countPhrase(findingCount, "finding")} ${findingCount === 1 ? "cites" : "cite"} admitted evidence across ${countPhrase(report.coverage.independentSourceFamilyCount, "independent source family", "independent source families")}.`
+      : "No synthesized finding met the evidence-admission and confidence rules in this run.";
+  const coverage = `Requested-category coverage is ${percentage(report.coverage.score)}; execution stopped with ${report.stop.reason.replaceAll("_", " ")}.`;
+  return cleanReportText(`${identity} ${decisionBoundary} ${findings} ${coverage}`);
 }
 
 export function createReportViewModel(report: InvestigationReport): ReportViewModel {
@@ -369,20 +557,65 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
       finding.id,
     ]);
   }
-  const candidates = orderedCandidates.map((candidate) =>
-    candidateView(candidate, evidence.items, findingIdsByCandidate.get(candidate.id) ?? []),
-  );
+  const candidates = orderedCandidates.map((candidate) => {
+    const view = candidateView(candidate, evidence.items, findingIdsByCandidate.get(candidate.id) ?? []);
+    if (candidate.id === report.identity.selectedCandidateId) {
+      return { ...view, score: Math.max(view.score, finiteScore(report.identity.selectedScore)) };
+    }
+    if (candidate.id === report.identity.runnerUpCandidateId) {
+      return { ...view, score: Math.max(view.score, finiteScore(report.identity.runnerUpScore)) };
+    }
+    return view;
+  });
   const profiles = candidates.slice(0, 5);
-  const selected = profiles.find((candidate) => candidate.id === selectedId) ?? null;
-  const alternatives = profiles.filter((candidate) => candidate.id !== selectedId);
+  const rankedLead = profiles.find((candidate) => candidate.id === selectedId) ?? profiles[0] ?? null;
+  const selected = report.identity.status === "resolved" ? rankedLead : null;
+  const alternatives = profiles.filter((candidate) => candidate.id !== rankedLead?.id);
   const retainedCandidateCount = candidates.length;
-  const candidateCountSentence = `Atlas retained ${retainedCandidateCount} distinct candidate branch${retainedCandidateCount === 1 ? "" : "es"}.`;
-  const identityRationale =
-    report.identity.status === "resolved"
-      ? `${candidateCountSentence} The selected candidate cleared the ${percentage(report.identity.resolutionThreshold)} resolution threshold and the ${percentage(report.identity.marginThreshold)} separation margin.`
-      : report.identity.status === "ambiguous"
-        ? `${candidateCountSentence} The five highest-ranked branches are profiled below; they remain separate because the score margin and strong identifiers did not justify a merge.`
-        : `${candidateCountSentence} No candidate met both the resolution and candidate-separation requirements; the five highest-ranked branches are profiled separately below.`;
+  const resolutionBasis = report.identity.resolutionBasis ?? "candidate_score";
+  const resolutionSourceFamilies =
+    resolutionBasis === "context_corroboration" && (report.identity.resolutionSourceFamilies?.length ?? 0) > 0
+      ? [...new Set(report.identity.resolutionSourceFamilies!.map(cleanInlineReportText))].sort()
+      : [...(rankedLead?.supportingSourceFamilies ?? [])];
+  const resolutionContextKeys =
+    resolutionBasis === "context_corroboration" && (report.identity.resolutionContextKeys?.length ?? 0) > 0
+      ? [...new Set(report.identity.resolutionContextKeys!.map(cleanInlineReportText))]
+          .filter((key) => !key.startsWith("name:"))
+          .sort()
+      : [...(rankedLead?.matchedContextSignals ?? [])];
+  const resolutionEvidenceIds =
+    resolutionBasis === "context_corroboration" && (report.identity.resolutionEvidenceIds?.length ?? 0) > 0
+      ? [...new Set(report.identity.resolutionEvidenceIds!)]
+      : evidence.items
+          .filter(
+            (item) =>
+              item.candidateId === rankedLead?.id &&
+              item.disposition === "supports" &&
+              item.verificationMethod === "direct_fetch" &&
+              isDirectEvidence(item),
+          )
+          .map((item) => item.id);
+  const resolutionEvidenceIdSet = new Set(resolutionEvidenceIds);
+  const resolutionEvidenceViews = evidence.items.filter((item) => resolutionEvidenceIdSet.has(item.id));
+  const resolutionEvidenceRefs = resolutionEvidenceViews.map((item) => item.ref).sort();
+  const allResolutionEvidenceSpoofable =
+    resolutionEvidenceViews.length > 0 && resolutionEvidenceViews.every((item) => item.spoofable);
+  const resolutionScore = finiteScore(report.identity.resolutionScore ?? report.identity.selectedScore);
+  const resolutionMargin = finiteScore(report.identity.resolutionMargin ?? report.identity.runnerUpMargin);
+  const assessment = identityPresentation(
+    report.identity.status,
+    selected,
+    profiles,
+    resolutionBasis,
+    resolutionSourceFamilies,
+    resolutionContextKeys,
+    resolutionEvidenceRefs,
+    allResolutionEvidenceSpoofable,
+    resolutionScore,
+    report.identity.resolutionThreshold,
+    resolutionMargin,
+    report.identity.marginThreshold,
+  );
   return {
     schemaVersion: 1,
     classification: "PUBLIC-SOURCE INTELLIGENCE",
@@ -408,17 +641,27 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
       stopReason: report.stop.reason,
       stopDetail: cleanReportText(report.stop.detail),
     },
-    executiveSummary: executiveSummary(report, subject, findings.length, retainedCandidateCount),
+    executiveSummary: executiveSummary(report, assessment, findings.length),
     identity: {
       status: report.identity.status,
       selected,
+      lead: assessment.lead,
+      decisionLabel: assessment.decisionLabel,
+      missingCorroboration: assessment.missingCorroboration,
       profiles,
       alternatives,
       retainedCandidateCount,
       runnerUpMargin: finiteScore(report.identity.runnerUpMargin),
+      resolutionBasis,
+      resolutionSourceFamilies: assessment.resolutionSourceFamilies,
+      resolutionContextKeys: assessment.resolutionContextKeys,
+      resolutionEvidenceRefs: assessment.resolutionEvidenceRefs,
+      allResolutionEvidenceSpoofable: assessment.allResolutionEvidenceSpoofable,
+      resolutionScore,
+      resolutionMargin,
       resolutionThreshold: finiteScore(report.identity.resolutionThreshold),
       marginThreshold: finiteScore(report.identity.marginThreshold),
-      rationale: identityRationale,
+      rationale: assessment.rationale,
     },
     findings,
     evidence: evidence.items,
@@ -445,7 +688,7 @@ export function createReportViewModel(report: InvestigationReport): ReportViewMo
       evidenceStandard:
         "Only admitted public-professional evidence appears here. Exact source excerpts, normalized archived text, and structured API claims are labeled distinctly, and discovery-only snippets are not promoted into findings.",
       confidenceStandard:
-        "Finding confidence is computed from candidate-bound evidence, independent source families, contradictions, reliability, and spoofability caps. Model prose is never finding authority.",
+        "Identity assessment keeps the base candidate score separate from any evidence-weighted context-corroboration score. Finding confidence is computed from candidate-bound evidence, independent source families, contradictions, reliability, and spoofability caps. Model prose is never finding authority.",
       graphStandard:
         "The search graph records actual frontier execution, including rejected and exhausted paths. Best-first path scores guide which legal action runs next but never increase finding confidence.",
       safetyNote:

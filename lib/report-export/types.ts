@@ -59,16 +59,50 @@ export interface ReportCandidateView {
   findingIds: string[];
   sourceDomains: string[];
   directSourceCount: number;
+  /** Direct, admitted supporting families. Discovery-only rows do not count. */
+  supportingSourceFamilies: string[];
+  /** Organization, role, or location signals grounded by direct support. */
+  matchedContextSignals: string[];
+  /** True only when every direct supporting observation remains spoofable. */
+  allSupportingEvidenceSpoofable: boolean;
+  /** Bounded candidate-bound claims with stable evidence references. */
+  profileFacts: ReportProfileFactView[];
 }
+
+export interface ReportProfileFactView {
+  claim: string;
+  evidenceRef: string;
+  source: ReportCitedSource | null;
+}
+
+export type ReportIdentityDecisionLabel =
+  | "High-confidence match"
+  | "Resolved match"
+  | "Best-supported candidate"
+  | "Leading query branch"
+  | "Competing candidates"
+  | "No eligible candidate";
 
 export interface ReportIdentityView {
   status: "resolved" | "ambiguous" | "unresolved";
   selected: ReportCandidateView | null;
+  /** Highest-ranked profile for presentation; formal resolution still lives in `selected`. */
+  lead: ReportCandidateView | null;
+  decisionLabel: ReportIdentityDecisionLabel;
+  missingCorroboration: string[];
   /** At most five highest-ranked, separately retained candidate dossiers. */
   profiles: ReportCandidateView[];
   alternatives: ReportCandidateView[];
   retainedCandidateCount: number;
   runnerUpMargin: number;
+  resolutionBasis: "candidate_score" | "context_corroboration";
+  resolutionScore: number;
+  resolutionMargin: number;
+  /** Exact direct-source families used by the identity decision, not every dossier source. */
+  resolutionSourceFamilies: string[];
+  resolutionContextKeys: string[];
+  resolutionEvidenceRefs: string[];
+  allResolutionEvidenceSpoofable: boolean;
   resolutionThreshold: number;
   marginThreshold: number;
   rationale: string;

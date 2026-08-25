@@ -795,6 +795,7 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
   illegalAnchor.output.identity = domain.resolveIdentity(
     illegalAnchor.output.candidates,
     illegalAnchor.output.evidence,
+    illegalAnchor.output.target,
   );
   syncTerminalReport(illegalAnchor);
   assert.throws(() => replay.validateReplayBundle("chris-anderson-ted", illegalAnchor), /stop-illegal/i);
@@ -822,6 +823,76 @@ test("replay hydration enforces goal legality, empty gaps, and canonical termina
   assert.throws(
     () => replay.validateReplayBundle("python-creator", forgedConfidence),
     /confidence metadata does not match deterministic evidence assessment/i,
+  );
+
+  const forgedContextResolution = rawReplay(replay.getReplayExample("python-creator"));
+  const selectedEvidence = forgedContextResolution.output.evidence.filter(
+    (evidence) => evidence.candidateId === forgedContextResolution.output.identity.selectedCandidateId,
+  );
+  selectedEvidence[0].attributes = {
+    ...selectedEvidence[0].attributes,
+    matchedBareContextPhrase: "Injected Context",
+    matchedBareContextRelation: "professional",
+  };
+  Object.assign(forgedContextResolution.output.identity, {
+    resolutionBasis: "context_corroboration",
+    resolutionScore: 0.9,
+    runnerUpResolutionScore: forgedContextResolution.output.identity.runnerUpScore,
+    resolutionMargin: domain.roundScore(0.9 - forgedContextResolution.output.identity.runnerUpScore),
+    contextDecision: "resolved_eligible",
+    resolutionEvidenceIds: selectedEvidence.map((evidence) => evidence.id).sort(),
+    resolutionSourceFamilies: [...new Set(selectedEvidence.map((evidence) => evidence.sourceFamily))].sort(),
+    resolutionContextKeys: ["bio_phrase:injected context", "name:guido van rossum"],
+  });
+  syncTerminalReport(forgedContextResolution);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", forgedContextResolution),
+    /contextual identity resolution does not match exact candidate-bound evidence|identity selection or runner-up margin does not match candidate ranking/i,
+  );
+
+  const forgedCrossSourceTuple = rawReplay(replay.getReplayExample("python-creator"));
+  const selectedCandidate = forgedCrossSourceTuple.output.candidates.find(
+    (candidate) => candidate.id === forgedCrossSourceTuple.output.identity.selectedCandidateId,
+  );
+  const pythonEvidence = forgedCrossSourceTuple.output.evidence.find(
+    (evidence) => evidence.candidateId === selectedCandidate.id && evidence.sourceFamily === "python.org",
+  );
+  const profileEvidence = forgedCrossSourceTuple.output.evidence.find(
+    (evidence) => evidence.candidateId === selectedCandidate.id && evidence.sourceFamily === "github.io",
+  );
+  pythonEvidence.claim = "Guido van Rossum, Python's creator, worked at Northstar Labs.";
+  pythonEvidence.excerpt = pythonEvidence.claim;
+  pythonEvidence.normalizedClaim = domain.normalizeComparable(pythonEvidence.claim);
+  pythonEvidence.attributes = {
+    ...pythonEvidence.attributes,
+    untrustedContent: true,
+    extractedSubjectName: "Guido van Rossum",
+    extractedOrganization: "Northstar Labs",
+  };
+  profileEvidence.claim =
+    "Guido van Rossum is the creator of the Python programming language and worked at Meridian Collective.";
+  profileEvidence.excerpt = profileEvidence.claim;
+  profileEvidence.normalizedClaim = domain.normalizeComparable(profileEvidence.claim);
+  profileEvidence.attributes = {
+    ...profileEvidence.attributes,
+    untrustedContent: true,
+    extractedSubjectName: "Guido van Rossum",
+    extractedOrganization: "Meridian Collective",
+  };
+  const crossSourceFamilies = [pythonEvidence.sourceFamily, profileEvidence.sourceFamily].sort();
+  selectedCandidate.signals.push({
+    kind: "cross_source_match",
+    value: `Guido van Rossum at Northstar Labs is independently quoted by ${crossSourceFamilies.join(" and ")}`,
+    normalizedValue: domain.normalizeComparable(`guido van rossum|northstar labs|${crossSourceFamilies.join("|")}`),
+    strength: "strong",
+    assurance: "corroborated",
+    sourceFamily: `cross-source:${crossSourceFamilies.join("+")}`,
+    sourceEvidenceId: pythonEvidence.id,
+  });
+  syncTerminalReport(forgedCrossSourceTuple);
+  assert.throws(
+    () => replay.validateReplayBundle("python-creator", forgedCrossSourceTuple),
+    /cross-source identity signal is not backed by two exact candidate-bound records carrying the same subject and organization tuple/i,
   );
 
   const missingBodyHash = rawReplay(example);

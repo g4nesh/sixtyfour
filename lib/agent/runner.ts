@@ -172,9 +172,9 @@ export interface CandidateSignalUpdate {
 }
 
 export interface QuarantinedCandidateBranch {
-  /** The selected candidate whose fetched lead produced this isolated branch. */
+  /** The discovery candidate whose fetched lead produced this non-merging branch. */
   parentCandidateId: string;
-  reason: "fetched_subject_unverified";
+  reason: "fetched_subject_unverified" | "bare_context_source_isolated";
   candidate: CandidateDraft;
 }
 
@@ -191,7 +191,7 @@ export interface ResearchActionResult {
   status: ActionStatus;
   data?: JsonValue | null;
   candidates?: CandidateDraft[];
-  /** Explicit, non-merging branch for fetched text that lacks a strong identity binding. */
+  /** Explicit branch for fetched text that must remain isolated from its discovery candidate. */
   candidateBranches?: QuarantinedCandidateBranch[];
   candidateSignals?: CandidateSignalUpdate[];
   evidence?: EvidenceDraft[];
@@ -2234,7 +2234,7 @@ async function synthesizeFindings(
  */
 function admitDeterministicFallbackFinding(engine: InvestigationEngine): number {
   const snapshot = engine.snapshot();
-  const identity = resolveIdentity(snapshot.candidates, snapshot.evidence);
+  const identity = resolveIdentity(snapshot.candidates, snapshot.evidence, snapshot.target);
   if (identity.status === "ambiguous" || !identity.selectedCandidate) return 0;
 
   const candidate = identity.selectedCandidate;
@@ -2485,7 +2485,8 @@ export async function* runResearch(
   let synthesisUnavailable = false;
   let finalSynthesisReservationRecorded = false;
   let qualityProbeSynthesisAttempted = false;
-  let evidenceCountAtLastSynthesis = 0;
+  let initialT1CanonicalBatchSettled = false;
+  const synthesizedUsefulEvidenceIds = new Set<string>();
   let selectedQualityProbeEntryIds = new Set<string>();
   const attemptedQualityProbeEntryIds = new Set<string>();
 
@@ -2514,9 +2515,17 @@ export async function* runResearch(
         ["queued", "mutated", "selected", "running"].includes(entry.status) && isCanonicalCompilerSearchEntry(entry),
     );
 
-  const hasUsefulDirectEvidence = (): boolean => engine.snapshot().evidence.some(isUsefulDirectSupportingEvidence);
+  const usefulDirectEvidence = (): EvidenceRecord[] =>
+    engine.snapshot().evidence.filter(isUsefulDirectSupportingEvidence);
 
-  const hasUnsynthesizedEvidence = (): boolean => engine.snapshot().evidence.length > evidenceCountAtLastSynthesis;
+  const hasUsefulDirectEvidence = (): boolean => usefulDirectEvidence().length > 0;
+
+  const hasUnsynthesizedUsefulEvidence = (): boolean =>
+    usefulDirectEvidence().some((evidence) => !synthesizedUsefulEvidenceIds.has(evidence.id));
+
+  const markUsefulEvidenceSynthesized = (): void => {
+    for (const evidence of usefulDirectEvidence()) synthesizedUsefulEvidenceIds.add(evidence.id);
+  };
 
   const qualityProbeProducedUsefulDirectEvidence = (): boolean => {
     if (attemptedQualityProbeEntryIds.size === 0) return false;
@@ -2542,7 +2551,7 @@ export async function* runResearch(
     )
       return false;
     const state = engine.snapshot();
-    if (state.evidence.length <= evidenceCountAtLastSynthesis) return false;
+    if (!hasUnsynthesizedUsefulEvidence()) return false;
     const remainingLlmCalls = Math.max(0, state.budget.limits.maxLlmCalls - state.budget.usage.llmCalls);
     const pendingFinite = pendingFiniteEvidenceFrontier();
     const pendingOpaqueLeadFetch = pendingFinite.some(isOpaqueCandidateLeadFetchEntry);
@@ -2566,7 +2575,7 @@ export async function* runResearch(
           remainingToolCalls <= nextBatchCapacity ||
           remainingEvidenceAttempts <= nextBatchCapacity ||
           remainingNetworkRequests <= nextBatchCapacity * 2 + 1));
-    return synthesisCapacityAtRisk && state.evidence.length > 0 && (pendingOpaqueLeadFetch || noFiniteEvidenceFrontier);
+    return synthesisCapacityAtRisk && (pendingOpaqueLeadFetch || noFiniteEvidenceFrontier);
   };
 
   const recordFinalSynthesisReservation = (): void => {
@@ -2672,7 +2681,12 @@ export async function* runResearch(
               payload: { cappedPhase, nextPhase: next },
             });
             engine.transition(next);
-            if (engine.phase === "calibrate" && !synthesisUnavailable && hasUnsynthesizedEvidence()) {
+            if (
+              engine.phase === "calibrate" &&
+              !synthesisUnavailable &&
+              !hasActiveCanonicalSearch() &&
+              hasUnsynthesizedUsefulEvidence()
+            ) {
               return { route: "synthesize" };
             }
           } else {
@@ -2696,14 +2710,20 @@ export async function* runResearch(
           state.input.requestedDepth === "deep" &&
           attemptedQualityProbeEntryIds.size < 2 &&
           !qualityProbeProducedUsefulDirectEvidence();
+        const interleavePriorityProbe =
+          qualityProbeSelectionEnabled &&
+          initialT1CanonicalBatchSettled &&
+          attemptedQualityProbeEntryIds.size === 0 &&
+          hasActiveCanonicalSearch();
         const selection = selectFrontierBatch(graph, limit, engine.clock.now(), {
-          // Deep investigations reserve finite compiler breadth. Once a
-          // provider search exposes many candidate links, hold those optional
-          // fetch pivots until every still-legal canonical query has reached
-          // the search adapter once. Exact T0 and exact-URL dependencies keep
-          // their normal tier/dependency precedence in the kernel.
+          // Deep investigations reserve finite compiler breadth. After the
+          // first T1 batch, one persisted-priority quality probe may run; all
+          // remaining optional fetch pivots wait until every still-legal
+          // canonical query has reached the search adapter once. Exact T0 and
+          // exact-URL dependencies keep their normal precedence.
           reserveCanonicalCompilerBreadth: state.input.requestedDepth === "deep",
           prioritizeDiscoveryLeadProbe: qualityProbeSelectionEnabled,
+          interleaveOnePrioritizedProbeDuringCanonicalBreadth: interleavePriorityProbe,
           maxPrioritizedDiscoveryLeadProbes: 2,
           attemptedPrioritizedDiscoveryLeadProbeEntryIds: attemptedQualityProbeEntryIds,
           discoveryLeadContexts,
@@ -2742,7 +2762,7 @@ export async function* runResearch(
             });
           }
           engine.replaceSearchGraph(graph);
-          if (!synthesisUnavailable && hasUnsynthesizedEvidence() && advanceToCalibrate()) {
+          if (!synthesisUnavailable && hasUnsynthesizedUsefulEvidence() && advanceToCalibrate()) {
             return { route: "synthesize", selectedFrontierEntryIds: [] };
           }
           finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
@@ -2854,6 +2874,20 @@ export async function* runResearch(
           options.signal,
         );
         graph = batch.graph;
+        if (
+          !initialT1CanonicalBatchSettled &&
+          batch.executedEntries.some((entry) => entry.sourceTier === 1 && isCanonicalCompilerSearchEntry(entry))
+        ) {
+          initialT1CanonicalBatchSettled = true;
+          engine.trace.record("scheduler.initial_t1_canonical_batch_settled", {
+            phase: engine.phase,
+            payload: {
+              canonicalEntryCount: batch.executedEntries.filter(
+                (entry) => entry.sourceTier === 1 && isCanonicalCompilerSearchEntry(entry),
+              ).length,
+            },
+          });
+        }
         turnMutations += batch.mutations;
         return { route: "admit_expand", mutations: turnMutations };
       },
@@ -2899,6 +2933,7 @@ export async function* runResearch(
           !synthesisUnavailable &&
           dependencies.synthesize &&
           qualityProbeProducedUsefulDirectEvidence() &&
+          !hasActiveCanonicalSearch() &&
           engine.canAttemptLlm() &&
           advanceToCalibrate()
         ) {
@@ -2931,7 +2966,7 @@ export async function* runResearch(
             return { route: "synthesize" };
           }
           if (pendingFinite.length > 0) return { route: "select_frontier" };
-          if (!synthesisUnavailable && hasUnsynthesizedEvidence()) return { route: "synthesize" };
+          if (!synthesisUnavailable && hasUnsynthesizedUsefulEvidence()) return { route: "synthesize" };
           if (hasPendingFrontier()) return { route: "select_frontier" };
           finish(evaluateStop(engine.snapshot(), { noLegalActions: true }), { noLegalActions: true });
           return { route: "terminal" };
@@ -2951,7 +2986,7 @@ export async function* runResearch(
             route:
               next === "calibrate" &&
               !synthesisUnavailable &&
-              hasUnsynthesizedEvidence() &&
+              hasUnsynthesizedUsefulEvidence() &&
               (pendingFinite.length === 0 || reservedFinalSynthesis)
                 ? "synthesize"
                 : "select_frontier",
@@ -2972,7 +3007,7 @@ export async function* runResearch(
         const synthesis = synthesisUnavailable
           ? ({ mutations: 0, outcome: "unavailable" } as const)
           : await synthesizeFindings(engine, dependencies, options.signal);
-        evidenceCountAtLastSynthesis = engine.snapshot().evidence.length;
+        markUsefulEvidenceSynthesized();
         if (synthesis.outcome !== "succeeded") synthesisUnavailable = true;
         const deterministic = synthesis.outcome === "unavailable" ? admitDeterministicFallbackFinding(engine) : 0;
         graph = admitMissingFindingNodes(engine, graph);

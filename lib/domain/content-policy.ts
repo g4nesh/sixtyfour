@@ -569,6 +569,17 @@ function minorAgeLike(value: string, currentYear: number): boolean {
     if (Number(match[2]) < 18 && !NON_PERSON_AGE_SUBJECTS.has(match[1].toLocaleLowerCase("en-US"))) return true;
   }
   for (const match of normalizedAges.matchAll(
+    /\b(?:i\s+am|i['’]m|[A-Z][\p{L}'’-]*(?:\s+[A-Z][\p{L}'’-]*){0,3}\s+(?:is|was))\s+(\d{1,2})(?:\s*y\/?o|[- ]?years?[- ]?old)\b/giu,
+  )) {
+    if (Number(match[1]) < 18) return true;
+  }
+  if (
+    /\b(?:i\s+am|i['’]m|[A-Z][\p{L}'’-]*(?:\s+[A-Z][\p{L}'’-]*){0,3}\s+(?:is|was))\s+(?:an?\s+)?(?:minor|underage|under[- ]?18)\b/iu.test(
+      normalizedAges,
+    )
+  )
+    return true;
+  for (const match of normalizedAges.matchAll(
     /\b(?:[A-Z][\p{L}'’-]*(?:\s+[A-Z][\p{L}'’-]*)?|[Hh]e|[Ss]he|[Tt]hey|founder|developer|student|researcher|engineer|executive)\s*,?\s+(?:is\s+)?(?:age|aged)\s+(\d{1,2})\b/gu,
   )) {
     if (Number(match[1]) < 18) return true;
@@ -585,13 +596,19 @@ function minorAgeLike(value: string, currentYear: number): boolean {
   }
   for (const match of normalizedAges.matchAll(/\bborn\s+(?:(?:in|on)\s+)?((?:19|20)\d{2})\b/gi)) {
     const year = Number(match[1]);
-    if (year <= currentYear && currentYear - year < 18) return true;
+    // A year-only birth date cannot prove that the 18th birthday has passed.
+    if (year <= currentYear && currentYear - year <= 18) return true;
   }
   for (const match of normalizedAges.matchAll(/\b(?:dob|date\s+of\s+birth)\s*(?::|=|-|is)?\s*((?:19|20)\d{2})\b/gi)) {
     const year = Number(match[1]);
-    if (year <= currentYear && currentYear - year < 18) return true;
+    if (year <= currentYear && currentYear - year <= 18) return true;
   }
   return false;
+}
+
+/** Explicit present-minor markers used to fail closed on a bounded profile. */
+export function containsExplicitMinorPublicContent(value: string, options: ContentPolicyOptions = {}): boolean {
+  return minorAgeLike(value.normalize("NFKC"), options.currentYear ?? new Date().getUTCFullYear());
 }
 
 /** Fail-closed final-output policy for content, independent of field names. */

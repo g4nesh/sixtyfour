@@ -1,5 +1,5 @@
 import type { Clock, IdFactory } from "./runtime";
-import { clamp, normalizeComparable, normalizeWhitespace } from "./runtime";
+import { clamp, normalizeComparable, normalizeLabelTokens, normalizeWhitespace } from "./runtime";
 import {
   containsRestrictedPublicContent,
   restrictedJsonContentPaths,
@@ -73,7 +73,7 @@ function isValidPassiveMetadataObservation(draft: EvidenceDraft): boolean {
   );
 }
 
-function registrableFamily(hostname: string): string {
+export function registrableFamily(hostname: string): string {
   const host = hostname
     .toLocaleLowerCase("en-US")
     .replace(/^(?:www\d*|m|amp)\./, "")
@@ -82,6 +82,91 @@ function registrableFamily(hostname: string): string {
   if (labels.length <= 2 || host === "localhost") return host;
   const suffix = labels.slice(-2).join(".");
   return COMMON_TWO_PART_SUFFIXES.has(suffix) ? labels.slice(-3).join(".") : labels.slice(-2).join(".");
+}
+
+const PERSONAL_PROFILE_ROUTE_TOKENS = new Set(["about", "bio", "biography", "profile", "profiles"]);
+const NON_PERSON_PROFILE_ROUTE_TOKENS = new Set([
+  "article",
+  "articles",
+  "blog",
+  "blogs",
+  "document",
+  "documents",
+  "news",
+  "post",
+  "posts",
+  "publication",
+  "publications",
+  "report",
+  "reports",
+  "search",
+  "story",
+  "stories",
+]);
+
+/**
+ * Recompute the narrow personal-page shape used by bare-context education
+ * evidence. Subdomains never qualify on their own: the compact person label
+ * must be the registrable-domain label, while the fetched title and profile
+ * route must independently match. This predicate classifies no source and
+ * grants no trust.
+ */
+export function isExactPersonalProfilePageScope(
+  sourceUrl: string,
+  fetchedTitle: string | null | undefined,
+  subjectName: string,
+): boolean {
+  if (!sourceUrl || sourceUrl.length > 2_048 || !fetchedTitle || !subjectName) return false;
+  let url: URL;
+  try {
+    url = new URL(sourceUrl);
+  } catch {
+    return false;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    (url.port && url.port !== "443") ||
+    url.search ||
+    url.hash
+  )
+    return false;
+
+  let decodedPath = url.pathname;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const decoded = decodeURIComponent(decodedPath);
+      if (decoded === decodedPath) break;
+      decodedPath = decoded;
+    } catch {
+      return false;
+    }
+  }
+  if (decodedPath.length > 1_024) return false;
+  const routeTokens = decodedPath
+    .split("/")
+    .filter(Boolean)
+    .flatMap((segment) => normalizeLabelTokens(segment).split(" ").filter(Boolean));
+  if (
+    routeTokens.length === 0 ||
+    routeTokens.length > 12 ||
+    !routeTokens.some((token) => PERSONAL_PROFILE_ROUTE_TOKENS.has(token)) ||
+    routeTokens.some((token) => NON_PERSON_PROFILE_ROUTE_TOKENS.has(token))
+  )
+    return false;
+
+  const normalizedSubject = normalizeLabelTokens(subjectName);
+  const compactSubject = normalizedSubject.replaceAll(" ", "");
+  const registrableLabel = normalizeLabelTokens(registrableFamily(url.hostname).split(".")[0] ?? "").replaceAll(
+    " ",
+    "",
+  );
+  return (
+    compactSubject.length >= 3 &&
+    registrableLabel === compactSubject &&
+    normalizeLabelTokens(fetchedTitle) === normalizedSubject
+  );
 }
 
 function unwrapWayback(url: URL): URL | undefined {

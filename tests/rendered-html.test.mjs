@@ -268,6 +268,10 @@ test("graph components preserve canonical state, accessible fallbacks, and clien
   assert.match(report, /Web discovery path/);
   assert.match(report, /Structured indexes/);
   assert.match(report, /not cited sources until hardened fetch succeeds/);
+  assert.match(report, /Candidate assessment/);
+  assert.match(report, /Best-supported candidate/);
+  assert.match(report, /Formal identity status/);
+  assert.match(report, /Cited profile facts/);
   assert.doesNotMatch(report, /selectedCandidate.*filter|candidateId.*filter/);
 
   assert.match(css, /--atlas-bg:\s*#030604/);

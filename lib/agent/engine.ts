@@ -3,6 +3,7 @@ import {
   addCandidateSignals as appendCandidateSignals,
   canMergeCandidates,
   createCandidate,
+  crossSourceEvidenceIdentityTuple,
   identitySignalGroundedByEvidence,
   mergeCandidates,
 } from "../domain/candidates";
@@ -10,13 +11,7 @@ import { admitEvidence as evaluateEvidenceAdmission } from "../domain/evidence";
 import { createFinding, validateReferentialIntegrity } from "../domain/integrity";
 import { buildInvestigationReport } from "../domain/report";
 import type { Clock, IdFactory } from "../domain/runtime";
-import {
-  cloneJson,
-  labelOccursAsTokenPhrase,
-  normalizeComparable,
-  normalizeLabelTokens,
-  normalizeOrganizationIdentity,
-} from "../domain/runtime";
+import { cloneJson, normalizeComparable } from "../domain/runtime";
 import { classifySafety } from "../domain/safety";
 import { containsRestrictedPublicContent } from "../domain/content-policy";
 import { assertPhaseTransition } from "../domain/state-machine";
@@ -60,32 +55,6 @@ export interface CandidateMutation {
   candidate: Candidate;
   created: boolean;
   mergedInto?: string;
-}
-
-function evidenceIdentityAttribute(
-  evidence: InvestigationState["evidence"][number],
-  key: "extractedSubjectName" | "extractedOrganization",
-): string | null {
-  const value = evidence.attributes[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function evidenceCarriesIdentityLabels(
-  evidence: InvestigationState["evidence"][number],
-  subject: string,
-  organization: string,
-): boolean {
-  const subjectLabel =
-    typeof evidence.attributes.extractedSubjectLabel === "string" ? evidence.attributes.extractedSubjectLabel : subject;
-  const organizationLabel =
-    typeof evidence.attributes.extractedOrganizationLabel === "string"
-      ? evidence.attributes.extractedOrganizationLabel
-      : organization;
-  return Boolean(
-    evidence.excerpt &&
-    labelOccursAsTokenPhrase(evidence.excerpt, subjectLabel) &&
-    labelOccursAsTokenPhrase(evidence.excerpt, organizationLabel),
-  );
 }
 
 function withoutUnverifiedSourceProvenance(signal: IdentitySignal): IdentitySignal {
@@ -347,42 +316,26 @@ export class InvestigationEngine {
   }
 
   #reconcileCrossSourceIdentity(record: InvestigationState["evidence"][number]): void {
-    if (
-      record.disposition !== "supports" ||
-      record.verificationMethod !== "direct_fetch" ||
-      record.attributes.untrustedContent !== true
-    )
-      return;
-    const subject = evidenceIdentityAttribute(record, "extractedSubjectName");
-    const organization = evidenceIdentityAttribute(record, "extractedOrganization");
-    if (!subject || !organization) return;
     const candidate = this.#state.candidates.find((item) => item.id === record.candidateId);
-    if (
-      !candidate ||
-      candidate.signals.some((signal) => signal.kind === "conflict" && signal.strength === "strong") ||
-      normalizeLabelTokens(candidate.displayName) !== normalizeLabelTokens(subject) ||
-      !evidenceCarriesIdentityLabels(record, subject, organization)
-    )
+    if (!candidate || candidate.signals.some((signal) => signal.kind === "conflict" && signal.strength === "strong"))
       return;
+    const tuple = crossSourceEvidenceIdentityTuple(record, candidate);
+    if (!tuple) return;
 
-    const organizationKey = normalizeOrganizationIdentity(organization);
-    const prior = this.#state.evidence.find(
-      (item) =>
-        item.id !== record.id &&
-        item.candidateId === record.candidateId &&
-        item.disposition === "supports" &&
-        item.verificationMethod === "direct_fetch" &&
-        item.attributes.untrustedContent === true &&
-        item.sourceFamily !== record.sourceFamily &&
-        evidenceIdentityAttribute(item, "extractedSubjectName") === subject &&
-        normalizeOrganizationIdentity(evidenceIdentityAttribute(item, "extractedOrganization") ?? "") ===
-          organizationKey &&
-        evidenceCarriesIdentityLabels(item, subject, organization),
-    );
+    const prior = this.#state.evidence.find((item) => {
+      if (item.id === record.id || item.sourceFamily === record.sourceFamily) return false;
+      const priorTuple = crossSourceEvidenceIdentityTuple(item, candidate);
+      return (
+        priorTuple?.normalizedSubject === tuple.normalizedSubject &&
+        priorTuple.normalizedOrganization === tuple.normalizedOrganization
+      );
+    });
     if (!prior) return;
 
     const families = [prior.sourceFamily, record.sourceFamily].sort();
-    const normalizedValue = `${normalizeComparable(subject)}|${organizationKey}|${families.join("|")}`;
+    const normalizedValue = normalizeComparable(
+      `${tuple.normalizedSubject}|${tuple.normalizedOrganization}|${families.join("|")}`,
+    );
     if (
       candidate.signals.some(
         (signal) => signal.kind === "cross_source_match" && signal.normalizedValue === normalizedValue,
@@ -392,7 +345,7 @@ export class InvestigationEngine {
     this.#applyCandidateSignals(record.candidateId, [
       {
         kind: "cross_source_match",
-        value: `${subject} at ${organization} is independently quoted by ${families.join(" and ")}`,
+        value: `${tuple.subject} at ${tuple.organization} is independently quoted by ${families.join(" and ")}`,
         normalizedValue,
         strength: "strong",
         assurance: "corroborated",
@@ -584,7 +537,12 @@ export class InvestigationEngine {
 
   #commitStop(reason: StopReason, detail: string, status?: TerminalStatus): void {
     this.#ensureRunning();
-    const canonicalStatus = terminalStatusForStop(reason, this.#state.candidates);
+    const canonicalStatus = terminalStatusForStop(
+      reason,
+      this.#state.candidates,
+      this.#state.evidence,
+      this.#state.target,
+    );
     const safeDetail = containsRestrictedPublicContent(detail, this.#publicContentOptions())
       ? "Terminal detail was removed by the public-professional safety policy."
       : detail;

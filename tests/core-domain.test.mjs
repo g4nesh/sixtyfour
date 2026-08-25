@@ -220,6 +220,62 @@ test("target parsing retains bounded public-professional context for mononyms, r
   }
 });
 
+test("bare name-context hypotheses preserve the full primary name and guard multipart names", () => {
+  const target = domain.parseTarget("alex rivera meridian collective");
+  assert.equal(target.name, "Alex Rivera Meridian Collective");
+  assert.deepEqual(domain.bareNameContextHypotheses(target), [
+    {
+      subjectName: "Alex Rivera",
+      normalizedSubjectName: "alex rivera",
+      contextPhrase: "Meridian Collective",
+      normalizedContextPhrase: "meridian collective",
+    },
+  ]);
+  for (const multipartName of ["ludwig van beethoven society", "jean claude van damme", "juan carlos de la vega"]) {
+    assert.deepEqual(domain.bareNameContextHypotheses(domain.parseTarget(multipartName)), [], multipartName);
+  }
+  assert.deepEqual(domain.bareNameContextHypotheses(domain.parseTarget("alex rivera central high school")), []);
+  for (const excerpt of [
+    "Jane Doe is a student researcher at Meridian Academy.",
+    "Meridian Academy enrolls Jane Doe as a pupil.",
+    "Meridian Academy's grade 11 robotics team includes Jane Doe.",
+    "Jane Doe joined the robotics club at Meridian Academy.",
+    "Jane Doe researches at Meridian Academy.",
+    "Jane Doe joined Meridian Academy.",
+    "Jane Doe is an intern at Meridian Academy.",
+    "Jane Doe attended Meridian Academy.",
+    "Jane Doe says Bob Chen worked at Meridian Academy.",
+    "Jane Doe says Bob Chen graduated from Meridian Academy.",
+    "Meridian Academy employed Bob Chen, according to Jane Doe.",
+  ]) {
+    assert.equal(domain.matchBareContextRelation(excerpt, "Jane Doe", "Meridian Academy"), null, excerpt);
+  }
+  assert.equal(
+    domain.matchBareContextRelation("Jane Doe graduated from Meridian Academy.", "Jane Doe", "Meridian Academy"),
+    "alumni",
+  );
+  assert.equal(
+    domain.matchBareContextRelation("Meridian Academy alumna Jane Doe.", "Jane Doe", "Meridian Academy"),
+    "alumni",
+  );
+  assert.equal(
+    domain.matchBareContextRelation(
+      "Jane Doe worked as an engineer at Meridian Academy.",
+      "Jane Doe",
+      "Meridian Academy",
+    ),
+    "professional",
+  );
+  assert.equal(
+    domain.matchBareContextRelation(
+      "Meridian Academy employed Jane Doe as an engineer.",
+      "Jane Doe",
+      "Meridian Academy",
+    ),
+    "professional",
+  );
+});
+
 test("safety policy permits public professional research and blocks dangerous scope expansions", () => {
   assert.equal(domain.classifySafety("Henry Wang, Sixtyfour AI").level, "allow");
   assert.equal(domain.classifySafety("andrew.goering@ramp.com").level, "caution");
@@ -309,6 +365,901 @@ test("same-name candidates stay separate until a strong verified identifier matc
   const withEmailOne = domain.addCandidateSignals(first, [sharedEmail], target, clock.now());
   const withEmailTwo = domain.addCandidateSignals(second, [sharedEmail], target, clock.now());
   assert.equal(domain.canMergeCandidates(withEmailOne, withEmailTwo).allowed, true);
+});
+
+test("overlapping cross-source family pairs count as one derived identity feature", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs");
+  const signal = (left, right, index) => ({
+    kind: "cross_source_match",
+    value: `Alex Rivera at Northstar Labs is independently quoted by ${left} and ${right}`,
+    normalizedValue: `alex rivera|northstar labs|${left}|${right}`,
+    strength: "strong",
+    assurance: "corroborated",
+    sourceFamily: `cross-source:${left}+${right}`,
+    sourceEvidenceId: `evidence-cross-source-${index}`,
+  });
+  const first = signal("alpha.example", "beta.example", 1);
+  const overlapping = [first, signal("alpha.example", "gamma.example", 2), signal("beta.example", "gamma.example", 3)];
+  const singleScore = domain.scoreCandidate({ displayName: "Alex Rivera", signals: [first] }, target);
+  const overlappingScore = domain.scoreCandidate({ displayName: "Alex Rivera", signals: overlapping }, target);
+
+  assert.equal(overlappingScore.total, singleScore.total);
+  assert.deepEqual(overlappingScore.independentFamilies, singleScore.independentFamilies);
+});
+
+test("cross-source identity provenance requires the same exact subject-organization tuple", () => {
+  const buildBranch = (suffix, organizations) => {
+    const target = domain.parseTarget("Alex Rivera, Northstar Labs");
+    const clock = domain.createSequenceClock();
+    const ids = domain.createDeterministicIdFactory(`cross-source-${suffix}`);
+    let candidate = domain.createCandidate(
+      { displayName: "Alex Rivera" },
+      target,
+      `candidate-cross-source-${suffix}`,
+      clock.now(),
+    );
+    const evidence = [];
+    for (const [index, organization] of organizations.entries()) {
+      const excerpt = `Alex Rivera works at ${organization}.`;
+      const admission = domain.admitEvidence(
+        {
+          candidateId: candidate.id,
+          claim: excerpt,
+          sourceUrl: `https://${index === 0 ? "alpha" : "beta"}.example/alex-rivera`,
+          sourceType: "public_document",
+          excerpt,
+          reliability: 0.7,
+          spoofable: true,
+          httpStatus: 200,
+          contentHash: `sha256:${String(index + 11).padStart(64, "0")}`,
+          toolCallId: `cross-source-${suffix}-action-${index}`,
+          verificationMethod: "direct_fetch",
+          attributes: {
+            untrustedContent: true,
+            extractedSubjectName: "Alex Rivera",
+            extractedOrganization: organization,
+          },
+        },
+        { candidateIds: new Set([candidate.id]), existing: evidence, ids, clock },
+      );
+      assert.equal(admission.admitted, true);
+      evidence.push(admission.evidence);
+    }
+    candidate = { ...candidate, evidenceIds: evidence.map((record) => record.id).sort() };
+    const families = evidence.map((record) => record.sourceFamily).sort();
+    const source = evidence.find((record) => record.sourceFamily === families[0]);
+    const organization = organizations[0];
+    candidate = domain.addCandidateSignals(
+      candidate,
+      [
+        {
+          kind: "cross_source_match",
+          value: `Alex Rivera at ${organization} is independently quoted by ${families.join(" and ")}`,
+          normalizedValue: domain.normalizeComparable(`alex rivera|${organization}|${families.join("|")}`),
+          strength: "strong",
+          assurance: "corroborated",
+          sourceFamily: `cross-source:${families.join("+")}`,
+          sourceEvidenceId: source.id,
+        },
+      ],
+      target,
+      clock.now(),
+    );
+    return { target, candidate, evidence };
+  };
+
+  const valid = buildBranch("valid", ["Northstar Labs", "Northstar Labs"]);
+  assert.equal(
+    domain
+      .validateReferentialIntegrity({ ...valid, candidates: [valid.candidate], findings: [] })
+      .some((issue) => issue.code === "candidate_signal_provenance_mismatch"),
+    false,
+  );
+
+  const forged = buildBranch("forged", ["Northstar Labs", "Meridian Collective"]);
+  assert.equal(
+    domain
+      .validateReferentialIntegrity({ ...forged, candidates: [forged.candidate], findings: [] })
+      .some((issue) => issue.code === "candidate_signal_provenance_mismatch"),
+    true,
+  );
+});
+
+function createContextCandidateBranch({ target, candidateId, sources, ids, clock }) {
+  let candidate = domain.createCandidate({ displayName: "Alex Rivera" }, target, candidateId, clock.now());
+  const evidence = sources.map((source, index) => {
+    const admission = domain.admitEvidence(
+      {
+        candidateId,
+        claim: source.excerpt,
+        sourceUrl: source.url,
+        sourceType: source.sourceType,
+        excerpt: source.excerpt,
+        disposition: source.disposition ?? "supports",
+        reliability: source.reliability ?? 0.55,
+        spoofable: source.spoofable ?? true,
+        httpStatus: 200,
+        contentHash: `sha256:${String(index + 1).padStart(64, "0")}`,
+        toolCallId: `${candidateId}-action-${index}`,
+        verificationMethod: "direct_fetch",
+      },
+      { candidateIds: new Set([candidateId]), existing: [], ids, clock },
+    );
+    assert.equal(admission.admitted, true);
+    return admission.evidence;
+  });
+  candidate = { ...candidate, evidenceIds: evidence.map((record) => record.id).sort() };
+  const signals = evidence
+    .filter((record) => record.disposition === "supports")
+    .flatMap((record) => [
+      {
+        kind: "name",
+        value: "Alex Rivera",
+        normalizedValue: "alex rivera",
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: record.sourceFamily,
+        sourceEvidenceId: record.id,
+      },
+      {
+        kind: "organization",
+        value: "Northstar Labs",
+        normalizedValue: "northstar labs",
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: record.sourceFamily,
+        sourceEvidenceId: record.id,
+      },
+      ...(record.excerpt.includes("Researcher")
+        ? [
+            {
+              kind: "role",
+              value: "Researcher",
+              normalizedValue: "researcher",
+              strength: "strong",
+              assurance: "spoofable",
+              sourceFamily: record.sourceFamily,
+              sourceEvidenceId: record.id,
+            },
+          ]
+        : []),
+      ...(record.excerpt.includes("Mesa")
+        ? [
+            {
+              kind: "location",
+              value: "Mesa",
+              normalizedValue: "mesa",
+              strength: "strong",
+              assurance: "spoofable",
+              sourceFamily: record.sourceFamily,
+              sourceEvidenceId: record.id,
+            },
+          ]
+        : []),
+    ]);
+  candidate = domain.addCandidateSignals(candidate, signals, target, clock.now());
+  return { candidate, evidence };
+}
+
+test("two direct families with an authoritative route resolve exact requested context", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs, Researcher, in Mesa");
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("context-resolved");
+  const branch = createContextCandidateBranch({
+    target,
+    candidateId: "candidate-context-resolved",
+    ids,
+    clock,
+    sources: [
+      {
+        url: "https://northstar.example/team/alex-rivera",
+        sourceType: "company_page",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+        spoofable: false,
+      },
+      {
+        url: "https://civic-records.example/profiles/alex-rivera",
+        sourceType: "official_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+    ],
+  });
+
+  const corroboration = domain.assessCandidateContextCorroboration(branch.candidate, branch.evidence, target);
+  assert.ok(corroboration);
+  assert.deepEqual(corroboration.sourceFamilies, ["civic-records.example", "northstar.example"]);
+  assert.deepEqual(corroboration.authoritativeSourceFamilies, ["civic-records.example", "northstar.example"]);
+  assert.equal(corroboration.allSourcesSpoofable, false);
+  assert.equal(corroboration.decision, "resolved_eligible");
+  assert.ok(corroboration.score >= domain.IDENTITY_RESOLUTION_THRESHOLD);
+  const identity = domain.resolveIdentity([branch.candidate], branch.evidence, target);
+  assert.equal(identity.status, "resolved");
+  assert.equal(identity.resolutionBasis, "context_corroboration");
+  assert.equal(identity.contextDecision, "resolved_eligible");
+  assert.deepEqual(identity.resolutionEvidenceIds, corroboration.evidenceIds);
+  assert.deepEqual(identity.resolutionSourceFamilies, corroboration.sourceFamilies);
+  assert.deepEqual(identity.resolutionContextKeys, corroboration.matchedContextKeys);
+  assert.equal(
+    domain.reportTelemetry({
+      candidates: [branch.candidate],
+      evidence: branch.evidence,
+      findings: [],
+      evidenceTelemetry: {
+        admitted: branch.evidence.length,
+        rejected: 0,
+        duplicate: 0,
+        discoveryOnly: 0,
+        supporting: branch.evidence.length,
+        contradicting: 0,
+      },
+      target,
+    }).resolvedCandidateCount,
+    1,
+  );
+  assert.equal(
+    domain.terminalStatusForStop("budget_exhausted", [branch.candidate], branch.evidence, target),
+    "partial",
+  );
+  assert.deepEqual(
+    domain.validateReferentialIntegrity({
+      candidates: [branch.candidate],
+      evidence: branch.evidence,
+      findings: [],
+      target,
+      identity,
+    }),
+    [],
+  );
+  const forgedIdentity = {
+    ...identity,
+    resolutionContextKeys: [...identity.resolutionContextKeys, "organization:forged context"].sort(),
+  };
+  assert.ok(
+    domain
+      .validateReferentialIntegrity({
+        candidates: [branch.candidate],
+        evidence: branch.evidence,
+        findings: [],
+        target,
+        identity: forgedIdentity,
+      })
+      .some((issue) => issue.code === "identity_resolution_provenance_mismatch"),
+  );
+  const findingConfidence = domain.assessConfidence(branch.evidence);
+  assert.ok(findingConfidence.score <= domain.SPOOFABLE_CONFIDENCE_CAP);
+  assert.equal(findingConfidence.label, "moderate");
+});
+
+test("structural-looking authoritative routes remain probable when every record is spoofable", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs, Researcher, in Mesa");
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("context-spoofable-authorities");
+  const branch = createContextCandidateBranch({
+    target,
+    candidateId: "candidate-context-spoofable-authorities",
+    ids,
+    clock,
+    sources: [
+      {
+        url: "https://northstar.example/team/alex-rivera",
+        sourceType: "company_page",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+      {
+        url: "https://civic-records.example/profiles/alex-rivera",
+        sourceType: "official_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+    ],
+  });
+
+  const corroboration = domain.assessCandidateContextCorroboration(branch.candidate, branch.evidence, target);
+  assert.ok(corroboration);
+  assert.equal(corroboration.allSourcesSpoofable, true);
+  assert.deepEqual(corroboration.authoritativeSourceFamilies, ["civic-records.example", "northstar.example"]);
+  assert.equal(corroboration.decision, "probable");
+  assert.equal(corroboration.decisionBasis, "needs_nonspoofable_authority");
+  assert.ok(corroboration.score <= domain.CONTEXT_CORROBORATION_PROBABLE_CAP);
+  assert.notEqual(domain.resolveIdentity([branch.candidate], branch.evidence, target).status, "resolved");
+});
+
+test("one exact direct family is a bounded probable lead that cannot resolve", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs, Researcher, in Mesa");
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("context-one-family");
+  const branch = createContextCandidateBranch({
+    target,
+    candidateId: "candidate-context-one-family",
+    ids,
+    clock,
+    sources: [
+      {
+        url: "https://northstar.example/team/alex-rivera",
+        sourceType: "company_page",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+        spoofable: false,
+      },
+    ],
+  });
+
+  const corroboration = domain.assessCandidateContextCorroboration(branch.candidate, branch.evidence, target);
+  assert.ok(corroboration);
+  assert.equal(corroboration.decision, "probable");
+  assert.equal(corroboration.decisionBasis, "needs_second_family");
+  assert.deepEqual(corroboration.sourceFamilies, ["northstar.example"]);
+  assert.ok(corroboration.score <= domain.CONTEXT_CORROBORATION_ONE_FAMILY_CAP);
+  const identity = domain.resolveIdentity([branch.candidate], branch.evidence, target);
+  assert.notEqual(identity.status, "resolved");
+  assert.equal(identity.contextDecision, "probable");
+  assert.deepEqual(identity.resolutionSourceFamilies, ["northstar.example"]);
+});
+
+test("two self-asserted profile families remain unresolved even with exact context", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs, Researcher, in Mesa");
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("context-spoofable-only");
+  const branch = createContextCandidateBranch({
+    target,
+    candidateId: "candidate-context-spoofable-only",
+    ids,
+    clock,
+    sources: [
+      {
+        url: "https://profiles.example/alex-rivera",
+        sourceType: "professional_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+      {
+        url: "https://social.example/alex-rivera",
+        sourceType: "code_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+    ],
+  });
+
+  const corroboration = domain.assessCandidateContextCorroboration(branch.candidate, branch.evidence, target);
+  assert.ok(corroboration);
+  assert.equal(corroboration.decision, "probable");
+  assert.ok(corroboration.score < domain.IDENTITY_RESOLUTION_THRESHOLD);
+  const identity = domain.resolveIdentity([branch.candidate], branch.evidence, target);
+  assert.notEqual(identity.status, "resolved");
+  assert.equal(identity.resolutionBasis, "context_corroboration");
+  assert.equal(identity.contextDecision, "probable");
+  assert.ok(identity.resolutionScore <= domain.CONTEXT_CORROBORATION_PROBABLE_CAP);
+});
+
+test("one authoritative context family needs an independently grounded strong identifier", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs, Researcher, in Mesa");
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("context-authority-identifier");
+  const branch = createContextCandidateBranch({
+    target,
+    candidateId: "candidate-context-authority-identifier",
+    ids,
+    clock,
+    sources: [
+      {
+        url: "https://northstar.example/team/alex-rivera",
+        sourceType: "company_page",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+        spoofable: false,
+      },
+      {
+        url: "https://profiles.example/alex-rivera",
+        sourceType: "professional_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+    ],
+  });
+  const profileUrl = "https://identity.example/alex-rivera";
+  const excerpt = "Alex Rivera maintains this verified public profile.";
+  const admission = domain.admitEvidence(
+    {
+      candidateId: branch.candidate.id,
+      claim: excerpt,
+      sourceUrl: profileUrl,
+      sourceType: "official_profile",
+      excerpt,
+      reliability: 0.7,
+      spoofable: true,
+      httpStatus: 200,
+      contentHash: `sha256:${"a".repeat(64)}`,
+      toolCallId: "context-identifier-action",
+      verificationMethod: "direct_fetch",
+    },
+    {
+      candidateIds: new Set([branch.candidate.id]),
+      existing: branch.evidence,
+      ids,
+      clock,
+    },
+  );
+  assert.equal(admission.admitted, true);
+  const evidence = [...branch.evidence, admission.evidence];
+  let candidate = {
+    ...branch.candidate,
+    evidenceIds: [...branch.candidate.evidenceIds, admission.evidence.id].sort(),
+  };
+  candidate = domain.addCandidateSignals(
+    candidate,
+    [
+      {
+        kind: "profile_url",
+        value: profileUrl,
+        normalizedValue: domain.normalizeComparable(profileUrl),
+        strength: "strong",
+        assurance: "verified",
+        sourceFamily: admission.evidence.sourceFamily,
+        sourceEvidenceId: admission.evidence.id,
+      },
+    ],
+    target,
+    clock.now(),
+  );
+
+  const corroboration = domain.assessCandidateContextCorroboration(candidate, evidence, target);
+  assert.ok(corroboration);
+  assert.equal(corroboration.decision, "resolved_eligible");
+  assert.equal(corroboration.decisionBasis, "authoritative_plus_identifier");
+  assert.deepEqual(corroboration.identifierEvidenceIds, [admission.evidence.id]);
+  assert.equal(domain.resolveIdentity([candidate], evidence, target).status, "resolved");
+});
+
+test("three exact all-spoofable families remain probable without inflating finding confidence", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs, Researcher, in Mesa");
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("context-three-spoofable");
+  const branch = createContextCandidateBranch({
+    target,
+    candidateId: "candidate-context-three-spoofable",
+    ids,
+    clock,
+    sources: [
+      {
+        url: "https://profiles.example/alex-rivera",
+        sourceType: "professional_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+      {
+        url: "https://social.example/alex-rivera",
+        sourceType: "code_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+      {
+        url: "https://portfolio.example/alex-rivera",
+        sourceType: "professional_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+    ],
+  });
+
+  const corroboration = domain.assessCandidateContextCorroboration(branch.candidate, branch.evidence, target);
+  assert.ok(corroboration);
+  assert.equal(corroboration.allSourcesSpoofable, true);
+  assert.deepEqual(corroboration.authoritativeSourceFamilies, []);
+  assert.equal(corroboration.decision, "probable");
+  assert.ok(corroboration.score <= domain.CONTEXT_CORROBORATION_PROBABLE_CAP);
+  assert.notEqual(domain.resolveIdentity([branch.candidate], branch.evidence, target).status, "resolved");
+  const findingConfidence = domain.assessConfidence(branch.evidence);
+  assert.ok(findingConfidence.score <= domain.SPOOFABLE_CONFIDENCE_CAP);
+  assert.notEqual(findingConfidence.label, "high");
+});
+
+test("direct evidence can resolve a bare name-context hypothesis without rewriting the primary target", () => {
+  const target = domain.parseTarget("alex rivera meridian collective");
+  const hypothesis = domain.bareNameContextHypotheses(target)[0];
+  assert.equal(target.name, "Alex Rivera Meridian Collective");
+  assert.deepEqual(hypothesis, {
+    subjectName: "Alex Rivera",
+    normalizedSubjectName: "alex rivera",
+    contextPhrase: "Meridian Collective",
+    normalizedContextPhrase: "meridian collective",
+  });
+
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("bare-context-resolution");
+  let candidate = domain.createCandidate(
+    { displayName: hypothesis.subjectName },
+    target,
+    "candidate-bare-context",
+    clock.now(),
+  );
+  const evidence = [
+    {
+      url: "https://meridian.example/team/alex-rivera",
+      sourceType: "company_page",
+      spoofable: false,
+    },
+    {
+      url: "https://records.example/alex-rivera",
+      sourceType: "official_profile",
+      spoofable: true,
+    },
+  ].map((source, index) => {
+    const excerpt = "Alex Rivera worked with Meridian Collective.";
+    const admission = domain.admitEvidence(
+      {
+        candidateId: candidate.id,
+        claim: excerpt,
+        sourceUrl: source.url,
+        sourceType: source.sourceType,
+        excerpt,
+        reliability: 0.55,
+        spoofable: source.spoofable,
+        httpStatus: 200,
+        contentHash: `sha256:${String(index + 7).padStart(64, "0")}`,
+        toolCallId: `bare-context-action-${index}`,
+        verificationMethod: "direct_fetch",
+        attributes: {
+          matchedBareContextPhrase: hypothesis.contextPhrase,
+          matchedBareContextRelation: "professional",
+        },
+      },
+      { candidateIds: new Set([candidate.id]), existing: [], ids, clock },
+    );
+    assert.equal(admission.admitted, true);
+    return admission.evidence;
+  });
+  candidate = { ...candidate, evidenceIds: evidence.map((record) => record.id).sort() };
+  candidate = domain.addCandidateSignals(
+    candidate,
+    evidence.flatMap((record) => [
+      {
+        kind: "name",
+        value: hypothesis.subjectName,
+        normalizedValue: hypothesis.normalizedSubjectName,
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: record.sourceFamily,
+        sourceEvidenceId: record.id,
+      },
+      {
+        kind: "bio_phrase",
+        value: hypothesis.contextPhrase,
+        normalizedValue: hypothesis.normalizedContextPhrase,
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: record.sourceFamily,
+        sourceEvidenceId: record.id,
+      },
+    ]),
+    target,
+    clock.now(),
+  );
+
+  const corroboration = domain.assessCandidateContextCorroboration(candidate, evidence, target);
+  assert.ok(corroboration);
+  assert.equal(corroboration.contextBasis, "bare_name_context_hypothesis");
+  const identity = domain.resolveIdentity([candidate], evidence, target);
+  assert.equal(identity.status, "resolved");
+  assert.equal(identity.resolutionBasis, "context_corroboration");
+  assert.equal(identity.contextDecision, "resolved_eligible");
+  assert.equal(identity.selectedScore, candidate.score.total);
+  assert.ok(identity.resolutionScore >= domain.IDENTITY_RESOLUTION_THRESHOLD);
+
+  // Persisted extractor annotations are display/audit metadata, not proof of
+  // a relationship. Recompute the relation from the exact claim and reject a
+  // forged co-occurrence-only ledger even when every attribute says it matched.
+  const cooccurrenceOnly = "Alex Rivera and Meridian Collective are listed on this page.";
+  const forgedEvidence = evidence.map((record) => ({
+    ...record,
+    claim: cooccurrenceOnly,
+    normalizedClaim: domain.normalizeComparable(cooccurrenceOnly),
+    excerpt: cooccurrenceOnly,
+    attributes: {
+      ...record.attributes,
+      matchedBareContextRelation: "professional",
+    },
+  }));
+  assert.equal(domain.assessCandidateContextCorroboration(candidate, forgedEvidence, target), null);
+});
+
+test("page-scoped completed education is replay-verifiable, source-isolated, and probable only", () => {
+  const target = domain.parseTarget("alex rivera meridian academy");
+  const hypothesis = domain.bareNameContextHypotheses(target)[0];
+  assert.ok(hypothesis);
+  const clock = domain.createSequenceClock("2026-08-25T04:00:00.000Z", 1);
+  const ids = domain.createDeterministicIdFactory("page-scoped-education-domain");
+  let candidate = domain.createCandidate(
+    { displayName: hypothesis.subjectName },
+    target,
+    "candidate-page-scoped-education",
+    clock.now(),
+  );
+  const sourceUrl = "https://alexrivera.example/profile/";
+  const canonicalUrl = "https://alexrivera.example/profile";
+  const observedAt = "2026-08-25T04:00:00.000Z";
+  const claim = "Education Meridian Academy High School Diploma August 2022 - May 2026";
+  const safetyWindow = `${claim} Cumulative GPA: 4.7/5.0`;
+  const contentHash = `sha256:${"a".repeat(64)}`;
+  const proof = {
+    schemaVersion: "page_scoped_completed_education_v1",
+    safetyWindow,
+    safetyWindowLength: safetyWindow.length,
+    fullTextContentHash: contentHash,
+    fullTextLength: 512,
+    fetchedTitle: hypothesis.subjectName,
+    observedAt,
+    authorizedUrl: sourceUrl,
+    finalUrl: sourceUrl,
+    explicitMinorMarkersAbsent: true,
+    requestedContextContradictionAbsent: true,
+  };
+  const admission = domain.admitEvidence(
+    {
+      candidateId: candidate.id,
+      claim,
+      sourceUrl,
+      sourceType: "other",
+      title: hypothesis.subjectName,
+      observedAt,
+      httpStatus: 200,
+      contentHash,
+      excerpt: claim,
+      canonicalSubset: { mimeType: "text/html", truncated: false, pageScopedEducationProof: proof },
+      toolCallId: "page-scoped-education-fetch",
+      verificationMethod: "direct_fetch",
+      temporalStatus: "historical",
+      reliability: 0.55,
+      spoofable: true,
+      attributes: {
+        untrustedContent: true,
+        fullBodyRetained: false,
+        ownershipVerified: false,
+        extractedSubjectLabel: hypothesis.subjectName,
+        queryBoundSubjectName: hypothesis.subjectName,
+        matchedBareContextPhrase: hypothesis.contextPhrase,
+        matchedBareContextRelation: "alumni",
+        pageScopedSubjectScope: "exact_fetched_title_personal_profile",
+        pageScopedAuthorizedUrl: sourceUrl,
+        extractiveClaim: true,
+        extractionMethod: "deterministic_page_scoped_completed_education",
+      },
+    },
+    { candidateIds: new Set([candidate.id]), existing: [], ids, clock },
+  );
+  assert.equal(admission.admitted, true);
+  const record = admission.evidence;
+  assert.equal(record.sourceUrl, canonicalUrl, "the proof tolerates normal evidence URL canonicalization");
+  candidate = { ...candidate, evidenceIds: [record.id] };
+  candidate = domain.addCandidateSignals(
+    candidate,
+    [
+      {
+        kind: "name",
+        value: hypothesis.subjectName,
+        normalizedValue: hypothesis.normalizedSubjectName,
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: record.sourceFamily,
+        sourceEvidenceId: record.id,
+      },
+      {
+        kind: "bio_phrase",
+        value: hypothesis.contextPhrase,
+        normalizedValue: hypothesis.normalizedContextPhrase,
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: record.sourceFamily,
+        sourceEvidenceId: record.id,
+      },
+    ],
+    target,
+    clock.now(),
+  );
+
+  assert.equal(
+    domain.isPageScopedCompletedEducationEvidence(record, candidate, hypothesis.subjectName, hypothesis.contextPhrase),
+    true,
+  );
+  const corroboration = domain.assessCandidateContextCorroboration(candidate, [record], target);
+  assert.ok(corroboration);
+  assert.equal(corroboration.decision, "probable");
+  assert.equal(corroboration.decisionBasis, "needs_second_family");
+  assert.equal(corroboration.sourceFamilies.length, 1);
+  assert.equal(corroboration.allSourcesSpoofable, true);
+  assert.ok(corroboration.score <= domain.CONTEXT_CORROBORATION_ONE_FAMILY_CAP);
+  assert.notEqual(domain.resolveIdentity([candidate], [record], target).status, "resolved");
+
+  const withProof = (patch) => ({
+    ...record,
+    canonicalSubset: {
+      ...record.canonicalSubset,
+      pageScopedEducationProof: { ...record.canonicalSubset.pageScopedEducationProof, ...patch },
+    },
+  });
+  const secondPersonClaim = "Education Jordan Lee — Meridian Academy High School Diploma August 2022 - May 2026";
+  const forged = [
+    { ...record, title: "Alex Rivera Smith" },
+    {
+      ...record,
+      sourceUrl: "https://alexriverajr.example/profile",
+      canonicalUrl: "https://alexriverajr.example/profile",
+    },
+    { ...record, attributes: { ...record.attributes, matchedBareContextPhrase: "Meridian Academies" } },
+    { ...record, attributes: { ...record.attributes, matchedBareContextRelation: "professional" } },
+    { ...record, attributes: { ...record.attributes, extractiveClaim: false } },
+    { ...record, temporalStatus: "current" },
+    { ...record, canonicalSubset: { ...record.canonicalSubset, mimeType: "text/plain" } },
+    withProof({ observedAt: "2035" }),
+    withProof({ authorizedUrl: "https://attacker.example/profile" }),
+    withProof({ explicitMinorMarkersAbsent: false }),
+    withProof({ requestedContextContradictionAbsent: false }),
+    withProof({ safetyWindowLength: safetyWindow.length + 1 }),
+    {
+      ...withProof({ safetyWindow: secondPersonClaim, safetyWindowLength: secondPersonClaim.length }),
+      claim: secondPersonClaim,
+      excerpt: secondPersonClaim,
+    },
+    { ...record, reliability: 0.8 },
+    { ...record, spoofable: false },
+  ];
+  for (const forgedRecord of forged) {
+    assert.equal(
+      domain.isPageScopedCompletedEducationEvidence(
+        forgedRecord,
+        candidate,
+        hypothesis.subjectName,
+        hypothesis.contextPhrase,
+      ),
+      false,
+    );
+  }
+  assert.equal(
+    domain
+      .validateReferentialIntegrity({ target, candidates: [candidate], evidence: [record], findings: [] })
+      .some((issue) => issue.code === "candidate_signal_provenance_mismatch"),
+    false,
+  );
+  assert.equal(
+    domain
+      .validateReferentialIntegrity({
+        target,
+        candidates: [candidate],
+        evidence: [withProof({ requestedContextContradictionAbsent: false })],
+        findings: [],
+      })
+      .some((issue) => issue.code === "candidate_signal_provenance_mismatch"),
+    true,
+    "integrity replay recomputes the canonical page-scoped proof instead of trusting its selector",
+  );
+  const {
+    pageScopedSubjectScope: _scope,
+    extractionMethod: _method,
+    ...strippedSelectorAttributes
+  } = record.attributes;
+  assert.equal(
+    domain
+      .validateReferentialIntegrity({
+        target,
+        candidates: [candidate],
+        evidence: [{ ...record, attributes: strippedSelectorAttributes }],
+        findings: [],
+      })
+      .some((issue) => issue.code === "candidate_signal_provenance_mismatch"),
+    true,
+    "a cassette-bound page proof cannot bypass integrity when unbound selector attributes are stripped",
+  );
+});
+
+test("contradictory direct context prevents resolution", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs, Researcher, in Mesa");
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("context-contradiction");
+  const branch = createContextCandidateBranch({
+    target,
+    candidateId: "candidate-context-contradiction",
+    ids,
+    clock,
+    sources: [
+      {
+        url: "https://northstar.example/team/alex-rivera",
+        sourceType: "company_page",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+        spoofable: false,
+      },
+      {
+        url: "https://civic-records.example/profiles/alex-rivera",
+        sourceType: "public_document",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+      {
+        url: "https://corrections.example/alex-rivera",
+        sourceType: "public_document",
+        excerpt: "Alex Rivera is not affiliated with Northstar Labs.",
+        disposition: "contradicts",
+      },
+    ],
+  });
+
+  assert.equal(domain.assessCandidateContextCorroboration(branch.candidate, branch.evidence, target), null);
+  assert.notEqual(domain.resolveIdentity([branch.candidate], branch.evidence, target).status, "resolved");
+});
+
+test("adjacent or subordinate people cannot satisfy requested context", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs, Researcher, in Mesa");
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("context-adjacent-person");
+  for (const [key, excerpt] of [
+    ["adjacent", "Alex Rivera is listed in the directory, Bob Chen is a Researcher at Northstar Labs in Mesa."],
+    ["subordinate", "Alex Rivera says Bob Chen is a Researcher at Northstar Labs in Mesa."],
+    ["reverse-owner", "Northstar Labs employs Bob Chen, according to Alex Rivera, who is a Researcher in Mesa."],
+  ]) {
+    const branch = createContextCandidateBranch({
+      target,
+      candidateId: `candidate-context-${key}-person`,
+      ids,
+      clock,
+      sources: [
+        {
+          url: `https://northstar.example/${key}-directory`,
+          sourceType: "company_page",
+          excerpt,
+          spoofable: false,
+        },
+        {
+          url: `https://records.example/${key}-directory`,
+          sourceType: "public_document",
+          excerpt,
+        },
+      ],
+    });
+
+    assert.equal(domain.assessCandidateContextCorroboration(branch.candidate, branch.evidence, target), null, key);
+    assert.notEqual(domain.resolveIdentity([branch.candidate], branch.evidence, target).status, "resolved", key);
+  }
+});
+
+test("competing exact-context branches remain ambiguous without the resolution margin", () => {
+  const target = domain.parseTarget("Alex Rivera, Northstar Labs, Researcher, in Mesa");
+  const clock = domain.createSequenceClock();
+  const ids = domain.createDeterministicIdFactory("context-margin");
+  const first = createContextCandidateBranch({
+    target,
+    candidateId: "candidate-context-alpha",
+    ids,
+    clock,
+    sources: [
+      {
+        url: "https://northstar-one.example/team/alex-rivera",
+        sourceType: "company_page",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+        spoofable: false,
+      },
+      {
+        url: "https://records-one.example/alex-rivera",
+        sourceType: "official_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+    ],
+  });
+  const second = createContextCandidateBranch({
+    target,
+    candidateId: "candidate-context-beta",
+    ids,
+    clock,
+    sources: [
+      {
+        url: "https://northstar-two.example/team/alex-rivera",
+        sourceType: "company_page",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+        spoofable: false,
+      },
+      {
+        url: "https://records-two.example/alex-rivera",
+        sourceType: "official_profile",
+        excerpt: "Alex Rivera is a Researcher at Northstar Labs in Mesa.",
+      },
+    ],
+  });
+
+  const identity = domain.resolveIdentity(
+    [first.candidate, second.candidate],
+    [...first.evidence, ...second.evidence],
+    target,
+  );
+  assert.equal(identity.status, "ambiguous");
+  assert.ok(identity.runnerUpMargin < domain.IDENTITY_MARGIN_THRESHOLD);
 });
 
 test("evidence admission preserves complete audit metadata and deduplicates source families", () => {

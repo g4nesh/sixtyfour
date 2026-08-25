@@ -1,15 +1,28 @@
 import type { Clock, IdFactory } from "./runtime";
-import { labelOccursAsTokenPhrase, normalizeWhitespace, projectSearchGraphNodeLabel } from "./runtime";
+import {
+  labelOccursAsTokenPhrase,
+  normalizeComparable,
+  normalizeWhitespace,
+  projectSearchGraphNodeLabel,
+} from "./runtime";
 import {
   SCHEMA_VERSION,
   type Candidate,
   type EvidenceRecord,
   type Finding,
   type FindingDraft,
+  type IdentityResolution,
   type InvestigationState,
 } from "./types";
 import { assessConfidence } from "./confidence";
-import { candidateStatus, identitySignalGroundedByEvidence, scoreCandidate } from "./candidates";
+import {
+  assessCandidateContextCorroboration,
+  candidateStatus,
+  crossSourceEvidenceIdentityTuple,
+  identitySignalGroundedByEvidence,
+  isPageScopedCompletedEducationEvidence,
+  scoreCandidate,
+} from "./candidates";
 import { containsRestrictedPublicContent } from "./content-policy";
 import { sourceLaneForFrontierEntry, sourceTierForUrl } from "../search/source-hierarchy";
 
@@ -30,6 +43,7 @@ export interface IntegrityIssue {
     | "evidence_source_lane_mismatch"
     | "candidate_signal_provenance_mismatch"
     | "candidate_score_mismatch"
+    | "identity_resolution_provenance_mismatch"
     | "missing_candidate_separation_edge"
     | "cross_candidate_evidence"
     | "discovery_only_evidence"
@@ -132,7 +146,7 @@ export function isFindingGrounded(
 
 export function validateReferentialIntegrity(
   state: Pick<InvestigationState, "candidates" | "evidence" | "findings"> &
-    Partial<Pick<InvestigationState, "searchGraph" | "target">>,
+    Partial<Pick<InvestigationState, "searchGraph" | "target">> & { identity?: IdentityResolution },
 ): IntegrityIssue[] {
   const issues: IntegrityIssue[] = [];
   const candidateIds = new Set(state.candidates.map((candidate) => candidate.id));
@@ -189,36 +203,72 @@ export function validateReferentialIntegrity(
         const families = signal.sourceFamily?.startsWith("cross-source:")
           ? signal.sourceFamily.slice("cross-source:".length).split("+").filter(Boolean)
           : [];
-        const candidateFamilies = new Set(
-          state.evidence
-            .filter(
-              (evidence) =>
-                evidence.candidateId === candidate.id &&
-                evidence.disposition === "supports" &&
-                evidence.verificationMethod === "direct_fetch",
+        const canonicalFamilies = [...new Set(families)].sort();
+        const sourceTuple = source ? crossSourceEvidenceIdentityTuple(source, candidate) : null;
+        const peer =
+          source && sourceTuple && canonicalFamilies.length === 2 && canonicalFamilies.includes(source.sourceFamily)
+            ? state.evidence.find((evidence) => {
+                if (
+                  evidence.id === source.id ||
+                  !canonicalFamilies.includes(evidence.sourceFamily) ||
+                  evidence.sourceFamily === source.sourceFamily
+                )
+                  return false;
+                const tuple = crossSourceEvidenceIdentityTuple(evidence, candidate);
+                return (
+                  tuple?.normalizedSubject === sourceTuple.normalizedSubject &&
+                  tuple.normalizedOrganization === sourceTuple.normalizedOrganization
+                );
+              })
+            : undefined;
+        const expectedSourceFamily = `cross-source:${canonicalFamilies.join("+")}`;
+        const expectedNormalizedValue = sourceTuple
+          ? normalizeComparable(
+              `${sourceTuple.normalizedSubject}|${sourceTuple.normalizedOrganization}|${canonicalFamilies.join("|")}`,
             )
-            .map((evidence) => evidence.sourceFamily),
-        );
+          : "";
+        const expectedValue = sourceTuple
+          ? `${sourceTuple.subject} at ${sourceTuple.organization} is independently quoted by ${canonicalFamilies.join(" and ")}`
+          : "";
         if (
           signal.assurance !== "corroborated" ||
           signal.strength !== "strong" ||
-          !source ||
-          source.candidateId !== candidate.id ||
-          families.length < 2 ||
-          families.some((family) => !candidateFamilies.has(family))
+          !sourceTuple ||
+          !peer ||
+          families.length !== 2 ||
+          canonicalFamilies.length !== 2 ||
+          signal.sourceFamily !== expectedSourceFamily ||
+          signal.normalizedValue !== expectedNormalizedValue ||
+          signal.value !== expectedValue
         ) {
           issues.push({
             code: "candidate_signal_provenance_mismatch",
             path,
-            message: "cross-source identity signal is not backed by two canonical candidate sources",
+            message:
+              "cross-source identity signal is not backed by two exact candidate-bound records carrying the same subject and organization tuple",
           });
         }
         return;
       }
       const source = signal.sourceEvidenceId ? evidenceById.get(signal.sourceEvidenceId) : undefined;
+      const pageScopedContractSelected = Boolean(
+        source &&
+        (source.attributes.pageScopedSubjectScope !== undefined ||
+          source.attributes.extractionMethod === "deterministic_page_scoped_completed_education" ||
+          source.canonicalSubset?.pageScopedEducationProof !== undefined),
+      );
+      const pageScopedContext = source?.attributes.matchedBareContextPhrase;
+      const pageScopedContractValid =
+        !pageScopedContractSelected ||
+        (source !== undefined &&
+          typeof pageScopedContext === "string" &&
+          isPageScopedCompletedEducationEvidence(source, candidate, candidate.displayName, pageScopedContext));
       if (
         signal.sourceEvidenceId
-          ? !source || source.candidateId !== candidate.id || !identitySignalGroundedByEvidence(signal, source)
+          ? !source ||
+            source.candidateId !== candidate.id ||
+            !identitySignalGroundedByEvidence(signal, source) ||
+            !pageScopedContractValid
           : Boolean(signal.sourceFamily) ||
             signal.kind === "conflict" ||
             signal.assurance === "verified" ||
@@ -245,6 +295,35 @@ export function validateReferentialIntegrity(
       }
     }
   });
+
+  if (state.identity?.resolutionEvidenceIds !== undefined) {
+    const identity = state.identity;
+    const selected = state.candidates.find((candidate) => candidate.id === identity.selectedCandidateId);
+    const assessment =
+      selected && state.target ? assessCandidateContextCorroboration(selected, state.evidence, state.target) : null;
+    const sameStrings = (left: readonly string[] | undefined, right: readonly string[]): boolean =>
+      Boolean(left && left.length === right.length && left.every((item, index) => item === right[index]));
+    const expectedResolutionScore =
+      selected && assessment ? Math.max(selected.score.total, assessment.score) : selected?.score.total;
+    const expectedBasis =
+      selected && assessment && assessment.score > selected.score.total ? "context_corroboration" : "candidate_score";
+    if (
+      !selected ||
+      !assessment ||
+      identity.contextDecision !== assessment.decision ||
+      identity.resolutionScore !== expectedResolutionScore ||
+      identity.resolutionBasis !== expectedBasis ||
+      !sameStrings(identity.resolutionEvidenceIds, assessment.evidenceIds) ||
+      !sameStrings(identity.resolutionSourceFamilies, assessment.sourceFamilies) ||
+      !sameStrings(identity.resolutionContextKeys, assessment.matchedContextKeys)
+    ) {
+      issues.push({
+        code: "identity_resolution_provenance_mismatch",
+        path: "identity",
+        message: "contextual identity resolution does not match exact candidate-bound evidence",
+      });
+    }
+  }
 
   state.findings.forEach((finding, findingIndex) => {
     if (!candidateIds.has(finding.candidateId)) {

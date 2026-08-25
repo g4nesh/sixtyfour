@@ -812,7 +812,91 @@ function isIdentityResolution(value: unknown): boolean {
   } else if (value.runnerUpCandidateId !== runnerUp.id || value.runnerUpScore !== runnerUp.score.total) {
     return false;
   }
-  return value.runnerUpMargin === roundScore(value.selectedScore - value.runnerUpScore);
+  if (value.runnerUpMargin !== roundScore(value.selectedScore - value.runnerUpScore)) return false;
+
+  const hasContextResolutionProjection =
+    value.resolutionBasis !== undefined ||
+    value.resolutionScore !== undefined ||
+    value.runnerUpResolutionScore !== undefined ||
+    value.resolutionMargin !== undefined;
+  if (!hasContextResolutionProjection) return true;
+  if (
+    !isOneOf(value.resolutionBasis, ["candidate_score", "context_corroboration"]) ||
+    !isScore(value.resolutionScore) ||
+    !isScore(value.runnerUpResolutionScore) ||
+    !isFiniteNonNegative(value.resolutionMargin) ||
+    value.resolutionScore < value.selectedScore ||
+    value.runnerUpResolutionScore < value.runnerUpScore ||
+    value.resolutionMargin !== roundScore(value.resolutionScore - value.runnerUpResolutionScore)
+  ) {
+    return false;
+  }
+  if (selected === null && value.resolutionScore !== 0) return false;
+  if (runnerUp === null && value.runnerUpResolutionScore !== 0) return false;
+  if (value.resolutionBasis === "context_corroboration" && value.resolutionScore <= value.selectedScore) return false;
+
+  const hasContextAuditProjection =
+    value.contextDecision !== undefined ||
+    value.resolutionEvidenceIds !== undefined ||
+    value.resolutionSourceFamilies !== undefined ||
+    value.resolutionContextKeys !== undefined;
+  if (!hasContextAuditProjection) return true;
+  if (!isOneOf(value.contextDecision, ["resolved_eligible", "probable"])) return false;
+  const minimumContextFamilies = value.contextDecision === "probable" ? 1 : 2;
+  return (
+    Array.isArray(value.resolutionEvidenceIds) &&
+    value.resolutionEvidenceIds.length > 0 &&
+    value.resolutionEvidenceIds.every(isNonEmptyString) &&
+    Array.isArray(value.resolutionSourceFamilies) &&
+    value.resolutionSourceFamilies.length >= minimumContextFamilies &&
+    value.resolutionSourceFamilies.every(isNonEmptyString) &&
+    Array.isArray(value.resolutionContextKeys) &&
+    value.resolutionContextKeys.length >= 2 &&
+    value.resolutionContextKeys.every(isNonEmptyString)
+  );
+}
+
+function hasIdentityResolutionProvenance(report: InvestigationReport): boolean {
+  const identity = report.identity;
+  if (identity.resolutionEvidenceIds === undefined) return true;
+  if (!identity.selectedCandidateId || !identity.resolutionSourceFamilies || !identity.resolutionContextKeys) {
+    return false;
+  }
+  const candidate = report.candidates.find((item) => item.id === identity.selectedCandidateId);
+  if (!candidate) return false;
+  const records = identity.resolutionEvidenceIds.map((evidenceId) =>
+    report.evidence.find((evidence) => evidence.id === evidenceId),
+  );
+  if (
+    records.some(
+      (record) =>
+        !record ||
+        record.candidateId !== candidate.id ||
+        !candidate.evidenceIds.includes(record.id) ||
+        record.disposition !== "supports" ||
+        record.sourceType === "search_result" ||
+        record.verificationMethod !== "direct_fetch" ||
+        record.reliability < 0.45 ||
+        record.httpStatus !== 200 ||
+        !/^sha256:[a-f0-9]{64}$/.test(record.contentHash ?? "") ||
+        !record.excerpt ||
+        record.claim !== record.excerpt,
+    )
+  ) {
+    return false;
+  }
+  const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].sort();
+  const sameStrings = (left: readonly string[], right: readonly string[]): boolean =>
+    left.length === right.length && left.every((item, index) => item === right[index]);
+  const evidenceFamilies = sortedUnique(records.flatMap((record) => (record ? [record.sourceFamily] : [])));
+  const contextKeys = sortedUnique(identity.resolutionContextKeys);
+  return (
+    sameStrings(identity.resolutionEvidenceIds, sortedUnique(identity.resolutionEvidenceIds)) &&
+    sameStrings(identity.resolutionSourceFamilies, evidenceFamilies) &&
+    sameStrings(identity.resolutionContextKeys, contextKeys) &&
+    contextKeys.includes(`name:${candidate.normalizedName}`) &&
+    contextKeys.some((key) => /^(?:organization|role|location|bio_phrase):.+/.test(key))
+  );
 }
 
 function isCoverageSummary(value: unknown): boolean {
@@ -858,7 +942,7 @@ function isReportTelemetry(value: unknown): boolean {
 }
 
 export function isInvestigationReport(value: unknown): value is InvestigationReport {
-  return (
+  const structurallyValid =
     isVersioned(value) &&
     isNonEmptyString(value.runId) &&
     isInvestigationInput(value.input) &&
@@ -882,8 +966,8 @@ export function isInvestigationReport(value: unknown): value is InvestigationRep
     isStringArray(value.limitations) &&
     isInvestigationStop(value.stop) &&
     isNonEmptyString(value.generatedAt) &&
-    isJsonValue(value)
-  );
+    isJsonValue(value);
+  return structurallyValid && hasIdentityResolutionProvenance(value as unknown as InvestigationReport);
 }
 
 export function parseInvestigationReport(value: unknown): InvestigationReport {

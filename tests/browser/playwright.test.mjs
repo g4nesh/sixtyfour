@@ -713,6 +713,16 @@ test(
           await page.getByRole("button", { name: "Report", exact: true }).click();
           const reportDialog = page.getByRole("dialog", { name: "Chris Anderson, TED" });
           await reportDialog.waitFor({ state: "visible" });
+          const identityAssessmentText = await reportDialog.locator(".report-identity-assessment").innerText();
+          assert.match(identityAssessmentText, /Candidate assessment\s+Resolved match/i);
+          assert.match(identityAssessmentText, /Chris Anderson/);
+          assert.match(identityAssessmentText, /Formal identity status\s+Resolved/i);
+          assert.match(identityAssessmentText, /Supporting source families\s+1/i);
+          assert.match(identityAssessmentText, /Matched context signals\s+[1-9]\d*/i);
+          assert.ok(
+            (await reportDialog.locator(".candidate-profile-facts li").count()) >= 1,
+            `${viewport.name}: candidate profile omitted its cited direct facts`,
+          );
           const coverageText = await reportDialog.locator(".report-coverage-note").innerText();
           const fixtureSearchQuery = fixture.graph.frontier.find(
             (entry) => entry.allowedTools.includes("search_web") && /(?:^|\s)site:/i.test(entry.queryHint),

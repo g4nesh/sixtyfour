@@ -19,8 +19,18 @@ import {
 } from "../atlas-types";
 import { CloseIcon, DownloadIcon, ExternalIcon } from "./atlas-icons";
 
+const PROFILE_CONTEXT_SIGNAL_KINDS = new Set(["organization", "role", "location", "bio_phrase"]);
+
 function candidateScore(candidate: ReturnType<typeof reportCandidates>[number]): number | undefined {
   return typeof candidate.score === "number" ? candidate.score : candidate.score?.total;
+}
+
+function countPhrase(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function percentScore(value: number | undefined): string {
+  return typeof value === "number" ? `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%` : "unscored";
 }
 
 function downloadJson(filename: string, value: unknown) {
@@ -298,6 +308,154 @@ export function ReportSheet({
           : null;
       })
       .filter((source): source is { url: string; domain: string; title: string } => Boolean(source));
+
+  const formalIdentityStatus = ["resolved", "ambiguous", "unresolved"].includes(report?.identity?.status ?? "")
+    ? (report?.identity?.status as "resolved" | "ambiguous" | "unresolved")
+    : selectedCandidateId
+      ? "resolved"
+      : report?.status === "ambiguous"
+        ? "ambiguous"
+        : "unresolved";
+  const leadCandidate = candidates[0] ?? null;
+  const leadId = leadCandidate?.id ?? leadCandidate?.candidateId;
+  const leadEvidence = leadId ? evidence.filter((item) => item.candidateId === leadId) : [];
+  const leadSupportingEvidence = leadEvidence.filter(
+    (item) =>
+      item.disposition === "supports" &&
+      item.verificationMethod === "direct_fetch" &&
+      item.attributes?.metadataObservation !== true,
+  );
+  const leadSupportingFamilies = [
+    ...new Set(
+      leadSupportingEvidence.map((item) => {
+        const href = evidenceUrl(item);
+        return item.sourceFamily ?? (href ? domainOf(href, "source") : "source");
+      }),
+    ),
+  ].sort();
+  const leadSupportingEvidenceIds = new Set(
+    leadSupportingEvidence
+      .map((item) => item.id ?? item.evidenceId)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  const leadMatchedSignals = [
+    ...new Set(
+      [
+        ...(leadCandidate?.signals ?? [])
+          .filter(
+            (signal) =>
+              typeof signal.kind === "string" &&
+              PROFILE_CONTEXT_SIGNAL_KINDS.has(signal.kind) &&
+              signal.assurance !== "self_asserted" &&
+              Boolean(signal.sourceEvidenceId && leadSupportingEvidenceIds.has(signal.sourceEvidenceId)),
+          )
+          .map((signal) => signal.kind),
+      ].filter((signal): signal is string => typeof signal === "string"),
+    ),
+  ].sort();
+  const leadConflicts = [
+    ...new Set(
+      [
+        ...(leadCandidate?.signals ?? []).filter((signal) => signal.kind === "conflict").map((signal) => signal.kind),
+        ...leadEvidence.filter((item) => item.disposition === "contradicts").map(() => "conflict"),
+        ...(leadCandidate?.conflicts ?? []),
+      ].filter((signal): signal is string => typeof signal === "string"),
+    ),
+  ].sort();
+  const baseLeadScore = leadCandidate ? candidateScore(leadCandidate) : undefined;
+  const resolutionBasis = report?.identity?.resolutionBasis ?? "candidate_score";
+  const identitySupportingFamilies =
+    resolutionBasis === "context_corroboration" && (report?.identity?.resolutionSourceFamilies?.length ?? 0) > 0
+      ? [...new Set(report!.identity!.resolutionSourceFamilies!)].sort()
+      : leadSupportingFamilies;
+  const identityContextKeys =
+    resolutionBasis === "context_corroboration" && (report?.identity?.resolutionContextKeys?.length ?? 0) > 0
+      ? [...new Set(report!.identity!.resolutionContextKeys!)].filter((key) => !key.startsWith("name:")).sort()
+      : leadMatchedSignals;
+  const identityEvidenceIds =
+    resolutionBasis === "context_corroboration" && (report?.identity?.resolutionEvidenceIds?.length ?? 0) > 0
+      ? new Set(report!.identity!.resolutionEvidenceIds!)
+      : leadSupportingEvidenceIds;
+  const identitySupportingEvidence = evidence.filter((item) => {
+    const id = item.id ?? item.evidenceId;
+    return typeof id === "string" && identityEvidenceIds.has(id);
+  });
+  const leadScore = leadCandidate
+    ? leadId === selectedCandidateId && typeof report?.identity?.selectedScore === "number"
+      ? Math.max(
+          baseLeadScore ?? 0,
+          report.identity.selectedScore,
+          report.identity.resolutionScore ?? report.identity.selectedScore,
+        )
+      : baseLeadScore
+    : undefined;
+  const resolutionThreshold = report?.identity?.resolutionThreshold ?? null;
+  const marginThreshold = report?.identity?.marginThreshold ?? null;
+  const runnerUpMargin =
+    report?.identity?.resolutionMargin ??
+    report?.identity?.runnerUpMargin ??
+    report?.identity?.margin ??
+    report?.candidateMargin ??
+    null;
+  const highConfidenceMatch =
+    formalIdentityStatus === "resolved" &&
+    typeof leadScore === "number" &&
+    typeof resolutionThreshold === "number" &&
+    leadScore >= resolutionThreshold &&
+    leadScore >= 0.75 &&
+    identitySupportingFamilies.length >= 2 &&
+    identityContextKeys.length >= 1 &&
+    leadConflicts.length === 0 &&
+    identitySupportingEvidence.some((item) => item.spoofable === false);
+  const identityAssessmentLabel = !leadCandidate
+    ? "No eligible candidate"
+    : formalIdentityStatus === "resolved"
+      ? highConfidenceMatch
+        ? "High-confidence match"
+        : "Resolved match"
+      : formalIdentityStatus === "ambiguous"
+        ? "Competing candidates"
+        : identitySupportingFamilies.length >= 1 && identityContextKeys.length >= 1
+          ? "Best-supported candidate"
+          : "Leading query branch";
+  const missingCorroboration: string[] = [];
+  if (leadCandidate && formalIdentityStatus !== "resolved") {
+    if (typeof leadScore === "number" && typeof resolutionThreshold === "number" && leadScore < resolutionThreshold) {
+      missingCorroboration.push(
+        `${percentScore(leadScore)} identity match score is below the ${percentScore(resolutionThreshold)} resolution threshold`,
+      );
+    }
+    if (identitySupportingFamilies.length === 0) {
+      missingCorroboration.push("no directly fetched supporting source family was admitted");
+    } else if (identitySupportingFamilies.length === 1) {
+      missingCorroboration.push("direct support comes from only one source family");
+    }
+    if (identityContextKeys.length === 0) {
+      missingCorroboration.push("no directly grounded requested professional context was retained");
+    }
+    if (leadConflicts.length > 0) {
+      missingCorroboration.push(`${countPhrase(leadConflicts.length, "conflicting identity signal")} remain`);
+    }
+    if (identitySupportingEvidence.length > 0 && identitySupportingEvidence.every((item) => item.spoofable === true)) {
+      missingCorroboration.push("every direct supporting observation remains spoofable");
+    }
+    if (
+      formalIdentityStatus === "ambiguous" &&
+      typeof runnerUpMargin === "number" &&
+      typeof marginThreshold === "number" &&
+      runnerUpMargin < marginThreshold
+    ) {
+      missingCorroboration.push(
+        `${percentScore(runnerUpMargin)} runner-up margin is below the ${percentScore(marginThreshold)} separation requirement`,
+      );
+    }
+    if (missingCorroboration.length === 0) {
+      missingCorroboration.push("the formal resolution rules were not cleared by the admitted evidence");
+    }
+  }
+  const identityAssessmentSummary = leadCandidate
+    ? `${candidateName(leadCandidate)} is the ${formalIdentityStatus === "resolved" ? "formally selected" : "highest-ranked"} branch at a ${percentScore(leadScore)} identity match score${resolutionBasis === "context_corroboration" && typeof baseLeadScore === "number" ? ` (base candidate score ${percentScore(baseLeadScore)})` : ""}, backed by ${countPhrase(identitySupportingEvidence.length, "identity-supporting direct record")} across ${countPhrase(identitySupportingFamilies.length, "identity-supporting source family", "identity-supporting source families")} and ${countPhrase(identityContextKeys.length, "grounded requested-context signal")}.`
+    : "No candidate-bound direct evidence survived admission, so Atlas cannot rank an eligible profile yet.";
   return (
     <div className="report-sheet-backdrop">
       <button
@@ -361,6 +519,45 @@ export function ReportSheet({
                 {report.input?.objective ??
                   "Auditable public-professional intelligence assembled from admitted evidence."}
               </p>
+            </section>
+            <section
+              className={`report-identity-assessment formal-${formalIdentityStatus}`}
+              aria-labelledby="report-identity-assessment-heading"
+            >
+              <header>
+                <span>Candidate assessment</span>
+                <strong id="report-identity-assessment-heading">{identityAssessmentLabel}</strong>
+              </header>
+              {leadCandidate ? <h3>{candidateName(leadCandidate)}</h3> : null}
+              <p>{identityAssessmentSummary}</p>
+              <dl>
+                <div>
+                  <dt>Formal identity status</dt>
+                  <dd>{humanize(formalIdentityStatus)}</dd>
+                </div>
+                <div>
+                  <dt>Identity match score · {humanize(resolutionBasis)}</dt>
+                  <dd>{percentScore(leadScore)}</dd>
+                </div>
+                <div>
+                  <dt>Supporting source families</dt>
+                  <dd>{leadSupportingFamilies.length}</dd>
+                </div>
+                <div>
+                  <dt>Matched context signals</dt>
+                  <dd>{leadMatchedSignals.length}</dd>
+                </div>
+              </dl>
+              {missingCorroboration.length > 0 ? (
+                <div className="identity-corroboration-gaps" role="note">
+                  <b>What is still missing</b>
+                  <ul>
+                    {missingCorroboration.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </section>
             {coverageDiagnostics.length > 0 || searchQueries.length > 0 || searchTransports.length > 0 ? (
               <section className="report-coverage-note" aria-labelledby="report-coverage-heading">
@@ -442,12 +639,67 @@ export function ReportSheet({
                 <div className="candidate-report-grid">
                   {candidates.map((candidate) => {
                     const id = candidate.id ?? candidate.candidateId ?? candidateName(candidate);
-                    const score = candidateScore(candidate);
+                    const rawScore = candidateScore(candidate);
+                    const score =
+                      id === selectedCandidateId && typeof report.identity?.selectedScore === "number"
+                        ? Math.max(
+                            rawScore ?? 0,
+                            report.identity.selectedScore,
+                            report.identity.resolutionScore ?? report.identity.selectedScore,
+                          )
+                        : id === report.identity?.runnerUpCandidateId &&
+                            typeof report.identity.runnerUpScore === "number"
+                          ? Math.max(rawScore ?? 0, report.identity.runnerUpScore)
+                          : rawScore;
                     const branchEvidence = evidence.filter((item) => item.candidateId === id);
                     const branchFindings = findings.filter((finding) => finding.candidateId === id);
                     const directEvidence = branchEvidence.filter(
                       (item) => item.disposition !== "discovery_only" && item.verificationMethod !== "search_discovery",
                     );
+                    const supportingEvidence = directEvidence.filter(
+                      (item) =>
+                        item.disposition === "supports" &&
+                        item.verificationMethod === "direct_fetch" &&
+                        item.attributes?.metadataObservation !== true,
+                    );
+                    const supportingFamilies = [
+                      ...new Set(
+                        supportingEvidence.map((item) => {
+                          const href = evidenceUrl(item);
+                          return item.sourceFamily ?? (href ? domainOf(href, "source") : "source");
+                        }),
+                      ),
+                    ].sort();
+                    const supportingEvidenceIds = new Set(
+                      supportingEvidence
+                        .map((item) => item.id ?? item.evidenceId)
+                        .filter((evidenceId): evidenceId is string => typeof evidenceId === "string"),
+                    );
+                    const matchedContextSignals = [
+                      ...new Set(
+                        [
+                          ...(candidate.signals ?? [])
+                            .filter(
+                              (signal) =>
+                                typeof signal.kind === "string" &&
+                                PROFILE_CONTEXT_SIGNAL_KINDS.has(signal.kind) &&
+                                signal.assurance !== "self_asserted" &&
+                                Boolean(signal.sourceEvidenceId && supportingEvidenceIds.has(signal.sourceEvidenceId)),
+                            )
+                            .map((signal) => signal.kind),
+                        ].filter((signal): signal is string => typeof signal === "string"),
+                      ),
+                    ].sort();
+                    const profileFacts = supportingEvidence
+                      .filter(
+                        (item, index, items) =>
+                          items.findIndex(
+                            (candidateItem) =>
+                              (candidateItem.claim ?? candidateItem.excerpt ?? "").toLocaleLowerCase("en-US") ===
+                              (item.claim ?? item.excerpt ?? "").toLocaleLowerCase("en-US"),
+                          ) === index,
+                      )
+                      .slice(0, 3);
                     const branchSourceByHref = new Map<string, { href: string; title: string }>();
                     for (const item of directEvidence) {
                       const href = evidenceUrl(item);
@@ -461,7 +713,13 @@ export function ReportSheet({
                     return (
                       <article key={id} className={`candidate-report-card status-${candidate.status ?? "unknown"}`}>
                         <header>
-                          <span>{humanize(candidate.status)}</span>
+                          <span>
+                            {id === leadId
+                              ? formalIdentityStatus === "resolved"
+                                ? "Selected candidate"
+                                : identityAssessmentLabel
+                              : humanize(candidate.status)}
+                          </span>
                           {typeof score === "number" ? <strong>{Math.round(score * 100)}%</strong> : null}
                         </header>
                         <h4>{candidateName(candidate)}</h4>
@@ -473,9 +731,40 @@ export function ReportSheet({
                         </p>
                         <div className="candidate-profile-metrics">
                           <span>{directEvidence.length} direct</span>
-                          <span>{branchEvidence.length} evidence</span>
-                          <span>{branchFindings.length} findings</span>
+                          <span>{supportingFamilies.length} source families</span>
+                          <span>{matchedContextSignals.length} context matches</span>
                         </div>
+                        {profileFacts.length > 0 ? (
+                          <div className="candidate-profile-facts">
+                            <b>
+                              {formalIdentityStatus === "resolved"
+                                ? "Cited profile facts"
+                                : "Candidate-scoped cited observations"}
+                            </b>
+                            {formalIdentityStatus !== "resolved" ? (
+                              <small>
+                                These observations are bound only to this retained branch. They do not independently
+                                establish that it is the queried person.
+                              </small>
+                            ) : null}
+                            <ul>
+                              {profileFacts.map((item) => {
+                                const href = evidenceUrl(item);
+                                const claim = item.claim ?? item.excerpt ?? "Admitted public-professional observation.";
+                                return (
+                                  <li key={item.id ?? item.evidenceId ?? claim}>
+                                    <span>{claim}</span>
+                                    {href ? (
+                                      <a href={href} target="_blank" rel="noreferrer">
+                                        <ExternalIcon /> {domainOf(href, item.sourceFamily ?? "source")}
+                                      </a>
+                                    ) : null}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                        ) : null}
                         {branchSources.length > 0 ? (
                           <ul className="candidate-profile-sources">
                             {branchSources.map((source) => (
@@ -489,6 +778,10 @@ export function ReportSheet({
                         ) : (
                           <small>No directly fetched source was bound to this branch.</small>
                         )}
+                        <small>
+                          {branchEvidence.length} evidence records · {branchFindings.length} admitted findings · branch
+                          status {humanize(candidate.status)}
+                        </small>
                         <code>{id}</code>
                       </article>
                     );

@@ -787,7 +787,7 @@ function validateReportGraph(id: ReplayId, output: InvestigationReport, cassette
   if (!jsonEqual(output.target, parseTarget(output.input))) {
     fail(id, "report target does not match deterministic input parsing");
   }
-  const canonicalStatus = terminalStatusForStop(output.stop.reason, output.candidates);
+  const canonicalStatus = terminalStatusForStop(output.stop.reason, output.candidates, output.evidence, output.target);
   if (output.status !== canonicalStatus) {
     fail(id, `report status ${output.status} is invalid for stop reason ${output.stop.reason}`);
   }
@@ -881,7 +881,8 @@ function validateReportGraph(id: ReplayId, output: InvestigationReport, cassette
   if (output.identity.status === "resolved" && output.identity.selectedCandidate === null) {
     fail(id, "resolved identity is missing a selected candidate");
   }
-  if (!jsonEqual(output.identity, resolveIdentity(output.candidates, output.evidence))) {
+  const canonicalIdentity = resolveIdentity(output.candidates, output.evidence, output.target);
+  if (!jsonEqual(output.identity, canonicalIdentity)) {
     fail(id, "identity selection or runner-up margin does not match candidate ranking");
   }
 
@@ -971,7 +972,12 @@ function validateReportGraph(id: ReplayId, output: InvestigationReport, cassette
   if (
     output.telemetry.candidateCount !== output.candidates.length ||
     output.telemetry.resolvedCandidateCount !==
-      output.candidates.filter((candidate) => candidate.status === "resolved").length ||
+      Math.max(
+        canonicalIdentity.status === "resolved" && canonicalIdentity.resolutionBasis === "context_corroboration"
+          ? 1
+          : 0,
+        output.candidates.filter((candidate) => candidate.status === "resolved").length,
+      ) ||
     output.telemetry.findingCount !== output.findings.length ||
     output.telemetry.highConfidenceFindingCount !==
       output.findings.filter((finding) => finding.confidence.score >= 0.75).length ||

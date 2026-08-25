@@ -1,3 +1,4 @@
+import { isExactPersonalProfilePageScope } from "../domain/evidence";
 import { normalizeComparable, normalizeLabelTokens, normalizeWhitespace } from "../domain/runtime";
 import type { EvidenceSourceType, InvestigationState, ParsedTarget, SourceTier, TargetKind } from "../domain/types";
 import { compileOsintQueries, type CompiledOsintQuery } from "./osint-query-compiler";
@@ -1210,7 +1211,9 @@ export function discoveryLeadSchedulingDecision(
       (personPagePath &&
         (titleNamesHost || explicitFirstPartyHost || organizationContextMatches) &&
         (exactPersonPathSegment || titleNamesHost || explicitFirstPartyHost)));
-  if (namedPersonHomepage || boundedPersonPage) {
+  const exactPersonalDomainProfile =
+    pathSegments.length <= 6 && personNames.some((name) => isExactPersonalProfilePageScope(value, title, name));
+  if (namedPersonHomepage || boundedPersonPage || exactPersonalDomainProfile) {
     return { disposition: "prioritize", reason: "candidate_bio_path" };
   }
   if (pathSegments.length === 0) {
@@ -1367,7 +1370,10 @@ export function compiledQueriesForLane(
   const plan = compileOsintQueries(target, { institutionDomains });
   if (plan.status !== "compiled") return [];
   if (lane.id === "t1.first_party") {
-    return plan.queries.filter((query) => query.kind === "exact_baseline" || query.kind === "exact_context");
+    return plan.queries.filter(
+      (query) =>
+        query.kind === "exact_baseline" || query.kind === "exact_context" || query.kind === "bare_context_hypothesis",
+    );
   }
   if (lane.id === "t2.structured_professional") {
     return plan.queries.filter(

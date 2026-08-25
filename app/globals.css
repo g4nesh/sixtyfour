@@ -2348,6 +2348,108 @@ kbd {
   font-size: var(--text-sm);
 }
 
+.report-identity-assessment {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border: 1px solid color-mix(in srgb, var(--atlas-green) 38%, var(--atlas-line));
+  border-left: 3px solid var(--atlas-green);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--atlas-green) 6%, var(--atlas-panel));
+}
+
+.report-identity-assessment.formal-ambiguous,
+.report-identity-assessment.formal-unresolved {
+  border-color: color-mix(in srgb, var(--atlas-amber) 40%, var(--atlas-line));
+  border-left-color: var(--atlas-amber);
+  background: color-mix(in srgb, var(--atlas-amber) 6%, var(--atlas-panel));
+}
+
+.report-identity-assessment > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+
+.report-identity-assessment > header span,
+.report-identity-assessment dt,
+.identity-corroboration-gaps b {
+  color: var(--atlas-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.report-identity-assessment > header strong {
+  color: var(--atlas-green);
+  font-size: var(--text-sm);
+}
+
+.report-identity-assessment.formal-ambiguous > header strong,
+.report-identity-assessment.formal-unresolved > header strong {
+  color: var(--atlas-amber);
+}
+
+.report-identity-assessment h3,
+.report-identity-assessment p {
+  margin: 0;
+}
+
+.report-identity-assessment h3 {
+  color: var(--atlas-text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.report-identity-assessment > p {
+  color: var(--atlas-text-soft);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+
+.report-identity-assessment dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.report-identity-assessment dl > div {
+  min-width: 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--atlas-line);
+}
+
+.report-identity-assessment dd {
+  margin: var(--space-1) 0 0;
+  color: var(--atlas-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.identity-corroboration-gaps {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--atlas-line);
+}
+
+.identity-corroboration-gaps ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+}
+
+.identity-corroboration-gaps li {
+  color: var(--atlas-text-soft);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+
 .candidate-ambiguity-note {
   padding: var(--space-4);
   border: 1px solid color-mix(in srgb, var(--atlas-amber) 45%, var(--atlas-line));
@@ -2468,6 +2570,65 @@ kbd {
 .candidate-profile-sources svg {
   width: 0.75rem;
   height: 0.75rem;
+  flex: 0 0 auto;
+}
+
+.candidate-profile-facts {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--atlas-line);
+}
+
+.candidate-profile-facts > b {
+  color: var(--atlas-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.candidate-profile-facts > small {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--atlas-text-faint);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-ui);
+}
+
+.candidate-profile-facts ul {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.candidate-profile-facts li {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.candidate-profile-facts li > span {
+  color: var(--atlas-text-soft);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+
+.candidate-profile-facts a {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--atlas-blue);
+  font-size: var(--text-2xs);
+  overflow-wrap: anywhere;
+}
+
+.candidate-profile-facts svg {
+  width: 0.7rem;
+  height: 0.7rem;
   flex: 0 0 auto;
 }
 
@@ -3158,6 +3319,9 @@ kbd {
   }
   .candidate-report-grid {
     grid-template-columns: 1fr;
+  }
+  .report-identity-assessment dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

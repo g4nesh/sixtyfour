@@ -19,6 +19,64 @@ after(async () => {
   await vite.close();
 });
 
+test("two spoofable pages may agree without lifting the candidate trust cap", () => {
+  const clock = domain.createSequenceClock("2026-08-24T20:00:00.000Z", 2);
+  const ids = domain.createDeterministicIdFactory("spoofable-cross-source");
+  const engine = new agent.InvestigationEngine(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      query: "Alex Rivera, Northstar Labs",
+      requestedDepth: "standard",
+    },
+    { clock, ids },
+  );
+  const candidate = engine.addCandidate({ displayName: "Alex Rivera" }).candidate;
+
+  for (const [index, sourceUrl] of [
+    "https://alpha.example/alex-rivera",
+    "https://beta.example/alex-rivera",
+  ].entries()) {
+    const excerpt = "Alex Rivera works at Northstar Labs.";
+    const admission = engine.admitEvidence({
+      candidateId: candidate.id,
+      claim: excerpt,
+      sourceUrl,
+      sourceType: "public_document",
+      excerpt,
+      httpStatus: 200,
+      contentHash: `sha256:${String(index + 21).padStart(64, "0")}`,
+      verificationMethod: "direct_fetch",
+      reliability: 0.7,
+      spoofable: true,
+      attributes: {
+        untrustedContent: true,
+        extractedSubjectName: "Alex Rivera",
+        extractedOrganization: "Northstar Labs",
+      },
+    });
+    assert.equal(admission.admitted, true);
+    engine.addCandidateSignals(candidate.id, [
+      {
+        kind: "organization",
+        value: "Northstar Labs",
+        normalizedValue: "northstar labs",
+        strength: "strong",
+        assurance: "spoofable",
+        sourceFamily: admission.evidence.sourceFamily,
+        sourceEvidenceId: admission.evidence.id,
+      },
+    ]);
+  }
+
+  const state = engine.snapshot();
+  const branch = state.candidates.find((item) => item.id === candidate.id);
+  assert.equal(branch.signals.filter((signal) => signal.kind === "cross_source_match").length, 1);
+  assert.equal(branch.score.cappedBecauseSpoofable, true);
+  assert.ok(branch.score.total <= 0.69);
+  assert.equal(branch.status, "plausible");
+  assert.notEqual(domain.resolveIdentity(state.candidates, state.evidence, state.target).status, "resolved");
+});
+
 // SUPERSEDED CONTRACT: this scenario scripts a single fetch tool that returns
 // inline `evidence` for admission. The redesign split discovery and evidence
 // into separate source lanes (fetch lanes are now discovery-only; evidence is
@@ -520,7 +578,7 @@ test("abort during in-flight synthesis closes the model span as canceled", async
   let synthesisStarted = false;
   const updates = [];
   for await (const update of agent.runResearch(
-    "Grace Hopper public professional background",
+    "https://example.com/grace-hopper",
     {
       clock,
       ids,
@@ -534,10 +592,10 @@ test("abort during in-flight synthesis closes the model span as canceled", async
             actions: [
               {
                 frontierEntryId: entry.id,
-                tool: "public_search",
-                purpose: "Find one bounded public source.",
-                arguments: { query: entry.queryHint },
-                budgetClass: "search",
+                tool: "fetch_public_source",
+                purpose: "Fetch the exact public source supplied by the user.",
+                arguments: { url: entry.queryHint },
+                budgetClass: "fetch",
               },
             ],
           };
@@ -554,12 +612,13 @@ test("abort during in-flight synthesis closes the model span as canceled", async
         evidence: [
           {
             candidateRef: "grace",
-            claim: "The public search returned one bounded Grace Hopper source.",
-            disposition: "discovery_only",
+            claim: "Grace Hopper was a computer scientist and United States Navy rear admiral.",
+            excerpt: "Grace Hopper was a computer scientist and United States Navy rear admiral.",
             sourceUrl: "https://example.com/grace-hopper",
-            sourceType: "search_result",
-            canonicalSubset: { providerAttestedUrl: true },
-            verificationMethod: "search_discovery",
+            sourceType: "official_profile",
+            httpStatus: 200,
+            contentHash: `sha256:${"a".repeat(64)}`,
+            verificationMethod: "direct_fetch",
           },
         ],
         meta: { requests: 1 },
@@ -576,7 +635,7 @@ test("abort during in-flight synthesis closes the model span as canceled", async
     },
     {
       signal: controller.signal,
-      availableTools: ["public_search"],
+      availableTools: ["fetch_public_source"],
       budget: { maxConsecutiveNoProgress: 10, maxTurns: 10 },
     },
   ))

@@ -590,6 +590,15 @@ export interface IdentityResolution {
   runnerUpMargin: number;
   resolutionThreshold: number;
   marginThreshold: number;
+  /** Present when an evidence-weighted context assessment is available. */
+  resolutionBasis?: "candidate_score" | "context_corroboration";
+  resolutionScore?: number;
+  runnerUpResolutionScore?: number;
+  resolutionMargin?: number;
+  contextDecision?: "resolved_eligible" | "probable";
+  resolutionEvidenceIds?: string[];
+  resolutionSourceFamilies?: string[];
+  resolutionContextKeys?: string[];
 }
 
 export interface CoverageSummary {

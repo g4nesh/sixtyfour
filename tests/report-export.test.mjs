@@ -307,7 +307,7 @@ test("report view model and Markdown are deterministic and citation-complete", (
   assert.match(firstMarkdown, /Frontier entry states/);
   assert.equal(first.identity.retainedCandidateCount, report.candidates.length);
   assert.ok(first.identity.profiles.length > 0 && first.identity.profiles.length <= 5);
-  assert.match(first.identity.rationale, new RegExp(`${report.candidates.length} distinct candidate branch`));
+  assert.match(first.identity.rationale, /Resolved match: Atlas formally selected Chris Anderson/);
   assert.match(firstMarkdown, /Distinct candidate branches retained/);
   assert.match(firstMarkdown, /Top retained candidate profiles/);
   assert.match(firstMarkdown, /\*\*Candidate:\*\*/);
@@ -315,8 +315,198 @@ test("report view model and Markdown are deterministic and citation-complete", (
     assert.ok(Array.isArray(profile.evidenceRefs));
     assert.ok(Array.isArray(profile.findingIds));
     assert.ok(Array.isArray(profile.sourceDomains));
+    assert.ok(Array.isArray(profile.supportingSourceFamilies));
+    assert.ok(Array.isArray(profile.matchedContextSignals));
+    assert.ok(Array.isArray(profile.profileFacts));
+    assert.equal(typeof profile.allSupportingEvidenceSpoofable, "boolean");
     assert.equal(Number.isInteger(profile.directSourceCount), true);
   }
+
+  const singularReport = terminalReport();
+  singularReport.findings = singularReport.findings.slice(0, 1);
+  assert.match(
+    reportExport.createReportViewModel(singularReport).executiveSummary,
+    /1 finding cites admitted evidence/u,
+  );
+});
+
+test("identity presentation separates a best-supported profile from formal unresolved status", () => {
+  const report = terminalReport();
+  const lead = structuredClone(report.candidates[0]);
+  // A bounded alternate parse can retain a score-level name-mismatch penalty;
+  // that is not a persisted evidence contradiction and must not be presented
+  // as one to the reader.
+  lead.score.conflictingSignals = ["conflict"];
+  report.evidence[1] = {
+    ...report.evidence[1],
+    sourceFamily: "conference.org",
+    sourceUrl: "https://conference.org/archive/chris-anderson",
+    canonicalUrl: "https://conference.org/archive/chris-anderson",
+  };
+  report.candidates = [lead];
+  report.evidence = report.evidence.filter((item) => item.candidateId === lead.id);
+  report.findings = [];
+  report.identity = {
+    ...report.identity,
+    status: "unresolved",
+    selectedCandidate: structuredClone(lead),
+    runnerUpCandidate: null,
+    selectedCandidateId: lead.id,
+    runnerUpCandidateId: null,
+    selectedScore: lead.score.total,
+    runnerUpScore: 0,
+    runnerUpMargin: 0,
+    resolutionBasis: "context_corroboration",
+    resolutionScore: 0.62,
+    runnerUpResolutionScore: 0,
+    resolutionMargin: 0.62,
+    contextDecision: "probable",
+    resolutionSourceFamilies: ["ted.com"],
+  };
+  report.coverage = {
+    ...report.coverage,
+    score: 0,
+    coveredCategories: [],
+    missingCategories: [...report.coverage.requestedCategories],
+    supportedFindingCount: 0,
+    highConfidenceFindingCount: 0,
+    independentSourceFamilyCount: 0,
+  };
+
+  const viewModel = reportExport.createReportViewModel(report);
+  const markdown = reportExport.reportViewModelToMarkdown(viewModel);
+  assert.equal(viewModel.identity.status, "unresolved");
+  assert.equal(viewModel.identity.selected, null);
+  assert.equal(viewModel.identity.lead?.id, lead.id);
+  assert.equal(viewModel.identity.decisionLabel, "Best-supported candidate");
+  assert.deepEqual(viewModel.identity.lead?.supportingSourceFamilies, ["conference.org", "ted.com"]);
+  assert.deepEqual(viewModel.identity.resolutionSourceFamilies, ["ted.com"]);
+  assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("organization"), true);
+  assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("role"), true);
+  assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("name"), false);
+  assert.deepEqual(viewModel.identity.lead?.conflictingSignals, []);
+  assert.equal(viewModel.identity.lead?.profileFacts.length, 2);
+  assert.match(viewModel.executiveSummary, /^Best-supported candidate: Chris Anderson is the highest-ranked profile/);
+  assert.doesNotMatch(viewModel.executiveSummary, /Identity remains unresolved/);
+  assert.match(viewModel.identity.rationale, /Formal identity is unresolved because/);
+  assert.match(viewModel.identity.rationale, /identity match score is below the 78% resolution threshold/);
+  assert.match(viewModel.identity.rationale, /only one source family/);
+  assert.match(markdown, /\*\*Assessment:\*\* Best-supported candidate/);
+  assert.match(markdown, /\*\*Formal identity status:\*\* Unresolved/);
+  assert.match(markdown, /### Candidate-scoped cited observations/);
+  assert.match(markdown, /bound only to the leading retained branch/);
+  assert.match(markdown, /\[E01\]\(#e01\).*Chris Anderson Chairman, TED/);
+  assert.doesNotMatch(markdown, /\*\*Selected candidate:\*\* None/);
+});
+
+test("identity presentation explains competing and empty candidate sets without canned unresolved copy", () => {
+  const ambiguous = terminalReport();
+  ambiguous.identity = {
+    ...ambiguous.identity,
+    status: "ambiguous",
+    runnerUpMargin: 0.05,
+  };
+  const ambiguousView = reportExport.createReportViewModel(ambiguous);
+  assert.equal(ambiguousView.identity.decisionLabel, "Competing candidates");
+  assert.match(ambiguousView.identity.rationale, /5% lead over the runner-up is below the 15% separation margin/);
+  assert.match(ambiguousView.executiveSummary, /Competing branches remain separate/);
+
+  const empty = terminalReport();
+  empty.candidates = [];
+  empty.evidence = [];
+  empty.findings = [];
+  empty.identity = {
+    ...empty.identity,
+    status: "unresolved",
+    selectedCandidate: null,
+    runnerUpCandidate: null,
+    selectedCandidateId: null,
+    runnerUpCandidateId: null,
+    selectedScore: 0,
+    runnerUpScore: 0,
+    runnerUpMargin: 0,
+  };
+  const emptyView = reportExport.createReportViewModel(empty);
+  assert.equal(emptyView.identity.decisionLabel, "No eligible candidate");
+  assert.equal(emptyView.identity.lead, null);
+  assert.match(emptyView.identity.rationale, /No candidate profile survived/);
+  assert.match(emptyView.executiveSummary, /^No eligible candidate profile was retained/);
+});
+
+test("identity presentation reserves high-confidence wording for resolved cross-source context matches", () => {
+  const report = terminalReport();
+  report.candidates[0].score = {
+    ...report.candidates[0].score,
+    total: 0.54,
+    positive: 0.54,
+    independentFamilies: ["ted.com", "conference.org"],
+    matchedSignals: ["name", "organization", "role"],
+  };
+  report.evidence[1] = {
+    ...report.evidence[1],
+    sourceFamily: "conference.org",
+    sourceUrl: "https://conference.org/speakers/chris-anderson",
+    canonicalUrl: "https://conference.org/speakers/chris-anderson",
+    title: "Chris Anderson speaker biography",
+  };
+  report.identity = {
+    ...report.identity,
+    selectedCandidate: structuredClone(report.candidates[0]),
+    selectedScore: 0.54,
+    runnerUpMargin: 0.54,
+    resolutionBasis: "context_corroboration",
+    resolutionScore: 0.86,
+    runnerUpResolutionScore: 0,
+    resolutionMargin: 0.86,
+  };
+
+  const viewModel = reportExport.createReportViewModel(report);
+  assert.equal(viewModel.identity.decisionLabel, "High-confidence match");
+  assert.equal(viewModel.identity.resolutionBasis, "context_corroboration");
+  assert.equal(viewModel.identity.resolutionScore, 0.86);
+  assert.equal(viewModel.identity.resolutionMargin, 0.86);
+  assert.equal(viewModel.identity.lead?.score, 0.54);
+  assert.deepEqual(viewModel.identity.lead?.supportingSourceFamilies, ["conference.org", "ted.com"]);
+  assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("organization"), true);
+  assert.equal(viewModel.identity.lead?.matchedContextSignals.includes("role"), true);
+  assert.match(viewModel.executiveSummary, /^High-confidence match:/);
+  assert.match(viewModel.executiveSummary, /86% identity match score \(base candidate score 54%\)/);
+
+  const spoofable = structuredClone(report);
+  spoofable.evidence = spoofable.evidence.map((item) =>
+    item.candidateId === spoofable.identity.selectedCandidateId ? { ...item, spoofable: true } : item,
+  );
+  const spoofableView = reportExport.createReportViewModel(spoofable);
+  assert.equal(spoofableView.identity.lead?.allSupportingEvidenceSpoofable, true);
+  assert.equal(spoofableView.identity.decisionLabel, "Resolved match");
+});
+
+test("an unresolved branch without grounded professional context is not called best-supported", () => {
+  const report = terminalReport();
+  const lead = report.candidates[0];
+  lead.signals = lead.signals.filter(
+    (signal) => !["organization", "role", "location", "bio_phrase"].includes(signal.kind),
+  );
+  report.candidates = [lead];
+  report.evidence = report.evidence.filter((item) => item.candidateId === lead.id);
+  report.findings = [];
+  report.identity = {
+    ...report.identity,
+    status: "unresolved",
+    selectedCandidate: structuredClone(lead),
+    runnerUpCandidate: null,
+    selectedCandidateId: lead.id,
+    runnerUpCandidateId: undefined,
+    selectedScore: lead.score.total,
+    runnerUpScore: 0,
+    runnerUpMargin: lead.score.total,
+  };
+
+  const viewModel = reportExport.createReportViewModel(report);
+  assert.equal(viewModel.identity.lead?.supportingSourceFamilies.length, 1);
+  assert.deepEqual(viewModel.identity.lead?.matchedContextSignals, []);
+  assert.equal(viewModel.identity.decisionLabel, "Leading query branch");
+  assert.match(viewModel.identity.rationale, /no directly grounded professional context/);
 });
 
 test("discovery leads export as unverified metadata and never as exact excerpts", () => {
@@ -665,6 +855,8 @@ test("React-PDF and Yoga stay behind one click-time browser-only module boundary
     "Observed provider families:",
     "Referenced resource hosts:",
     "JSON-LD types:",
+    "CANDIDATE-SCOPED CITED OBSERVATIONS",
+    "bound only to the leading retained branch",
   ])
     assert.match(pdfSource, new RegExp(contextLabel));
 });

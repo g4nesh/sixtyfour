@@ -249,6 +249,29 @@ test("natural adult-school context remains quoted across scoped and institutiona
   assert.ok(contextual.some((query) => query.kind === "public_document"));
 });
 
+test("bare name-context discovery preserves the full-name primary and emits one auditable T1 hypothesis", () => {
+  const target = domain.parseTarget("alex rivera meridian collective");
+  const plan = search.compileOsintQueries(target);
+  const hypothesis = plan.queries.filter((query) => query.kind === "bare_context_hypothesis");
+
+  assert.equal(target.name, "Alex Rivera Meridian Collective");
+  assert.equal(hypothesis.length, 1);
+  assert.equal(hypothesis[0].subjectPhrase, "Alex Rivera");
+  assert.equal(hypothesis[0].hypothesisContextPhrase, "Meridian Collective");
+  assert.equal(hypothesis[0].derivedFrom, "target_bare_context_hypothesis");
+  assert.ok(hypothesis[0].query.startsWith('"Alex Rivera" "Meridian Collective" '));
+
+  const lane = search.sourceLaneById("t1.first_party");
+  assert.ok(lane);
+  assert.ok(search.compiledQueriesForLane(target, lane).some((query) => query.query === hypothesis[0].query));
+  assert.equal(
+    search
+      .compileOsintQueries(domain.parseTarget("ludwig van beethoven society"))
+      .queries.some((query) => query.kind === "bare_context_hypothesis"),
+    false,
+  );
+});
+
 test("context compiler supports mononyms and retains bounded organization, role, and location discriminators", () => {
   const mononym = search.compileOsintQueries(domain.parseTarget("Usher"));
   assert.equal(mononym.status, "compiled");

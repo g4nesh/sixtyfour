@@ -17,6 +17,7 @@ const search = await vite.ssrLoadModule("/lib/search/index.ts");
 const { createLiveDependencies, positiveSiteScopesFromCompilerQuery, sourceAllowedForCandidate, streamLiveResearch } =
   await vite.ssrLoadModule("/lib/live/orchestrator.ts");
 const { fetchPublicSource } = await vite.ssrLoadModule("/lib/tools/public-source.ts");
+const reportExport = await vite.ssrLoadModule("/lib/report-export/index.ts");
 
 const TOKEN_FIELDS = ["inputTokens", "cachedInputTokens", "outputTokens", "thinkingTokens", "costUsd"];
 
@@ -1239,20 +1240,27 @@ test("concurrent canonical searches and a later site query share one explicit ru
     (event) => event.name === "scheduler.canonical_batch_routed",
   );
   assert.ok(deterministicRoutes.length > 1);
+  const executedSearchActions = executedActions.filter((action) => action.tool === "search_web");
+  const executedFetchActions = executedActions.filter((action) => action.tool === "fetch_public_source");
   assert.equal(
     deterministicRoutes.reduce((sum, event) => sum + event.payload.entryCount, 0),
-    executedActions.length,
+    executedSearchActions.length,
   );
   assert.ok(executedActions.some((action) => action.query === '"Avery Stone"'));
   assert.ok(executedActions.some((action) => action.query.includes('"Example University"')));
   assert.ok(executedActions.some((action) => action.query.includes("site:github.com")));
   assert.ok(executedActions.some((action) => action.query.includes("site:linkedin.com")));
   assert.equal(
-    executedActions.some((action) => action.tool === "fetch_public_source"),
-    false,
-    "deep traversal must preserve the next canonical source breadth before optional lead fetches",
+    executedFetchActions.length,
+    1,
+    "only one persisted-priority probe may interleave with canonical breadth",
   );
-  const executedQueries = executedActions.map((action) => action.query);
+  const interleavedProbe = completed.trace.events.find(
+    (event) =>
+      event.name === "frontier.quality_probe_selected" && event.payload.interleavedBeforeCanonicalBreadth === true,
+  );
+  assert.ok(interleavedProbe);
+  const executedQueries = executedSearchActions.map((action) => action.query);
   assert.deepEqual(
     providerQueries,
     executedQueries.slice(0, providerQueries.length),
@@ -2232,7 +2240,7 @@ test("non-profile name mentions stay discovery-only while canonical profiles and
       assert.equal(
         direct.evidence.some((evidence) => evidence.attributes.sameOriginProfessionalLink === true),
         false,
-        source.key,
+        `${source.key}: ${JSON.stringify((direct.diagnostics ?? []).map((diagnostic) => diagnostic.code))}`,
       );
       assert.ok(
         direct.diagnostics.some((diagnostic) => diagnostic.code === "non_profile_subject_mention_discovery_only"),
@@ -4991,6 +4999,929 @@ test("query-bound HTML extraction prefers durable professional relationships and
   });
 });
 
+test("bare name-context discovery binds only exact adult professional relations and rejects current-student adjacency", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "alex rivera meridian collective",
+    requestedDepth: "deep",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-25T03:10:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("bare-context-live-binding"),
+  });
+  const hypothesisQuery = search
+    .compileOsintQueries(engine.snapshot().target)
+    .queries.find((query) => query.kind === "bare_context_hypothesis");
+  assert.ok(hypothesisQuery);
+  assert.equal(hypothesisQuery.subjectPhrase, "Alex Rivera");
+  assert.equal(hypothesisQuery.hypothesisContextPhrase, "Meridian Collective");
+
+  const sources = [
+    {
+      key: "linkedin",
+      url: "https://www.linkedin.com/in/alex-rivera-meridian",
+      excerpt: "Alex Rivera worked at Meridian Collective as a researcher.",
+      accepted: true,
+    },
+    {
+      key: "researchgate",
+      url: "https://www.researchgate.net/profile/Alex-Rivera-Meridian",
+      excerpt: "Alex Rivera was a researcher at Meridian Collective.",
+      accepted: true,
+    },
+    {
+      key: "biography",
+      url: "https://profiles.example/profile/alex-rivera",
+      excerpt: "Alex Rivera graduated from Meridian Collective.",
+      accepted: true,
+    },
+    {
+      key: "current-student",
+      url: "https://students.example/profile/alex-rivera",
+      excerpt: "Alex Rivera is currently a student at Meridian Collective.",
+      accepted: false,
+    },
+  ];
+  const sourceByUrl = new Map(sources.map((source) => [source.url, source]));
+  let providerCalls = 0;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async (request, init = {}) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") {
+        providerCalls += 1;
+        const body = JSON.parse(typeof init.body === "string" ? init.body : new TextDecoder().decode(init.body));
+        assert.equal(
+          body.tools?.some((tool) => tool.function?.name === "submit_evidence_extraction"),
+          false,
+          "exact query-bound HTML must not invoke model extraction",
+        );
+        return jsonResponse({
+          id: "generation-bare-context-search",
+          model: "test/model",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "Bounded public-professional pages were observed.",
+                annotations: sources.map((source) => ({
+                  type: "url_citation",
+                  url_citation: { url: source.url, title: `Alex Rivera | ${source.key}` },
+                })),
+              },
+            },
+          ],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        });
+      }
+      const source = sourceByUrl.get(url.href);
+      if (!source) throw new Error(`Unexpected bare-context request ${url.href}`);
+      return new Response(
+        `<html><head><title>Alex Rivera</title></head><body><main><p>${source.excerpt}</p></main></body></html>`,
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+
+  const searchResult = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-bare-context-search",
+      frontierEntryId: "action-bare-context-search",
+      tool: "search_web",
+      purpose: "Execute the bounded compiler hypothesis.",
+      arguments: { query: hypothesisQuery.query },
+      budgetClass: "search",
+      sourceTier: 1,
+      sourceLaneId: "t1.first_party",
+      pathCost: 1,
+      mutated: false,
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: engine.snapshot(),
+      modelAccounting: { reserve: () => true, settle: () => {} },
+    },
+  );
+
+  assert.equal(searchResult.status, "succeeded");
+  assert.equal(searchResult.candidates.length, 1);
+  assert.equal(searchResult.candidates[0].displayName, "Alex Rivera");
+  assert.equal(searchResult.evidence.length, sources.length);
+  const candidate = engine.addCandidate(searchResult.candidates[0]).candidate;
+  const leads = new Map();
+  for (const draft of searchResult.evidence) {
+    assert.equal(draft.attributes.querySubjectName, "Alex Rivera");
+    assert.equal(draft.attributes.querySubjectContext, "Meridian Collective");
+    assert.equal(draft.attributes.querySubjectHypothesis, true);
+    assert.notEqual(draft.attributes.querySubjectAnchor, true);
+    const persisted = { ...draft, candidateId: candidate.id };
+    delete persisted.candidateRef;
+    const admission = engine.admitEvidence(persisted);
+    assert.equal(admission.admitted, true);
+    leads.set(draft.sourceUrl, admission.evidence);
+  }
+
+  for (const source of sources) {
+    const lead = leads.get(source.url);
+    assert.ok(lead, source.key);
+    const direct = await dependencies.executeAction(
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        id: `action-bare-context-fetch-${source.key}`,
+        frontierEntryId: `action-bare-context-fetch-${source.key}`,
+        tool: "fetch_public_source",
+        purpose: "Fetch the exact hypothesis-bound lead.",
+        arguments: { leadId: lead.attributes.leadId, claimFocus: "Exact public professional relationship" },
+        candidateId: candidate.id,
+        budgetClass: "fetch",
+        sourceTier: lead.attributes.classifiedSourceTier,
+        sourceLaneId: lead.attributes.classifiedSourceLaneId,
+        pathCost: 1.4,
+        mutated: false,
+      },
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        state: engine.snapshot(),
+        modelAccounting: { reserve: () => true, settle: () => {} },
+      },
+    );
+    const quote = direct.evidence.find((evidence) => evidence.verificationMethod === "direct_fetch");
+    assert.ok(quote, source.key);
+    assert.equal(quote.claim, source.excerpt, source.key);
+    if (source.accepted) {
+      assert.equal(quote.disposition ?? "supports", "supports", source.key);
+      assert.equal(quote.candidateId, undefined, source.key);
+      assert.ok(quote.candidateRef, source.key);
+      assert.equal(quote.attributes.matchedBareContextPhrase, "Meridian Collective", source.key);
+      assert.ok(["professional", "alumni"].includes(quote.attributes.matchedBareContextRelation), source.key);
+      assert.equal(quote.attributes.isolatedFromCandidateId, candidate.id, source.key);
+      assert.equal(quote.attributes.isolationBasis, "bare_context_source", source.key);
+      assert.equal(direct.candidateBranches?.length, 1, source.key);
+      assert.equal(direct.candidateBranches[0].parentCandidateId, candidate.id, source.key);
+      assert.equal(direct.candidateBranches[0].reason, "bare_context_source_isolated", source.key);
+      assert.equal(direct.candidateBranches[0].candidate.ref, quote.candidateRef, source.key);
+      assert.ok(
+        direct.candidateBranches[0].candidate.signals.some(
+          (signal) => signal.kind === "bio_phrase" && signal.value === "Meridian Collective",
+        ),
+        source.key,
+      );
+      assert.deepEqual(direct.candidateSignals, [], source.key);
+    } else {
+      assert.equal(quote.disposition, "discovery_only", source.key);
+      assert.equal(quote.reliability, 0, source.key);
+      assert.equal(quote.candidateId, candidate.id, source.key);
+      assert.equal(direct.candidateBranches, undefined, source.key);
+      assert.deepEqual(direct.candidateSignals, [], source.key);
+      assert.ok(
+        direct.diagnostics.some((diagnostic) => diagnostic.code === "bare_context_relation_not_attested"),
+        source.key,
+      );
+    }
+  }
+  assert.equal(providerCalls, 1);
+});
+
+test("bare-context HTML without an exact adult relation stays discovery-only without reserving an extractor call", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "alex rivera meridian collective",
+    requestedDepth: "deep",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-25T03:30:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("bare-context-no-relation-no-extractor"),
+  });
+  const hypothesisQuery = search
+    .compileOsintQueries(engine.snapshot().target)
+    .queries.find((query) => query.kind === "bare_context_hypothesis");
+  assert.ok(hypothesisQuery);
+
+  const sourceUrl = "https://alexrivera.example/profile";
+  let providerCalls = 0;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async (request, init = {}) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") {
+        providerCalls += 1;
+        const body = JSON.parse(typeof init.body === "string" ? init.body : new TextDecoder().decode(init.body));
+        assert.equal(
+          body.tools?.some((tool) => tool.function?.name === "submit_evidence_extraction"),
+          false,
+          "the missing deterministic relationship must never fall through to model extraction",
+        );
+        return jsonResponse({
+          id: "generation-bare-context-no-relation",
+          model: "test/model",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "One bounded fictional profile path was observed.",
+                annotations: [
+                  {
+                    type: "url_citation",
+                    url_citation: { url: sourceUrl, title: "Alex Rivera" },
+                  },
+                ],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        });
+      }
+      assert.equal(url.href, sourceUrl);
+      return new Response(
+        "<html><head><title>Public portfolio</title></head><body><main><p>Selected public projects and contact-free professional notes.</p></main></body></html>",
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+
+  const searchResult = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-bare-context-no-relation-search",
+      frontierEntryId: "action-bare-context-no-relation-search",
+      tool: "search_web",
+      purpose: "Execute the bounded fictional compiler hypothesis.",
+      arguments: { query: hypothesisQuery.query },
+      budgetClass: "search",
+      sourceTier: 1,
+      sourceLaneId: "t1.first_party",
+      pathCost: 1,
+      mutated: false,
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: engine.snapshot(),
+      modelAccounting: { reserve: () => true, settle: () => {} },
+    },
+  );
+  assert.equal(searchResult.status, "succeeded");
+  assert.equal(searchResult.candidates.length, 1);
+  assert.equal(searchResult.evidence.length, 1);
+  assert.equal(searchResult.evidence[0].attributes.leadSchedulingDisposition, "prioritize");
+  assert.equal(searchResult.evidence[0].attributes.leadSchedulingReason, "candidate_bio_path");
+
+  const candidate = engine.addCandidate(searchResult.candidates[0]).candidate;
+  const leadDraft = { ...searchResult.evidence[0], candidateId: candidate.id };
+  delete leadDraft.candidateRef;
+  const admitted = engine.admitEvidence(leadDraft);
+  assert.equal(admitted.admitted, true);
+
+  let modelReservations = 0;
+  let modelSettlements = 0;
+  const direct = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-bare-context-no-relation-fetch",
+      frontierEntryId: "action-bare-context-no-relation-fetch",
+      tool: "fetch_public_source",
+      purpose: "Fetch the exact hypothesis-bound fictional profile.",
+      arguments: {
+        leadId: admitted.evidence.attributes.leadId,
+        claimFocus: "Exact adult professional or alumni relationship",
+      },
+      candidateId: candidate.id,
+      budgetClass: "fetch",
+      sourceTier: admitted.evidence.attributes.classifiedSourceTier,
+      sourceLaneId: admitted.evidence.attributes.classifiedSourceLaneId,
+      pathCost: 1.4,
+      mutated: false,
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: engine.snapshot(),
+      modelAccounting: {
+        reserve: () => {
+          modelReservations += 1;
+          return true;
+        },
+        settle: () => {
+          modelSettlements += 1;
+        },
+      },
+    },
+  );
+
+  assert.equal(direct.status, "partial");
+  assert.deepEqual(direct.candidates, []);
+  assert.deepEqual(direct.candidateSignals, []);
+  assert.equal(modelReservations, 0);
+  assert.equal(modelSettlements, 0);
+  assert.equal(providerCalls, 1, "the configured provider was used only for bounded discovery");
+  assert.equal(direct.meta.llmCalls, 0);
+  assert.equal(
+    direct.evidence.some((evidence) => evidence.verificationMethod === "direct_fetch"),
+    false,
+  );
+  assert.ok(direct.evidence.length > 0, "the already-fetched page may retain passive discovery metadata");
+  assert.ok(
+    direct.evidence.every(
+      (evidence) =>
+        evidence.disposition === "discovery_only" &&
+        evidence.verificationMethod === "unverified" &&
+        evidence.attributes.identityBinding === false,
+    ),
+  );
+  assert.ok(direct.diagnostics.some((diagnostic) => diagnostic.code === "bare_context_relation_not_attested"));
+});
+
+test("exact personal Education pages admit only completed adult rows without model extraction", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "alex rivera meridian academy",
+    requestedDepth: "deep",
+  });
+  const testClock = domain.createSequenceClock("2026-08-25T04:00:00.000Z", 1);
+  const engine = new agent.InvestigationEngine(input, {
+    clock: testClock,
+    ids: domain.createDeterministicIdFactory("page-scoped-education-live"),
+  });
+  const hypothesisQuery = search
+    .compileOsintQueries(engine.snapshot().target)
+    .queries.find((query) => query.kind === "bare_context_hypothesis");
+  assert.ok(hypothesisQuery);
+
+  const completedRow = "Education Meridian Academy High School Diploma August 2022 - May 2026";
+  const sources = [
+    {
+      key: "completed",
+      url: "https://alexrivera.example/profile",
+      title: "Alex Rivera",
+      body: `${completedRow} Cumulative GPA: 4.7/5.0 Experience Research Fellow`,
+      accepted: true,
+    },
+    {
+      key: "current-student",
+      url: "https://alexrivera.net/profile",
+      title: "Alex Rivera",
+      body: "Current student at Meridian Academy. Education Meridian Academy High School Diploma August 2022 - May 2026",
+    },
+    {
+      key: "future-expected",
+      url: "https://alexrivera.org/profile",
+      title: "Alex Rivera",
+      body: "Education Meridian Academy Expected High School Diploma August 2022 - May 2027",
+    },
+    {
+      key: "school-team",
+      url: "https://alexrivera.dev/profile",
+      title: "Alex Rivera",
+      body: "Education Meridian Academy Robotics Club team High School Diploma August 2022 - May 2026",
+    },
+    {
+      key: "nonexact-title",
+      url: "https://alexrivera.io/profile",
+      title: "Alex Rivera Smith",
+      body: completedRow,
+    },
+    {
+      key: "changed-redirect",
+      url: "https://alexrivera.co/profile",
+      title: "Alex Rivera",
+      body: completedRow,
+      redirectTo: "https://redirected.example/profile",
+    },
+    {
+      key: "explicit-minor",
+      url: "https://alexrivera.info/profile",
+      title: "Alex Rivera",
+      body: `About I am 17 years old. ${completedRow}`,
+    },
+    {
+      key: "competing-row-subject",
+      url: "https://alexrivera.xyz/profile",
+      title: "Alex Rivera",
+      body: "Education Jordan Lee — Meridian Academy — High School Diploma August 2022 - May 2026",
+    },
+  ];
+  const sourceByUrl = new Map(sources.map((source) => [new URL(source.url).href, source]));
+  const redirected = sources.find((source) => source.redirectTo);
+  let providerCalls = 0;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    clock: testClock,
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async (request, init = {}) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") {
+        providerCalls += 1;
+        const body = JSON.parse(typeof init.body === "string" ? init.body : new TextDecoder().decode(init.body));
+        assert.equal(
+          body.tools?.some((tool) => tool.function?.name === "submit_evidence_extraction"),
+          false,
+          "query-bound HTML extraction remains deterministic",
+        );
+        return jsonResponse({
+          id: "generation-page-scoped-education-search",
+          model: "test/model",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "Bounded fictional public pages were observed.",
+                annotations: sources.map((source) => ({
+                  type: "url_citation",
+                  url_citation: { url: source.url, title: "Alex Rivera" },
+                })),
+              },
+            },
+          ],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        });
+      }
+      if (redirected?.redirectTo === url.href) {
+        return new Response(
+          `<html><head><title>${redirected.title}</title></head><body><main>${redirected.body}</main></body></html>`,
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      const source = sourceByUrl.get(url.href);
+      if (!source) throw new Error(`Unexpected page-scoped education request ${url.href}`);
+      if (source.redirectTo) {
+        return new Response(null, { status: 302, headers: { location: source.redirectTo } });
+      }
+      return new Response(
+        `<html><head><title>${source.title}</title></head><body><main>${source.body}</main></body></html>`,
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+
+  const searchResult = await dependencies.executeAction(
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      id: "action-page-scoped-education-search",
+      frontierEntryId: "action-page-scoped-education-search",
+      tool: "search_web",
+      purpose: "Execute the bounded fictional education hypothesis.",
+      arguments: { query: hypothesisQuery.query },
+      budgetClass: "search",
+      sourceTier: 1,
+      sourceLaneId: "t1.first_party",
+      pathCost: 1,
+      mutated: false,
+    },
+    {
+      schemaVersion: domain.SCHEMA_VERSION,
+      state: engine.snapshot(),
+      modelAccounting: { reserve: () => true, settle: () => {} },
+    },
+  );
+  assert.equal(searchResult.status, "succeeded");
+  const discoveredUrls = new Set(searchResult.evidence.map((evidence) => evidence.sourceUrl));
+  assert.deepEqual(discoveredUrls, new Set(sources.map((source) => source.url)));
+  const candidate = engine.addCandidate(searchResult.candidates[0]).candidate;
+  const leads = new Map();
+  for (const draft of searchResult.evidence) {
+    const persisted = { ...draft, candidateId: candidate.id };
+    delete persisted.candidateRef;
+    const admission = engine.admitEvidence(persisted);
+    assert.equal(admission.admitted, true);
+    leads.set(draft.sourceUrl, admission.evidence);
+  }
+
+  let modelReservations = 0;
+  let modelSettlements = 0;
+  for (const source of sources) {
+    const lead = leads.get(source.url);
+    assert.ok(lead, source.key);
+    const direct = await dependencies.executeAction(
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        id: `action-page-scoped-education-fetch-${source.key}`,
+        frontierEntryId: `action-page-scoped-education-fetch-${source.key}`,
+        tool: "fetch_public_source",
+        purpose: "Fetch one exact fictional hypothesis lead.",
+        arguments: { leadId: lead.attributes.leadId, claimFocus: "Exact completed adult education relationship" },
+        candidateId: candidate.id,
+        budgetClass: "fetch",
+        sourceTier: lead.attributes.classifiedSourceTier,
+        sourceLaneId: lead.attributes.classifiedSourceLaneId,
+        pathCost: 1.4,
+        mutated: false,
+      },
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        state: engine.snapshot(),
+        modelAccounting: {
+          reserve: () => {
+            modelReservations += 1;
+            return true;
+          },
+          settle: () => {
+            modelSettlements += 1;
+          },
+        },
+      },
+    );
+    assert.equal(direct.meta.llmCalls ?? 0, 0, source.key);
+    assert.deepEqual(direct.candidateSignals ?? [], [], source.key);
+    if (source.accepted) {
+      const quote = direct.evidence.find((evidence) => evidence.disposition !== "discovery_only");
+      assert.ok(quote, source.key);
+      assert.equal(quote.claim, completedRow);
+      assert.equal(quote.excerpt, completedRow);
+      assert.ok(source.body.includes(quote.claim), "the claim is one contiguous fetched-body substring");
+      assert.equal(quote.claim.includes(source.title), false, "the exact fetched title is not stitched into the quote");
+      assert.equal(quote.sourceType, "other");
+      assert.equal(quote.temporalStatus, "historical");
+      assert.equal(quote.reliability, 0.55);
+      assert.equal(quote.spoofable, true);
+      assert.equal(quote.attributes.extractionMethod, "deterministic_page_scoped_completed_education");
+      assert.equal(quote.attributes.matchedBareContextRelation, "alumni");
+      assert.equal(quote.canonicalSubset.pageScopedEducationProof.fetchedTitle, "Alex Rivera");
+      assert.ok(quote.canonicalSubset.pageScopedEducationProof.safetyWindow.startsWith(completedRow));
+      assert.equal(direct.candidateBranches?.length, 1);
+      assert.equal(direct.candidateBranches[0].reason, "bare_context_source_isolated");
+      assert.ok(
+        direct.candidateBranches[0].candidate.signals.some(
+          (signal) => signal.kind === "bio_phrase" && signal.value === "Meridian Academy",
+        ),
+      );
+      assert.ok(
+        direct.diagnostics.some((diagnostic) => diagnostic.code === "deterministic_page_scoped_completed_education"),
+      );
+      assert.equal(
+        direct.diagnostics.some((diagnostic) => diagnostic.code === "deterministic_public_html_extraction"),
+        false,
+      );
+    } else {
+      assert.equal(
+        (direct.evidence ?? []).some((evidence) => evidence.disposition === "supports"),
+        false,
+        source.key,
+      );
+      assert.equal(direct.candidateBranches, undefined, source.key);
+      assert.deepEqual(direct.candidates ?? [], [], source.key);
+      assert.ok(
+        (direct.diagnostics ?? []).some((diagnostic) =>
+          [
+            "bare_context_relation_not_attested",
+            "bare_context_source_binding_changed",
+            "blocked_host",
+            "unsafe_redirect",
+          ].includes(diagnostic.code),
+        ),
+        `${source.key}: ${JSON.stringify((direct.diagnostics ?? []).map((diagnostic) => diagnostic.code))}`,
+      );
+    }
+  }
+  assert.equal(modelReservations, 0);
+  assert.equal(modelSettlements, 0);
+  assert.equal(providerCalls, 1, "only bounded discovery used the provider");
+});
+
+test("full runner isolates lowercase bare name-context sources without discovery synthesis churn", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "alex rivera meridian collective",
+    requestedDepth: "deep",
+  });
+  const plan = search.compileOsintQueries(domain.parseTarget(input));
+  assert.equal(plan.status, "compiled");
+  const hypothesisQuery = plan.queries.find((query) => query.kind === "bare_context_hypothesis");
+  assert.ok(hypothesisQuery);
+  assert.equal(hypothesisQuery.subjectPhrase, "Alex Rivera");
+  assert.equal(hypothesisQuery.hypothesisContextPhrase, "Meridian Collective");
+
+  const sources = [
+    {
+      key: "alumni",
+      url: "https://portfolio.example/alex-rivera",
+      excerpt: "Alex Rivera graduated from Meridian Collective.",
+      accepted: true,
+    },
+    {
+      key: "linkedin",
+      url: "https://www.linkedin.com/in/alex-rivera-meridian",
+      excerpt: "Alex Rivera worked at Meridian Collective as a researcher.",
+      accepted: true,
+    },
+    {
+      key: "researchgate",
+      url: "https://www.researchgate.net/profile/Alex-Rivera-Meridian",
+      excerpt: "Alex Rivera was a researcher at Meridian Collective.",
+      accepted: true,
+    },
+    {
+      key: "current-student",
+      url: "https://students.example/alex-rivera",
+      excerpt: "Alex Rivera is currently a student at Meridian Collective.",
+      accepted: false,
+    },
+    {
+      key: "cooccurrence",
+      url: "https://directory.example/alex-rivera",
+      excerpt: "Alex Rivera and Meridian Collective appear in this public directory.",
+      accepted: false,
+    },
+  ];
+  const sourceByUrl = new Map(sources.map((source) => [new URL(source.url).href, source]));
+  let providerSearchCalls = 0;
+  const providerQueries = [];
+  const sourceRequests = new Map(sources.map((source) => [source.key, 0]));
+  const live = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    clock: domain.createSequenceClock("2026-08-25T04:00:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("bare-context-full-run"),
+    resolveHostname: async () => ["93.184.216.34"],
+    fetch: async (request, init = {}) => {
+      const url = new URL(String(request));
+      if (url.hostname === "openrouter.ai") {
+        providerSearchCalls += 1;
+        const body = JSON.parse(typeof init.body === "string" ? init.body : new TextDecoder().decode(init.body));
+        assert.equal(
+          body.tools?.some((tool) => tool.function?.name === "submit_evidence_extraction"),
+          false,
+          "query-bound bare-context pages must stay on deterministic exact-quote extraction",
+        );
+        const prompt = body.messages?.at(-1)?.content ?? "";
+        providerQueries.push(prompt);
+        const isHypothesis = prompt.includes(hypothesisQuery.query);
+        return jsonResponse({
+          id: `generation-bare-context-full-run-${providerSearchCalls}`,
+          model: "test/model",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: isHypothesis ? "Bounded fictional sources were observed." : "No sources were observed.",
+                annotations: isHypothesis
+                  ? sources.map((source) => ({
+                      type: "url_citation",
+                      url_citation: { url: source.url, title: `Alex Rivera | ${source.key}` },
+                    }))
+                  : [],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        });
+      }
+      if (url.hostname === "html.duckduckgo.com" || url.hostname === "www.google.com") {
+        return new Response("<html><body>No matching public links.</body></html>", {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (url.hostname === "api.github.com") {
+        return jsonResponse({ total_count: 0, incomplete_results: false, items: [] });
+      }
+      if (url.hostname === "api.semanticscholar.org") return jsonResponse({ total: 0, data: [] });
+      if (url.hostname === "api.crossref.org") return jsonResponse({ message: { items: [] } });
+      const source = sourceByUrl.get(url.href);
+      if (!source) throw new Error(`Unexpected full-run bare-context request ${url.href}`);
+      sourceRequests.set(source.key, (sourceRequests.get(source.key) ?? 0) + 1);
+      return new Response(
+        `<html><head><title>Alex Rivera</title></head><body><main><p>${source.excerpt}</p></main></body></html>`,
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+
+  const synthesisSnapshots = [];
+  const updates = [];
+  for await (const update of agent.runResearch(
+    input,
+    {
+      ...live,
+      planner: async ({ selectedFrontierEntries }) => ({
+        kind: "actions",
+        decisionSummary: "Execute the selected bounded fictional public-source capabilities.",
+        actions: selectedFrontierEntries.map((entry) => ({
+          frontierEntryId: entry.id,
+          tool: entry.allowedTools[0],
+          purpose: "Exercise the selected bounded fictional public-source capability.",
+          arguments:
+            entry.allowedTools[0] === "search_web"
+              ? { query: entry.queryHint }
+              : { leadId: entry.queryHint, claimFocus: "Exact adult professional or alumni relationship" },
+          ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
+        })),
+      }),
+      synthesize: async (state) => {
+        const usefulDirectIds = state.evidence
+          .filter(
+            (evidence) =>
+              evidence.disposition === "supports" &&
+              evidence.sourceType !== "search_result" &&
+              evidence.verificationMethod === "direct_fetch" &&
+              Boolean(evidence.contentHash || evidence.excerpt || evidence.canonicalSubset),
+          )
+          .map((evidence) => evidence.id)
+          .sort();
+        synthesisSnapshots.push({
+          usefulDirectIds,
+          discoveryOnlyCount: state.evidence.filter((evidence) => evidence.disposition === "discovery_only").length,
+        });
+        return {
+          decisionSummary: "The exact sources support a candidate dossier, but no separate finding is needed here.",
+          findings: [],
+          openQuestions: [],
+        };
+      },
+    },
+    {
+      availableTools: ["search_web", "fetch_public_source"],
+      budget: {
+        maxTurns: 40,
+        maxLlmCalls: 64,
+        maxToolCalls: 120,
+        maxSearchCalls: 60,
+        maxEvidenceAttempts: 240,
+        maxNetworkRequests: 240,
+        maxConsecutiveNoProgress: 20,
+        maxActionsPerTurn: 4,
+        phaseCaps: { plan: 4, discover: 16, separate_candidates: 12, corroborate: 20, calibrate: 20, report: 1 },
+      },
+    },
+  ))
+    updates.push(update);
+
+  const completed = updates.at(-1);
+  assert.equal(completed.type, "completed");
+  assert.notEqual(completed.report.stop.reason, "fatal_error");
+  assert.ok(providerQueries.some((query) => query.includes(hypothesisQuery.query)));
+  const hypothesisSearchStart = completed.trace.events.find(
+    (event) =>
+      event.kind === "span_start" &&
+      event.name === "tool.search_web" &&
+      event.payload.arguments?.query === hypothesisQuery.query,
+  );
+  assert.ok(hypothesisSearchStart, "the compiled bare-context hypothesis must reach the live search adapter");
+
+  const canonicalFrontierIds = new Set(
+    completed.report.searchGraph.frontier
+      .filter((entry) => search.isCanonicalCompilerSearchEntry(entry))
+      .map((entry) => entry.id),
+  );
+  const canonicalSearchEnds = completed.trace.events.filter(
+    (event) =>
+      event.kind === "span_end" &&
+      event.name === "tool.search_web" &&
+      canonicalFrontierIds.has(event.payload.frontierEntryId),
+  );
+  assert.equal(canonicalSearchEnds.length, plan.queries.length);
+  const leadFetchStarts = completed.trace.events.filter(
+    (event) => event.kind === "span_start" && event.name === "tool.fetch_public_source",
+  );
+  assert.ok(leadFetchStarts.length >= sources.length);
+  assert.ok(
+    leadFetchStarts[0].seq < Math.max(...canonicalSearchEnds.map((event) => event.seq)),
+    "one persisted-priority hypothesis probe must interleave before remaining canonical breadth",
+  );
+  assert.ok(
+    leadFetchStarts[1].seq > Math.max(...canonicalSearchEnds.map((event) => event.seq)),
+    "no second fetch may run before every canonical query has settled",
+  );
+
+  for (const source of sources) assert.equal(sourceRequests.get(source.key), 1, source.key);
+  const directByUrl = new Map(
+    completed.report.evidence
+      .filter((evidence) => evidence.verificationMethod === "direct_fetch")
+      .map((evidence) => [evidence.sourceUrl, evidence]),
+  );
+  for (const source of sources) {
+    const evidence = directByUrl.get(source.url);
+    assert.ok(evidence, source.key);
+    assert.equal(evidence.claim, source.excerpt, source.key);
+    if (source.accepted) {
+      assert.equal(evidence.disposition, "supports", source.key);
+      assert.equal(evidence.attributes.matchedBareContextPhrase, "Meridian Collective", source.key);
+      assert.ok(["professional", "alumni"].includes(evidence.attributes.matchedBareContextRelation), source.key);
+    } else {
+      assert.equal(evidence.disposition, "discovery_only", source.key);
+      assert.equal(evidence.reliability, 0, source.key);
+      assert.equal(evidence.attributes.findingAuthority, false, source.key);
+    }
+  }
+
+  const hypothesisDiscovery = completed.report.evidence.filter(
+    (evidence) =>
+      evidence.verificationMethod === "search_discovery" && evidence.attributes.querySubjectHypothesis === true,
+  );
+  const leadBucketCandidateIds = new Set(hypothesisDiscovery.map((evidence) => evidence.candidateId));
+  assert.equal(leadBucketCandidateIds.size, 1);
+  const leadBucketCandidateId = [...leadBucketCandidateIds][0];
+  const leadBucket = completed.report.candidates.find((candidate) => candidate.id === leadBucketCandidateId);
+  assert.ok(leadBucket);
+  assert.equal(
+    completed.report.evidence.some(
+      (evidence) => evidence.candidateId === leadBucket.id && evidence.disposition === "supports",
+    ),
+    false,
+    "the provisional query subject must remain a discovery-only lead bucket",
+  );
+
+  const acceptedDirectEvidence = completed.report.evidence.filter(
+    (evidence) =>
+      evidence.verificationMethod === "direct_fetch" &&
+      evidence.disposition === "supports" &&
+      sources.some((source) => source.accepted && source.url === evidence.sourceUrl),
+  );
+  assert.equal(acceptedDirectEvidence.length, 3);
+  const acceptedCandidateIds = new Set(acceptedDirectEvidence.map((evidence) => evidence.candidateId));
+  assert.equal(acceptedCandidateIds.size, 3, "each accepted source must retain a separate candidate branch");
+  assert.ok([...acceptedCandidateIds].every((candidateId) => candidateId !== leadBucket.id));
+  const acceptedCandidates = completed.report.candidates.filter((candidate) => acceptedCandidateIds.has(candidate.id));
+  assert.equal(acceptedCandidates.length, 3);
+  for (const candidate of acceptedCandidates) {
+    const candidateDirect = acceptedDirectEvidence.filter((evidence) => evidence.candidateId === candidate.id);
+    assert.equal(candidateDirect.length, 1);
+    assert.equal(new Set(candidateDirect.map((evidence) => evidence.sourceFamily)).size, 1);
+    assert.equal(
+      candidate.signals.some((signal) => signal.kind === "cross_source_match"),
+      false,
+      "same-name/context pages must not manufacture a cross-source identity signal",
+    );
+    const context = domain.assessCandidateContextCorroboration(
+      candidate,
+      completed.report.evidence,
+      completed.report.target,
+    );
+    assert.ok(context);
+    assert.equal(context.decision, "probable");
+    assert.equal(context.sourceFamilies.length, 1);
+    assert.ok(context.score <= domain.CONTEXT_CORROBORATION_ONE_FAMILY_CAP);
+  }
+
+  assert.equal(completed.report.identity.status, "ambiguous");
+  assert.ok(acceptedCandidateIds.has(completed.report.identity.selectedCandidateId));
+  assert.ok(acceptedCandidateIds.has(completed.report.identity.runnerUpCandidateId));
+  assert.equal(completed.report.identity.resolutionBasis, "context_corroboration");
+  assert.equal(completed.report.identity.contextDecision, "probable");
+  assert.ok(completed.report.identity.resolutionScore <= domain.CONTEXT_CORROBORATION_ONE_FAMILY_CAP);
+  assert.deepEqual(completed.report.identity.resolutionContextKeys, [
+    "bio_phrase:meridian collective",
+    "name:alex rivera",
+  ]);
+  assert.equal(completed.report.identity.resolutionSourceFamilies.length, 1);
+
+  const candidateNodeByCandidateId = new Map(
+    completed.report.searchGraph.nodes
+      .filter((node) => node.kind === "candidate" && node.candidateId)
+      .map((node) => [node.candidateId, node]),
+  );
+  const leadBucketNode = candidateNodeByCandidateId.get(leadBucket.id);
+  assert.ok(leadBucketNode);
+  for (const candidateId of acceptedCandidateIds) {
+    const branchNode = candidateNodeByCandidateId.get(candidateId);
+    assert.ok(branchNode);
+    assert.ok(
+      completed.report.searchGraph.edges.some(
+        (edge) => edge.kind === "separates" && edge.fromNodeId === leadBucketNode.id && edge.toNodeId === branchNode.id,
+      ),
+      `missing lead-bucket separation edge for ${candidateId}`,
+    );
+  }
+
+  const viewModel = reportExport.createReportViewModel(completed.report);
+  assert.equal(viewModel.identity.selected, null);
+  assert.ok(acceptedCandidateIds.has(viewModel.identity.lead?.id));
+  assert.equal(viewModel.identity.decisionLabel, "Competing candidates");
+  assert.match(viewModel.executiveSummary, /^Competing candidates: Alex Rivera is the highest-ranked profile/);
+  const acceptedProfiles = viewModel.identity.profiles.filter((profile) => acceptedCandidateIds.has(profile.id));
+  assert.equal(acceptedProfiles.length, 3);
+  assert.ok(
+    acceptedProfiles.every(
+      (profile) =>
+        profile.profileFacts.length === 1 &&
+        sources.some((source) => source.accepted && source.excerpt === profile.profileFacts[0].claim),
+    ),
+    "each probable profile must expose only its own exact source fact",
+  );
+  assert.deepEqual(completed.report.findings, [], "successful empty synthesis remains an intentional abstention");
+
+  assert.deepEqual(
+    synthesisSnapshots.map((snapshot) => snapshot.usefulDirectIds.length),
+    [1, 3],
+    "synthesis may rerun only when newly admitted useful direct support appears",
+  );
+  assert.ok(synthesisSnapshots.at(-1).discoveryOnlyCount >= sources.length + 2);
+  assert.equal(
+    completed.trace.events.filter((event) => event.kind === "span_start" && event.name === "synthesis.findings").length,
+    synthesisSnapshots.length,
+    "discovery-only search and rejected direct rows must not create extra synthesis calls",
+  );
+  assert.equal(providerSearchCalls, plan.queries.length);
+  assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
+  assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
 test("finding synthesis prompt prefers durable candidate-bound professional facts", async () => {
   const input = domain.parseInvestigationInput({
     schemaVersion: domain.SCHEMA_VERSION,
@@ -5002,6 +5933,7 @@ test("finding synthesis prompt prefers durable candidate-bound professional fact
     ids: domain.createDeterministicIdFactory("durable-synthesis-contract"),
   });
   let synthesisSystemPrompt = "";
+  let synthesisState = null;
   const dependencies = createLiveDependencies(input, {
     apiKey: "test-key",
     model: "test/model",
@@ -5009,6 +5941,7 @@ test("finding synthesis prompt prefers durable candidate-bound professional fact
       const body = JSON.parse(typeof init.body === "string" ? init.body : new TextDecoder().decode(init.body));
       assert.ok(body.tools.some((tool) => tool.function?.name === "submit_findings"));
       synthesisSystemPrompt = body.messages.find((message) => message.role === "system")?.content ?? "";
+      synthesisState = JSON.parse(body.messages.find((message) => message.role === "user")?.content ?? "null");
       return jsonResponse({
         id: "generation-durable-synthesis-contract",
         model: "test/model",
@@ -5040,7 +5973,36 @@ test("finding synthesis prompt prefers durable candidate-bound professional fact
     },
   });
 
-  const result = await dependencies.synthesize(engine.snapshot(), {
+  const synthesisInput = structuredClone(engine.snapshot());
+  synthesisInput.evidence = [
+    {
+      id: "evidence-direct-professional",
+      candidateId: "candidate-avery-stone",
+      claim: "Avery Stone founded Northstar Labs.",
+      disposition: "supports",
+      sourceUrl: "https://northstar.example/team/avery-stone",
+      sourceFamily: "northstar.example",
+      sourceType: "company_page",
+      excerpt: "Avery Stone founded Northstar Labs.",
+      spoofable: true,
+      verificationMethod: "direct_fetch",
+      attributes: {},
+    },
+    {
+      id: "evidence-discovery-noise",
+      candidateId: "candidate-avery-stone",
+      claim: "Search surfaced a possible profile.",
+      disposition: "discovery_only",
+      sourceUrl: "https://search.example/result",
+      sourceFamily: "search.example",
+      sourceType: "search_result",
+      excerpt: null,
+      spoofable: true,
+      verificationMethod: "search_discovery",
+      attributes: { leadId: "lead-noise" },
+    },
+  ];
+  const result = await dependencies.synthesize(synthesisInput, {
     schemaVersion: domain.SCHEMA_VERSION,
     modelAccounting: { reserve: () => true, settle: () => {} },
   });
@@ -5050,4 +6012,8 @@ test("finding synthesis prompt prefers durable candidate-bound professional fact
   assert.match(synthesisSystemPrompt, /rankings, wealth, market or news updates, or editorial chrome/);
   assert.match(synthesisSystemPrompt, /Never cross candidates/);
   assert.match(synthesisSystemPrompt, /Search\/discovery evidence cannot support a finding/);
+  assert.deepEqual(
+    synthesisState.evidence.map((item) => item.id),
+    ["evidence-direct-professional"],
+  );
 });

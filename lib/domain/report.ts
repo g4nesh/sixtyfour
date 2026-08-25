@@ -14,6 +14,7 @@ import type {
 } from "./types";
 import { SCHEMA_VERSION } from "./types";
 import { containsRestrictedPublicContent, restrictedJsonContentPaths } from "./content-policy";
+import { assessCandidateContextCorroboration, type CandidateContextCorroboration } from "./candidates";
 
 export const IDENTITY_RESOLUTION_THRESHOLD = 0.78;
 export const IDENTITY_MARGIN_THRESHOLD = 0.15;
@@ -68,9 +69,19 @@ export function requestedCategoriesForInput(
 export function resolveIdentity(
   candidates: readonly Candidate[],
   evidence: readonly EvidenceRecord[] = [],
+  target?: InvestigationState["target"],
 ): IdentityResolution {
+  const contextualAssessments = new Map<string, CandidateContextCorroboration>();
+  if (target) {
+    for (const candidate of candidates) {
+      const assessment = assessCandidateContextCorroboration(candidate, evidence, target);
+      if (assessment) contextualAssessments.set(candidate.id, assessment);
+    }
+  }
+  const resolutionScore = (candidate: Candidate): number =>
+    Math.max(candidate.score.total, contextualAssessments.get(candidate.id)?.score ?? 0);
   const ranked = [...candidates].sort(
-    (left, right) => right.score.total - left.score.total || left.id.localeCompare(right.id),
+    (left, right) => resolutionScore(right) - resolutionScore(left) || left.id.localeCompare(right.id),
   );
   const eligible = ranked.filter((candidate) => candidate.status !== "rejected");
   const selected = eligible[0];
@@ -81,7 +92,10 @@ export function resolveIdentity(
   const selectedScore = selected?.score.total ?? 0;
   const runnerUpScore = runnerUp?.score.total ?? 0;
   const runnerUpMargin = roundScore(selectedScore - runnerUpScore);
-  const resolvedByDiversity = selected?.status === "resolved" && selectedScore >= IDENTITY_RESOLUTION_THRESHOLD;
+  const selectedResolutionScore = selected ? resolutionScore(selected) : 0;
+  const runnerUpResolutionScore = runnerUp ? resolutionScore(runnerUp) : 0;
+  const resolutionMargin = roundScore(selectedResolutionScore - runnerUpResolutionScore);
+  const resolvedByDiversity = selected?.status === "resolved" && selected.score.total >= IDENTITY_RESOLUTION_THRESHOLD;
   // A unique official anchor substitutes for family diversity: it resolves a
   // clearly-leading candidate whose score sits below the diversity threshold
   // because its corroboration comes from one authoritative source rather than
@@ -89,17 +103,24 @@ export function resolveIdentity(
   const resolvedByAnchor =
     Boolean(selected) &&
     selected!.status !== "rejected" &&
-    selectedScore >= UNIQUE_ANCHOR_RESOLUTION_FLOOR &&
+    selected!.score.total >= UNIQUE_ANCHOR_RESOLUTION_FLOOR &&
     candidateHasUniqueOfficialAnchor(selected!, evidence);
+  const selectedContextAssessment = selected ? contextualAssessments.get(selected.id) : undefined;
+  const resolvedByContext = Boolean(
+    selectedContextAssessment?.decision === "resolved_eligible" &&
+    selectedContextAssessment.score >= IDENTITY_RESOLUTION_THRESHOLD,
+  );
   const resolved =
-    Boolean(selected) && (resolvedByDiversity || resolvedByAnchor) && runnerUpMargin >= IDENTITY_MARGIN_THRESHOLD;
+    Boolean(selected) &&
+    (resolvedByDiversity || resolvedByAnchor || resolvedByContext) &&
+    resolutionMargin >= IDENTITY_MARGIN_THRESHOLD;
   const ambiguous =
     !resolved &&
     Boolean(selected) &&
-    (selectedScore >= 0.38 || runnerUpScore >= 0.38) &&
+    (selectedResolutionScore >= 0.38 || runnerUpResolutionScore >= 0.38) &&
     Boolean(runnerUp) &&
     runnerUp?.status !== "rejected" &&
-    runnerUpMargin < IDENTITY_MARGIN_THRESHOLD;
+    resolutionMargin < IDENTITY_MARGIN_THRESHOLD;
 
   return {
     status: resolved ? "resolved" : ambiguous ? "ambiguous" : "unresolved",
@@ -112,6 +133,25 @@ export function resolveIdentity(
     runnerUpMargin,
     resolutionThreshold: IDENTITY_RESOLUTION_THRESHOLD,
     marginThreshold: IDENTITY_MARGIN_THRESHOLD,
+    ...(contextualAssessments.size > 0
+      ? {
+          resolutionBasis:
+            selectedContextAssessment && selectedResolutionScore > selectedScore
+              ? ("context_corroboration" as const)
+              : ("candidate_score" as const),
+          resolutionScore: selectedResolutionScore,
+          runnerUpResolutionScore,
+          resolutionMargin,
+          ...(selectedContextAssessment
+            ? {
+                contextDecision: selectedContextAssessment.decision,
+                resolutionEvidenceIds: selectedContextAssessment.evidenceIds,
+                resolutionSourceFamilies: selectedContextAssessment.sourceFamilies,
+                resolutionContextKeys: selectedContextAssessment.matchedContextKeys,
+              }
+            : {}),
+        }
+      : {}),
   };
 }
 
@@ -136,10 +176,11 @@ export function summarizeSources(evidence: readonly EvidenceRecord[]): SourceSum
 }
 
 export function summarizeCoverage(
-  state: Pick<InvestigationState, "candidates" | "findings" | "evidence" | "openQuestions">,
+  state: Pick<InvestigationState, "candidates" | "findings" | "evidence" | "openQuestions"> &
+    Partial<Pick<InvestigationState, "target">>,
   requestedCategories: readonly FindingCategory[] = DEFAULT_REQUESTED_CATEGORIES,
 ): CoverageSummary {
-  const selectedCandidateId = resolveIdentity(state.candidates, state.evidence).selectedCandidateId;
+  const selectedCandidateId = resolveIdentity(state.candidates, state.evidence, state.target).selectedCandidateId;
   const selectedFindings = selectedCandidateId
     ? state.findings.filter((finding) => finding.candidateId === selectedCandidateId)
     : [];
@@ -173,11 +214,17 @@ export function summarizeCoverage(
 }
 
 export function reportTelemetry(
-  state: Pick<InvestigationState, "candidates" | "findings" | "evidenceTelemetry">,
+  state: Pick<InvestigationState, "candidates" | "findings" | "evidence" | "evidenceTelemetry" | "target">,
 ): ReportTelemetry {
+  const identity = resolveIdentity(state.candidates, state.evidence, state.target);
+  const contextuallyResolvedIdentity =
+    identity.status === "resolved" && identity.resolutionBasis === "context_corroboration";
   return {
     candidateCount: state.candidates.length,
-    resolvedCandidateCount: state.candidates.filter((candidate) => candidate.status === "resolved").length,
+    resolvedCandidateCount: Math.max(
+      contextuallyResolvedIdentity ? 1 : 0,
+      state.candidates.filter((candidate) => candidate.status === "resolved").length,
+    ),
     evidence: { ...state.evidenceTelemetry },
     findingCount: state.findings.length,
     highConfidenceFindingCount: state.findings.filter((finding) => finding.confidence.score >= 0.75).length,
@@ -237,7 +284,7 @@ export function buildInvestigationReport(state: InvestigationState, clock: Clock
   if (state.status === "running" || state.phase !== "terminal" || !state.stop) {
     throw new Error("a report can be built only from a terminal investigation state");
   }
-  const identity = resolveIdentity(state.candidates, state.evidence);
+  const identity = resolveIdentity(state.candidates, state.evidence, state.target);
   const coverage = summarizeCoverage(state, requestedCategoriesForInput(state.input));
   const limitations = [
     ...new Set([
