@@ -43,7 +43,7 @@
   "dependencies": {
     "@langchain/core": "1.2.9",
     "@langchain/langgraph": "1.4.12",
-    "@react-pdf/renderer": "4.6.1",
+    "@react-pdf/renderer": "4.8.1",
     "@xyflow/react": "12.11.3",
     "elkjs": "0.12.0",
     "react": "19.2.8",
