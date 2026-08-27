@@ -78,6 +78,7 @@ import {
   exactFetchedPersonBioPath,
   githubHandleFromCanonicalProfileUrl,
   groundedGithubHandleForCandidate,
+  matchesCompiledOsintResultShape,
   sourceLaneById,
   sourceTierContextForState,
   sourceTierForUrl,
@@ -2551,6 +2552,13 @@ export function createLiveDependencies(
       const qualifyCitations = (incoming: readonly Citation[]): Citation[] =>
         incoming.flatMap((citation) => {
           if (citation.leadSchedulingDisposition && citation.leadSchedulingReason) return [citation];
+          if (compiledQuery && !matchesCompiledOsintResultShape(compiledQuery.resultShape, citation.url)) {
+            rejectedLeadReasons.set(
+              "query_result_shape_mismatch",
+              (rejectedLeadReasons.get("query_result_shape_mismatch") ?? 0) + 1,
+            );
+            return [];
+          }
           const decision = discoveryLeadSchedulingDecision(citation.url, citation.title, tierContext);
           if (decision.disposition === "reject") {
             rejectedLeadReasons.set(decision.reason, (rejectedLeadReasons.get(decision.reason) ?? 0) + 1);
@@ -2921,7 +2929,7 @@ export function createLiveDependencies(
           code: "discovery_leads_rejected_as_non_professional",
           severity: "info",
           message:
-            "Atlas discarded bounded search annotations whose URL/title shape was navigation, template, quote, or stock-media noise rather than a public-professional source.",
+            "Atlas discarded bounded search annotations whose URL/title shape was navigation, template, quote, stock-media noise, or did not match the compiled public-content permalink shape.",
           retryable: false,
           details: {
             rejectedLeadCount,

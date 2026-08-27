@@ -724,6 +724,56 @@ function isOpaqueCandidateLeadFetchEntry(entry: SearchFrontierEntry): boolean {
   );
 }
 
+interface DeepSubjectFocusPrune {
+  graph: SearchGraph;
+  focusedCandidateId: string | null;
+  prunedFrontierEntryIds: string[];
+  ambiguous: boolean;
+}
+
+/**
+ * Deep named-person research may keep alternate candidates for audit, but only
+ * the immutable query-subject anchor is allowed to own active candidate-bound
+ * work. This is a routing constraint, not identity evidence: it never changes
+ * candidate score, merge eligibility, or report resolution.
+ */
+export function pruneForeignDeepSubjectFrontier(
+  graphValue: SearchGraph,
+  state: InvestigationState,
+  timestamp: string,
+): DeepSubjectFocusPrune {
+  if (state.input.requestedDepth !== "deep" || state.target.kind !== "named_person") {
+    return { graph: graphValue, focusedCandidateId: null, prunedFrontierEntryIds: [], ambiguous: false };
+  }
+  const focus = resolveQuerySubjectAnchor(state, state.target);
+  if (focus.kind === "none") {
+    return { graph: graphValue, focusedCandidateId: null, prunedFrontierEntryIds: [], ambiguous: false };
+  }
+  const focusedCandidateId = focus.kind === "unique" ? focus.candidate.id : null;
+  const prunedFrontierEntryIds = graphValue.frontier
+    .filter((entry) => entry.candidateId !== null)
+    .filter((entry) => ["queued", "mutated"].includes(entry.status))
+    .filter((entry) => focusedCandidateId === null || entry.candidateId !== focusedCandidateId)
+    .map((entry) => entry.id)
+    .sort();
+  if (prunedFrontierEntryIds.length === 0) {
+    return {
+      graph: graphValue,
+      focusedCandidateId,
+      prunedFrontierEntryIds,
+      ambiguous: focus.kind === "ambiguous",
+    };
+  }
+  const graph = setFrontierStatus(graphValue, prunedFrontierEntryIds, "exhausted", timestamp);
+  graph.telemetry.exhausted += prunedFrontierEntryIds.length;
+  return {
+    graph,
+    focusedCandidateId,
+    prunedFrontierEntryIds,
+    ambiguous: focus.kind === "ambiguous",
+  };
+}
+
 function isFiniteCanonicalOrLeadEntry(entry: SearchFrontierEntry): boolean {
   return isCanonicalCompilerSearchEntry(entry) || isOpaqueCandidateLeadFetchEntry(entry);
 }
@@ -2696,6 +2746,19 @@ export async function* runResearch(
         }
 
         const state = engine.snapshot();
+        const focusPrune = pruneForeignDeepSubjectFrontier(graph, state, engine.clock.now());
+        graph = focusPrune.graph;
+        if (focusPrune.prunedFrontierEntryIds.length > 0) {
+          engine.trace.record("frontier.exhausted", {
+            phase: engine.phase,
+            payload: {
+              reason: focusPrune.ambiguous ? "deep_subject_focus_ambiguous" : "deep_subject_focus_locked",
+              focusedCandidateId: focusPrune.focusedCandidateId,
+              frontierEntryIds: focusPrune.prunedFrontierEntryIds,
+              entryCount: focusPrune.prunedFrontierEntryIds.length,
+            },
+          });
+        }
         const remainingCalls = Math.max(0, state.budget.limits.maxToolCalls - state.budget.usage.toolCalls);
         const limit = Math.min(state.budget.limits.maxActionsPerTurn, remainingCalls, MAX_OUTBOUND_CONCURRENCY);
         const discoveryLeadContexts = Object.fromEntries(
@@ -2708,7 +2771,7 @@ export async function* runResearch(
         );
         const qualityProbeSelectionEnabled =
           state.input.requestedDepth === "deep" &&
-          attemptedQualityProbeEntryIds.size < 2 &&
+          attemptedQualityProbeEntryIds.size < 1 &&
           !qualityProbeProducedUsefulDirectEvidence();
         const interleavePriorityProbe =
           qualityProbeSelectionEnabled &&
@@ -2716,15 +2779,16 @@ export async function* runResearch(
           attemptedQualityProbeEntryIds.size === 0 &&
           hasActiveCanonicalSearch();
         const selection = selectFrontierBatch(graph, limit, engine.clock.now(), {
-          // Deep investigations reserve finite compiler breadth. After the
-          // first T1 batch, one persisted-priority quality probe may run; all
-          // remaining optional fetch pivots wait until every still-legal
-          // canonical query has reached the search adapter once. Exact T0 and
-          // exact-URL dependencies keep their normal precedence.
-          reserveCanonicalCompilerBreadth: state.input.requestedDepth === "deep",
+          // Deep named-person investigations ground one subject first. After
+          // the first T1 batch, one persisted-priority focus probe may run;
+          // the scheduler then interleaves that subject's exact fetches with
+          // the remaining focused source queries instead of exhausting broad
+          // canonical search before reading any source.
+          reserveCanonicalCompilerBreadth:
+            state.input.requestedDepth === "deep" && attemptedQualityProbeEntryIds.size === 0,
           prioritizeDiscoveryLeadProbe: qualityProbeSelectionEnabled,
           interleaveOnePrioritizedProbeDuringCanonicalBreadth: interleavePriorityProbe,
-          maxPrioritizedDiscoveryLeadProbes: 2,
+          maxPrioritizedDiscoveryLeadProbes: 1,
           attemptedPrioritizedDiscoveryLeadProbeEntryIds: attemptedQualityProbeEntryIds,
           discoveryLeadContexts,
           discoveryLeadSchedulingDecisions,
@@ -2811,7 +2875,7 @@ export async function* runResearch(
         } else if (deterministicQualityProbeBatch) {
           plannerDecision = {
             kind: "actions",
-            decisionSummary: "Atlas mechanically routed one bounded source-shape quality probe.",
+            decisionSummary: "Atlas mechanically routed one bounded subject-focus grounding probe.",
             actions: selectedEntries.map((entry) => ({
               frontierEntryId: entry.id,
               tool: "fetch_public_source",

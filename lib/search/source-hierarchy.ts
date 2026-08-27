@@ -463,6 +463,7 @@ export type DiscoveryLeadSchedulingDisposition = "reject" | "deprioritize" | "ne
 
 export type DiscoveryLeadSchedulingReason =
   | "invalid_url"
+  | "query_result_shape_mismatch"
   | "non_professional_navigation"
   | "resume_or_template"
   | "quote_content"
@@ -1395,15 +1396,15 @@ export function compiledQueriesForLane(
       .sort((left, right) => priority(left) - priority(right));
   }
   if (lane.id === "t4.reputable_media") {
-    return [];
+    return plan.queries.filter((query) => query.kind === "authored_content" || query.kind === "interview_discussion");
   }
   if (lane.id === "t6.general_discovery") {
     return plan.queries.filter(
       (query) =>
         query.kind === "exact_refinement" ||
-        query.kind === "orthographic_name" ||
-        query.kind === "initial_name" ||
-        query.kind === "public_social_site",
+        query.kind === "professional_content" ||
+        query.kind === "public_thread" ||
+        query.kind === "public_forum",
     );
   }
   return [];

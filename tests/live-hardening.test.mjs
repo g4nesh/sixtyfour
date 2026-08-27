@@ -794,6 +794,114 @@ test("configured-provider citations obey complete positive site scopes without c
   assert.equal(providerCall, 4);
 });
 
+test("compiled Deep social searches reject platform profiles and navigation while admitting exact public content", async () => {
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Denise Hilary",
+    requestedDepth: "deep",
+  });
+  const engine = new agent.InvestigationEngine(input, {
+    clock: domain.createSequenceClock("2026-08-20T18:20:00.000Z", 1),
+    ids: domain.createDeterministicIdFactory("provider-social-result-shapes"),
+  });
+  const plan = search.compileOsintQueries(engine.snapshot().target);
+  assert.equal(plan.status, "compiled");
+  const queryByKind = new Map(plan.queries.map((query) => [query.kind, query]));
+  const annotationSets = {
+    professional_content: [
+      [
+        "https://www.linkedin.com/posts/denise-hilary_public-research-activity-1234567890123456789-aaaa",
+        "Denise Hilary on public research",
+      ],
+      ["https://www.linkedin.com/in/denise-hilary", "Denise Hilary profile"],
+      ["https://www.linkedin.com/jobs/search/?keywords=Denise", "LinkedIn jobs"],
+    ],
+    public_thread: [
+      ["https://x.com/denise/status/1234567890123456789", "Denise Hilary thread"],
+      ["https://x.com/denise", "Denise Hilary profile"],
+      ["https://twitter.com/explore", "Explore"],
+    ],
+    public_forum: [
+      ["https://www.reddit.com/r/MachineLearning/comments/abc123/denise_hilary_ama/", "Denise Hilary AMA"],
+      ["https://www.reddit.com/r/MachineLearning/", "Machine Learning forum"],
+      ["https://www.reddit.com/user/denise-hilary/", "Reddit user profile"],
+    ],
+  };
+  let providerCall = 0;
+  const dependencies = createLiveDependencies(input, {
+    apiKey: "test-key",
+    model: "test/model",
+    ids: domain.createDeterministicIdFactory("provider-social-result-shapes-live"),
+    fetch: async (request, init = {}) => {
+      const url = new URL(String(request));
+      assert.equal(url.hostname, "openrouter.ai");
+      const body = JSON.parse(typeof init.body === "string" ? init.body : new TextDecoder().decode(init.body));
+      const query = body.tools?.[0]?.web_search?.search_context_size ? null : body.messages.at(-1)?.content;
+      const orderedKinds = ["professional_content", "public_thread", "public_forum"];
+      const kind = orderedKinds[providerCall++];
+      assert.ok(kind, `unexpected provider call for ${query ?? "compiled social query"}`);
+      return jsonResponse({
+        id: `generation-social-result-shape-${providerCall}`,
+        model: "test/model",
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: "Bounded public content results.",
+              annotations: annotationSets[kind].map(([urlValue, title]) => ({
+                type: "url_citation",
+                url_citation: { url: urlValue, title },
+              })),
+            },
+          },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 1 },
+      });
+    },
+  });
+
+  const expectedUrls = [
+    "https://www.linkedin.com/posts/denise-hilary_public-research-activity-1234567890123456789-aaaa",
+    "https://x.com/denise/status/1234567890123456789",
+    "https://www.reddit.com/r/MachineLearning/comments/abc123/denise_hilary_ama/",
+  ];
+  for (const [ordinal, kind] of ["professional_content", "public_thread", "public_forum"].entries()) {
+    const compiled = queryByKind.get(kind);
+    assert.ok(compiled);
+    const result = await dependencies.executeAction(
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        id: `action-social-result-shape-${ordinal}`,
+        frontierEntryId: `action-social-result-shape-${ordinal}`,
+        tool: "search_web",
+        purpose: "Exercise exact public-content result-shape admission.",
+        arguments: { query: compiled.query },
+        budgetClass: "search",
+        sourceTier: 6,
+        sourceLaneId: "t6.general_discovery",
+        pathCost: 1,
+        mutated: false,
+      },
+      {
+        schemaVersion: domain.SCHEMA_VERSION,
+        state: engine.snapshot(),
+        modelAccounting: { reserve: () => true, settle: () => {} },
+      },
+    );
+    assert.equal(result.status, "succeeded");
+    assert.deepEqual(
+      result.evidence.map((evidence) => evidence.sourceUrl),
+      [expectedUrls[ordinal]],
+    );
+    const rejected = result.diagnostics.find(
+      (diagnostic) => diagnostic.code === "discovery_leads_rejected_as_non_professional",
+    );
+    assert.deepEqual(rejected?.details?.reasons, [{ reason: "query_result_shape_mismatch", count: 2 }]);
+  }
+  assert.equal(providerCall, 3);
+});
+
 test("exact T1 baseline persists at most one generic-title exact-subject slug probe", async () => {
   const input = domain.parseInvestigationInput({
     schemaVersion: domain.SCHEMA_VERSION,
@@ -1180,7 +1288,7 @@ test("concurrent canonical searches and a later site query share one explicit ru
       });
     },
   });
-  const noncanonicalPlannerBatches = [];
+  const plannerBatches = [];
   const updates = [];
   for await (const update of agent.runResearch(
     input,
@@ -1195,15 +1303,22 @@ test("concurrent canonical searches and a later site query share one explicit ru
         ) {
           return { kind: "stop", decisionSummary: "The bounded anchor regression is complete." };
         }
-        noncanonicalPlannerBatches.push(selectedFrontierEntries.map((entry) => entry.queryHint));
+        plannerBatches.push(
+          selectedFrontierEntries.map((entry) => ({
+            queryHint: entry.queryHint,
+            canonical: search.isCanonicalCompilerSearchEntry(entry),
+          })),
+        );
         return {
           kind: "actions",
-          decisionSummary: "Execute the selected canonical discovery breadth.",
+          decisionSummary: "Execute the selected focused public-source capability.",
           actions: selectedFrontierEntries.map((entry) => ({
             frontierEntryId: entry.id,
-            tool: "search_web",
+            tool: entry.allowedTools[0],
             purpose: "Exercise run-local query-subject admission.",
-            arguments: { query: entry.queryHint },
+            arguments:
+              entry.allowedTools[0] === "search_web" ? { query: entry.queryHint } : { leadId: entry.queryHint },
+            ...(entry.candidateId ? { candidateId: entry.candidateId } : {}),
           })),
         };
       },
@@ -1220,14 +1335,14 @@ test("concurrent canonical searches and a later site query share one explicit ru
     {
       availableTools: ["search_web", "fetch_public_source"],
       budget: {
-        maxTurns: 6,
-        maxLlmCalls: 12,
-        maxToolCalls: 12,
-        maxSearchCalls: 12,
-        maxEvidenceAttempts: 16,
-        maxConsecutiveNoProgress: 4,
+        maxTurns: 12,
+        maxLlmCalls: 20,
+        maxToolCalls: 24,
+        maxSearchCalls: 20,
+        maxEvidenceAttempts: 32,
+        maxConsecutiveNoProgress: 8,
         maxActionsPerTurn: 2,
-        phaseCaps: { plan: 2, discover: 4, separate_candidates: 2, corroborate: 2, calibrate: 2, report: 1 },
+        phaseCaps: { plan: 2, discover: 8, separate_candidates: 4, corroborate: 6, calibrate: 4, report: 1 },
       },
     },
   ))
@@ -1235,26 +1350,30 @@ test("concurrent canonical searches and a later site query share one explicit ru
 
   const completed = updates.at(-1);
   assert.equal(completed.type, "completed");
-  assert.equal(noncanonicalPlannerBatches.length, 0, "canonical-only Deep batches bypass the model planner");
+  assert.ok(plannerBatches.length > 0, "candidate-bound or mixed batches still cross the planner boundary");
+  assert.equal(
+    plannerBatches.some((batch) => batch.every((entry) => entry.canonical)),
+    false,
+    "canonical-only Deep batches bypass the model planner",
+  );
   const deterministicRoutes = completed.trace.events.filter(
     (event) => event.name === "scheduler.canonical_batch_routed",
   );
-  assert.ok(deterministicRoutes.length > 1);
+  assert.ok(deterministicRoutes.length >= 1);
   const executedSearchActions = executedActions.filter((action) => action.tool === "search_web");
   const executedFetchActions = executedActions.filter((action) => action.tool === "fetch_public_source");
-  assert.equal(
-    deterministicRoutes.reduce((sum, event) => sum + event.payload.entryCount, 0),
-    executedSearchActions.length,
+  assert.ok(
+    deterministicRoutes.reduce((sum, event) => sum + event.payload.entryCount, 0) <= executedSearchActions.length,
+    "mechanically routed canonical-only work is a subset of all executed focused searches",
   );
   assert.ok(executedActions.some((action) => action.query === '"Avery Stone"'));
   assert.ok(executedActions.some((action) => action.query.includes('"Example University"')));
-  assert.ok(executedActions.some((action) => action.query.includes("site:github.com")));
-  assert.ok(executedActions.some((action) => action.query.includes("site:linkedin.com")));
-  assert.equal(
-    executedFetchActions.length,
-    1,
-    "only one persisted-priority probe may interleave with canonical breadth",
+  assert.ok(
+    executedActions.some((action) => action.query.includes("site:github.com")),
+    JSON.stringify({ executedActions, stop: completed.report.stop, plannerBatches }),
   );
+  assert.ok(executedActions.some((action) => action.query.includes("site:linkedin.com")));
+  assert.ok(executedFetchActions.length >= 1, "focused opaque leads may be fetched while exact queries continue");
   const interleavedProbe = completed.trace.events.find(
     (event) =>
       event.name === "frontier.quality_probe_selected" && event.payload.interleavedBeforeCanonicalBreadth === true,
@@ -5785,8 +5904,13 @@ test("full runner isolates lowercase bare name-context sources without discovery
     "one persisted-priority hypothesis probe must interleave before remaining canonical breadth",
   );
   assert.ok(
-    leadFetchStarts[1].seq > Math.max(...canonicalSearchEnds.map((event) => event.seq)),
-    "no second fetch may run before every canonical query has settled",
+    leadFetchStarts.slice(1).some((event) => event.seq < Math.max(...canonicalSearchEnds.map((item) => item.seq))),
+    "after one grounding probe, ordinary focused fetches may interleave with the remaining exact source queries",
+  );
+  assert.equal(
+    completed.trace.events.filter((event) => event.name === "scheduler.quality_probe_routed").length,
+    1,
+    "only one fetch may receive the server-owned grounding-probe role",
   );
 
   for (const source of sources) assert.equal(sourceRequests.get(source.key), 1, source.key);
@@ -5912,8 +6036,8 @@ test("full runner isolates lowercase bare name-context sources without discovery
 
   assert.deepEqual(
     synthesisSnapshots.map((snapshot) => snapshot.usefulDirectIds.length),
-    [1, 3],
-    "synthesis may rerun only when newly admitted useful direct support appears",
+    [3],
+    "Deep synthesis waits for the focused source traversal and ignores discovery-only churn",
   );
   assert.ok(synthesisSnapshots.at(-1).discoveryOnlyCount >= sources.length + 2);
   assert.equal(

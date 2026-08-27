@@ -3,7 +3,7 @@ import { normalizeWhitespace } from "../domain/runtime";
 import type { ParsedTarget, TargetKind } from "../domain/types";
 import { bareNameContextHypotheses } from "../domain/target";
 
-export const OSINT_QUERY_COMPILER_VERSION = 1 as const;
+export const OSINT_QUERY_COMPILER_VERSION = 2 as const;
 export const MAX_OSINT_QUERY_VARIANTS = 16 as const;
 export const MAX_INSTITUTION_SITE_SCOPES = 2 as const;
 export const MAX_COMPILED_OSINT_QUERY_CHARACTERS = 320 as const;
@@ -21,7 +21,9 @@ const COMPILER_SITE_SCOPES = [
   >;
 }>;
 
-const PUBLIC_SOCIAL_SITE_EXPRESSION = "(site:instagram.com OR site:x.com OR site:facebook.com)" as const;
+const LINKEDIN_CONTENT_SITE_EXPRESSION = "site:linkedin.com (posts OR pulse OR activity)" as const;
+const PUBLIC_THREAD_SITE_EXPRESSION = "(site:x.com OR site:twitter.com) (status OR thread)" as const;
+const PUBLIC_FORUM_SITE_EXPRESSION = "site:reddit.com (comments OR AMA OR discussion)" as const;
 const PROFESSIONAL_IDENTITY_SITE_EXPRESSION = "(site:orcid.org OR site:scholar.google.com)" as const;
 const PUBLIC_SCHOLARLY_SITE_EXPRESSION =
   "(site:openreview.net OR site:semanticscholar.org OR site:crossref.org)" as const;
@@ -46,12 +48,14 @@ export type OsintQueryVariantKind =
   | "exact_refinement"
   | "exact_context"
   | "bare_context_hypothesis"
-  | "orthographic_name"
-  | "initial_name"
   | "professional_site"
   | "public_scholarly_site"
   | "public_academic_site"
-  | "public_social_site"
+  | "professional_content"
+  | "public_thread"
+  | "public_forum"
+  | "authored_content"
+  | "interview_discussion"
   | "public_metadata_site"
   | "regulatory_filing"
   | "institution_site"
@@ -70,6 +74,8 @@ export interface CompiledOsintQuery {
   hypothesisContextPhrase?: string;
   /** Present only for a validated, compiler-admitted site scope. */
   site: string | null;
+  /** Optional exact public permalink shape required in addition to site scope. */
+  resultShape: "any" | "linkedin_content" | "x_thread" | "reddit_discussion";
   /** Negative operators are legal only when this field names the refinement. */
   refinement: "none" | "public_web_noise_exclusions";
   /** Human-auditable derivation label; this is not evidence provenance. */
@@ -78,12 +84,14 @@ export interface CompiledOsintQuery {
     | "compiler_public_professional_refinement"
     | "target_context"
     | "target_bare_context_hypothesis"
-    | "target_name_orthography"
-    | "target_name_initials"
     | "compiler_professional_allowlist"
     | "compiler_public_scholarly_allowlist"
     | "compiler_public_academic_allowlist"
-    | "compiler_public_social_allowlist"
+    | "compiler_professional_content_terms"
+    | "compiler_public_thread_allowlist"
+    | "compiler_public_forum_allowlist"
+    | "compiler_authored_content_terms"
+    | "compiler_interview_terms"
     | "compiler_public_metadata_allowlist"
     | "compiler_regulatory_allowlist"
     | "explicit_institution_domain"
@@ -131,6 +139,7 @@ interface QueryDraft {
   subjectPhrase: string;
   hypothesisContextPhrase?: string;
   site: string | null;
+  resultShape?: CompiledOsintQuery["resultShape"];
   refinement: CompiledOsintQuery["refinement"];
   derivedFrom: CompiledOsintQuery["derivedFrom"];
 }
@@ -250,28 +259,6 @@ function institutionScopes(values: readonly string[]): { accepted: string[]; rej
   return { accepted, rejectedCount };
 }
 
-function orthographicNameVariant(name: string): string | null {
-  const folded = normalizeWhitespace(
-    name
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[’‘`]/g, "'")
-      .replace(/['.-]+/g, " "),
-  );
-  return folded && folded !== name && sanitizePersonName(folded) ? folded : null;
-}
-
-function initialNameVariant(name: string): string | null {
-  const words = name.split(" ");
-  if (words.length < 2) return null;
-  const initial = (word: string): string => `${word[0]?.toLocaleUpperCase("en-US")}.`;
-  const variant =
-    words.length === 2
-      ? `${initial(words[0])} ${words[1]}`
-      : [words[0], ...words.slice(1, -1).map(initial), words.at(-1)].join(" ");
-  return variant !== name && sanitizePersonName(variant) ? variant : null;
-}
-
 function exclusions(): string {
   return PUBLIC_PROFESSIONAL_EXCLUSIONS.join(" ");
 }
@@ -331,6 +318,42 @@ function officialSourceTerms(targetKind: TargetKind): string {
   return targetKind === "organization" || targetKind === "role_query"
     ? "(official OR leadership OR team OR executives)"
     : "(official OR biography OR leadership OR executive)";
+}
+
+/**
+ * Enforce the exact public-content shape requested by a compiler query. Site
+ * scope and permalink shape are independent gates: a platform homepage,
+ * people search, job route, feed, or unrelated navigation result never becomes
+ * a fetch capability merely because the hostname matches.
+ */
+export function matchesCompiledOsintResultShape(
+  resultShape: CompiledOsintQuery["resultShape"],
+  value: string,
+): boolean {
+  if (resultShape === "any") return true;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return false;
+    const host = url.hostname.toLocaleLowerCase("en-US").replace(/^www\./, "");
+    const path = decodeURIComponent(url.pathname);
+    if (resultShape === "linkedin_content") {
+      if (host !== "linkedin.com" && !host.endsWith(".linkedin.com")) return false;
+      return (
+        /^\/(?:posts|pulse)\/[^/?#]{3,320}\/?$/iu.test(path) ||
+        /^\/feed\/update\/urn:li:activity:\d{6,24}\/?$/u.test(path)
+      );
+    }
+    if (resultShape === "x_thread") {
+      if (!["x.com", "twitter.com"].includes(host)) return false;
+      return /^\/[A-Za-z0-9_]{1,32}\/status\/\d{6,24}\/?$/u.test(path);
+    }
+    if (host !== "reddit.com" && !host.endsWith(".reddit.com")) return false;
+    return /^\/(?:r\/[A-Za-z0-9_]{2,32}|user\/[A-Za-z0-9_-]{2,32})\/comments\/[A-Za-z0-9]{3,16}(?:\/[^/?#]{1,300})?\/?$/u.test(
+      path,
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -441,31 +464,6 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     });
   }
 
-  if (target.kind === "named_person") {
-    const orthographic = orthographicNameVariant(context.subjectPhrase);
-    if (orthographic) {
-      drafts.push({
-        kind: "orthographic_name",
-        body: `${quotePhrase(orthographic)} professional`,
-        subjectPhrase: orthographic,
-        site: null,
-        refinement: "public_web_noise_exclusions",
-        derivedFrom: "target_name_orthography",
-      });
-    }
-    const initials = initialNameVariant(context.subjectPhrase);
-    if (initials) {
-      drafts.push({
-        kind: "initial_name",
-        body: `${quotePhrase(initials)} professional`,
-        subjectPhrase: initials,
-        site: null,
-        refinement: "public_web_noise_exclusions",
-        derivedFrom: "target_name_initials",
-      });
-    }
-  }
-
   for (const scope of COMPILER_SITE_SCOPES) {
     const scoped = boundedScopedBody(subject, context.contextPhrases, `site:${scope.site}`);
     drafts.push({
@@ -512,14 +510,65 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     derivedFrom: "compiler_public_academic_allowlist",
   });
 
-  const social = boundedScopedBody(subject, context.contextPhrases, PUBLIC_SOCIAL_SITE_EXPRESSION);
+  const linkedInContent = boundedScopedBody(subject, context.contextPhrases, LINKEDIN_CONTENT_SITE_EXPRESSION);
   drafts.push({
-    kind: "public_social_site",
-    body: social.body,
+    kind: "professional_content",
+    body: linkedInContent.body,
+    subjectPhrase: context.subjectPhrase,
+    site: null,
+    resultShape: "linkedin_content",
+    refinement: "public_web_noise_exclusions",
+    derivedFrom: "compiler_professional_content_terms",
+  });
+
+  const publicThread = boundedScopedBody(subject, context.contextPhrases, PUBLIC_THREAD_SITE_EXPRESSION);
+  drafts.push({
+    kind: "public_thread",
+    body: publicThread.body,
+    subjectPhrase: context.subjectPhrase,
+    site: null,
+    resultShape: "x_thread",
+    refinement: "public_web_noise_exclusions",
+    derivedFrom: "compiler_public_thread_allowlist",
+  });
+
+  const publicForum = boundedScopedBody(subject, context.contextPhrases, PUBLIC_FORUM_SITE_EXPRESSION);
+  drafts.push({
+    kind: "public_forum",
+    body: publicForum.body,
+    subjectPhrase: context.subjectPhrase,
+    site: null,
+    resultShape: "reddit_discussion",
+    refinement: "public_web_noise_exclusions",
+    derivedFrom: "compiler_public_forum_allowlist",
+  });
+
+  const authoredContent = boundedScopedBody(
+    subject,
+    context.contextPhrases,
+    '(article OR blog OR newsletter OR essay OR "guest post")',
+  );
+  drafts.push({
+    kind: "authored_content",
+    body: authoredContent.body,
     subjectPhrase: context.subjectPhrase,
     site: null,
     refinement: "public_web_noise_exclusions",
-    derivedFrom: "compiler_public_social_allowlist",
+    derivedFrom: "compiler_authored_content_terms",
+  });
+
+  const interviewDiscussion = boundedScopedBody(
+    subject,
+    context.contextPhrases,
+    "(interview OR podcast OR talk OR panel OR AMA)",
+  );
+  drafts.push({
+    kind: "interview_discussion",
+    body: interviewDiscussion.body,
+    subjectPhrase: context.subjectPhrase,
+    site: null,
+    refinement: "public_web_noise_exclusions",
+    derivedFrom: "compiler_interview_terms",
   });
 
   const regulatory = boundedScopedBody(subject, context.contextPhrases, PUBLIC_REGULATORY_SITE_EXPRESSION);
@@ -586,10 +635,10 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
   // source into a dead variant merely because it was appended later.
   if (limit === MAX_OSINT_QUERY_VARIANTS && renderable.length > limit) {
     const removableKinds: OsintQueryVariantKind[] = [
-      "orthographic_name",
-      "initial_name",
       "regulatory_filing",
       "exact_refinement",
+      "public_metadata_site",
+      "public_academic_site",
     ];
     const removed = new Set<QueryDraft>();
     for (const kind of removableKinds) {
@@ -608,6 +657,7 @@ export function compileOsintQueries(target: ParsedTarget, options: CompileOsintQ
     subjectPhrase: draft.subjectPhrase,
     ...(draft.hypothesisContextPhrase ? { hypothesisContextPhrase: draft.hypothesisContextPhrase } : {}),
     site: draft.site,
+    resultShape: draft.resultShape ?? "any",
     refinement: draft.refinement,
     derivedFrom: draft.derivedFrom,
   }));

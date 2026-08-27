@@ -204,7 +204,7 @@ test("long exact evidence stays intact while graph labels use the canonical boun
 test("frontier batches stay on the minimum executable tier until lower tiers exhaust", () => {
   const { graph } = seededGraph("Ada Lovelace", ["search_web"]);
   const queuedTiers = [...new Set(graph.frontier.map((entry) => entry.sourceTier))];
-  assert.deepEqual(queuedTiers, [1, 2, 3, 6]);
+  assert.deepEqual(queuedTiers, [1, 2, 3, 4, 6]);
 
   const first = search.selectFrontierBatch(graph, 8, "2026-08-19T17:00:01.000Z");
   assert.ok(first.value.length > 0);
@@ -264,13 +264,13 @@ test("Ashwin Rokkam and Chinmay Bhat receive the complete canonical hierarchy wi
 
     assert.equal(target.kind, "named_person", name);
     assert.equal(plan.status, "compiled", name);
-    assert.equal(plan.queries.length, 12, name);
+    assert.equal(plan.queries.length, 15, name);
     assert.deepEqual(
       new Set(compilerEntries.map((entry) => entry.queryHint)),
       new Set(plan.queries.map((query) => query.query)),
       name,
     );
-    assert.deepEqual(new Set(compilerEntries.map((entry) => entry.sourceTier)), new Set([1, 2, 3, 6]), name);
+    assert.deepEqual(new Set(compilerEntries.map((entry) => entry.sourceTier)), new Set([1, 2, 3, 4, 6]), name);
     const first = search.selectFrontierBatch(graph, 16, "2026-08-20T20:19:01.000Z");
     assert.deepEqual(new Set(first.value.map((entry) => entry.sourceTier)), new Set([1]), name);
     assert.equal(first.value[0].queryHint, `"${name}"`, name);
@@ -586,11 +586,11 @@ test("frontier schedules every surviving compiler variant on its legal source la
   assert.ok(search.validateSearchGraph(forged).some((issue) => issue.code === "compiler_query_binding_mismatch"));
 });
 
-test("a zero-result name traversal reaches every canonical site, PDF, context, and name variant", () => {
+test("a zero-result name traversal reaches every focused professional, authored, thread, forum, and document query", () => {
   const target = domain.parseTarget("Renée D'Angelo Smith, Example Labs");
   const plan = search.compileOsintQueries(target);
   assert.equal(plan.status, "compiled");
-  assert.equal(plan.queries.length, 14);
+  assert.equal(plan.queries.length, 16);
   assert.ok(plan.queries.length <= search.MAX_OSINT_QUERY_VARIANTS);
 
   const ids = domain.createDeterministicIdFactory("compiler-zero-result");
@@ -649,8 +649,11 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
     "exact_baseline",
     "exact_refinement",
     "exact_context",
-    "orthographic_name",
-    "initial_name",
+    "professional_content",
+    "public_thread",
+    "public_forum",
+    "authored_content",
+    "interview_discussion",
     "public_academic_site",
     "public_document",
   ]) {
@@ -660,7 +663,13 @@ test("a zero-result name traversal reaches every canonical site, PDF, context, a
     );
   }
   assert.ok(executedQueries.some((query) => query.includes("filetype:pdf")));
-  assert.ok(executedQueries.some((query) => query.includes("site:instagram.com")));
+  assert.ok(executedQueries.some((query) => query.includes("site:linkedin.com") && query.includes("posts")));
+  assert.ok(executedQueries.some((query) => query.includes("site:x.com") && query.includes("site:twitter.com")));
+  assert.ok(executedQueries.some((query) => query.includes("site:reddit.com") && query.includes("comments")));
+  assert.equal(
+    executedQueries.some((query) => query.includes("site:instagram.com")),
+    false,
+  );
   assert.ok(
     executedQueries.some((query) => query.includes("site:openalex.org") && query.includes("site:researchgate.net")),
   );
@@ -957,7 +966,7 @@ test("the standard runner exhausts every canonical name query before terminating
   const target = domain.parseTarget(targetRaw);
   const plan = search.compileOsintQueries(target);
   assert.equal(plan.status, "compiled");
-  assert.equal(plan.queries.length, 14);
+  assert.equal(plan.queries.length, 16);
   assert.ok(plan.queries.length <= search.MAX_OSINT_QUERY_VARIANTS);
 
   const executedQueries = [];
@@ -1004,20 +1013,25 @@ test("the standard runner exhausts every canonical name query before terminating
   assert.ok(executedQueries.some((query) => query.includes("site:researchgate.net")));
   assert.ok(executedQueries.some((query) => query.includes("site:crossref.org")));
   assert.ok(executedQueries.some((query) => query.includes("site:apps.apple.com")));
-  assert.ok(executedQueries.some((query) => query.includes("site:instagram.com")));
+  assert.ok(executedQueries.some((query) => query.includes("site:linkedin.com") && query.includes("posts")));
+  assert.ok(executedQueries.some((query) => query.includes("site:x.com") && query.includes("site:twitter.com")));
+  assert.ok(executedQueries.some((query) => query.includes("site:reddit.com") && query.includes("comments")));
   assert.ok(executedQueries.some((query) => query.includes("filetype:pdf")));
   assert.ok(plan.queries.some((query) => query.kind === "exact_context"));
-  assert.ok(plan.queries.some((query) => query.kind === "orthographic_name"));
+  assert.equal(new Set(plan.queries.map((query) => query.subjectPhrase)).size, 1);
+  assert.equal(
+    plan.queries.some((query) => ["orthographic_name", "initial_name"].includes(query.kind)),
+    false,
+  );
   assert.equal(
     plan.diagnostics.some((item) => item.code === "query_limit_applied"),
     false,
   );
-  assert.ok(plan.queries.some((query) => query.kind === "initial_name"));
   assert.notEqual(completed.report.stop.reason, "diminishing_returns");
   assert.equal(
     completed.report.stop.reason,
-    "no_legal_actions",
-    "the grouped fourteen-query program ends only after every finite adapter call settles",
+    "budget_exhausted",
+    "the standard turn budget may settle exactly as the bounded sixteen-query focus program finishes",
   );
   assert.equal(
     completed.report.searchGraph.frontier.every((entry) => entry.status === "exhausted"),
@@ -1559,7 +1573,7 @@ test("deep runner consumes one persisted exact-subject slug probe before neutral
     },
     {
       availableTools: ["search_web", "fetch_public_source"],
-      budget: { maxTurns: 10, maxLlmCalls: 6 },
+      budget: { maxTurns: 16, maxLlmCalls: 6 },
     },
   ))
     updates.push(update);
@@ -1597,7 +1611,11 @@ test("deep runner consumes one persisted exact-subject slug probe before neutral
     fetchedLeadIds.indexOf("lead_alex_github_profile") < fetchedLeadIds.indexOf("lead_alex_gist_noise"),
     "neutral structured leads must remain ahead of explicitly deprioritized optional noise",
   );
-  assert.equal(fetchedCountAtFirstSynthesis, 1, "synthesis must run immediately after the useful quality probe");
+  assert.equal(
+    fetchedCountAtFirstSynthesis,
+    leadSpecs.length,
+    "deep synthesis must follow the focused source traversal rather than stopping after its first useful page",
+  );
   assert.equal(synthesisCalls, 1, "the same evidence snapshot must not trigger repeated intermediate synthesis");
   assert.equal(completed.report.findings.length, 1);
   assert.equal(completed.report.findings[0].category, "employment");
@@ -1631,6 +1649,110 @@ test("deep runner consumes one persisted exact-subject slug probe before neutral
   assert.equal(completed.trace.events.filter((event) => event.name === "synthesis.quality_probe_ready").length, 1);
   assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
   assert.deepEqual(domain.validateReferentialIntegrity(completed.state), []);
+});
+
+test("Deep focus keeps alternate candidates auditable while exhausting their candidate-bound work", () => {
+  const clock = domain.createSequenceClock("2026-08-21T19:30:00.000Z", 1);
+  const ids = domain.createDeterministicIdFactory("deep-subject-focus");
+  const input = domain.parseInvestigationInput({
+    schemaVersion: domain.SCHEMA_VERSION,
+    query: "Alex Rivera",
+    requestedDepth: "deep",
+  });
+  const engine = new agent.InvestigationEngine(input, { clock, ids });
+  const anchorSignal = {
+    kind: "name",
+    value: "Alex Rivera",
+    normalizedValue: "alex rivera",
+    strength: "weak",
+    assurance: "self_asserted",
+  };
+  const focus = engine.addCandidate({ displayName: "Alex Rivera", signals: [anchorSignal] }).candidate;
+  const anchorEvidence = engine.admitEvidence({
+    candidateId: focus.id,
+    claim: "The exact query subject was retained as a neutral discovery anchor.",
+    sourceUrl: "https://search.example/result/alex-rivera",
+    sourceType: "search_result",
+    canonicalSubset: { providerAttestedUrl: true },
+    verificationMethod: "search_discovery",
+    attributes: { querySubjectAnchor: true, querySubjectName: "Alex Rivera" },
+  });
+  assert.equal(anchorEvidence.admitted, true);
+  const alternate = engine.addCandidate({ displayName: "Alex Rivera" }).candidate;
+  assert.notEqual(alternate.id, focus.id);
+
+  const seeded = search.seedFrontier(
+    engine.snapshot().searchGraph,
+    engine.snapshot().target,
+    ["search_web"],
+    ids,
+    clock.now(),
+  );
+  const canonical = seeded.graph.frontier[0];
+  assert.ok(canonical);
+  const focusEntry = {
+    ...canonical,
+    id: "frontier_focus_candidate",
+    frontierEntryId: "frontier_focus_candidate",
+    actionId: "frontier_focus_candidate",
+    candidateId: focus.id,
+  };
+  const alternateEntry = {
+    ...canonical,
+    id: "frontier_alternate_candidate",
+    frontierEntryId: "frontier_alternate_candidate",
+    actionId: "frontier_alternate_candidate",
+    candidateId: alternate.id,
+  };
+  const graph = structuredClone(seeded.graph);
+  graph.frontier.push(focusEntry, alternateEntry);
+  graph.telemetry.enqueued += 2;
+
+  const pruned = agent.pruneForeignDeepSubjectFrontier(graph, engine.snapshot(), clock.now());
+  assert.equal(pruned.focusedCandidateId, focus.id);
+  assert.deepEqual(pruned.prunedFrontierEntryIds, [alternateEntry.id]);
+  assert.equal(pruned.graph.frontier.find((entry) => entry.id === focusEntry.id).status, "queued");
+  assert.equal(pruned.graph.frontier.find((entry) => entry.id === alternateEntry.id).status, "exhausted");
+  assert.equal(pruned.graph.frontier.find((entry) => entry.id === canonical.id).status, "queued");
+  assert.equal(pruned.graph.telemetry.exhausted, graph.telemetry.exhausted + 1);
+  assert.equal(engine.snapshot().candidates.length, 2, "pruning routing must not delete alternate candidates");
+
+  const secondAnchor = engine.admitEvidence({
+    candidateId: alternate.id,
+    claim: "A second exact-name candidate was also marked as a query anchor.",
+    sourceUrl: "https://search.example/result/alex-rivera-2",
+    sourceType: "search_result",
+    canonicalSubset: { providerAttestedUrl: true },
+    verificationMethod: "search_discovery",
+    attributes: { querySubjectAnchor: true, querySubjectName: "Alex Rivera" },
+  });
+  assert.equal(secondAnchor.admitted, true);
+  const markerOnly = agent.pruneForeignDeepSubjectFrontier(graph, engine.snapshot(), clock.now());
+  assert.equal(
+    markerOnly.ambiguous,
+    false,
+    "an unmarked alternate never becomes a focus anchor from name equality alone",
+  );
+  assert.deepEqual(markerOnly.prunedFrontierEntryIds, [alternateEntry.id]);
+
+  const conflictingAnchor = engine.addCandidate({ displayName: "Alex Rivera", signals: [anchorSignal] }).candidate;
+  const conflictingAnchorEvidence = engine.admitEvidence({
+    candidateId: conflictingAnchor.id,
+    claim: "A second structurally eligible exact-query anchor was admitted.",
+    sourceUrl: "https://search.example/result/alex-rivera-3",
+    sourceType: "search_result",
+    canonicalSubset: { providerAttestedUrl: true },
+    verificationMethod: "search_discovery",
+    attributes: { querySubjectAnchor: true, querySubjectName: "Alex Rivera" },
+  });
+  assert.equal(conflictingAnchorEvidence.admitted, true);
+  const ambiguous = agent.pruneForeignDeepSubjectFrontier(graph, engine.snapshot(), clock.now());
+  assert.equal(ambiguous.ambiguous, true);
+  assert.equal(ambiguous.focusedCandidateId, null);
+  assert.deepEqual(ambiguous.prunedFrontierEntryIds, [alternateEntry.id, focusEntry.id].sort());
+  assert.equal(ambiguous.graph.frontier.find((entry) => entry.id === focusEntry.id).status, "exhausted");
+  assert.equal(ambiguous.graph.frontier.find((entry) => entry.id === alternateEntry.id).status, "exhausted");
+  assert.equal(ambiguous.graph.frontier.find((entry) => entry.id === canonical.id).status, "queued");
 });
 
 test("quality probe attempt accounting ignores rejected and exhausted prioritized leads", () => {
@@ -1857,7 +1979,7 @@ test("quality probe attempt accounting ignores rejected and exhausted prioritize
   assert.deepEqual(search.validateSearchGraph(afterCap.graph), []);
 });
 
-test("deep runner tries one deterministic backup after a bare-name quality probe, then resumes ordinary fanout", async () => {
+test("deep runner spends one grounding probe and then resumes ordinary focused fanout", async () => {
   const targetRaw = "Alex Rivera";
   const input = domain.parseInvestigationInput({
     schemaVersion: domain.SCHEMA_VERSION,
@@ -2042,25 +2164,18 @@ test("deep runner tries one deterministic backup after a bare-name quality probe
 
   const completed = updates.at(-1);
   assert.equal(completed.type, "completed");
-  assert.deepEqual(
-    fetchedLeadIds.slice(0, 2),
-    ["lead_exact_subject_probe", "lead_exact_personal_profile"],
-    "the stable quality comparator must order both bounded attempts ahead of ordinary path cost",
-  );
-  assert.equal(fetchedLeadIds.length, leads.length, "ordinary candidate fanout must resume after two failed probes");
+  assert.equal(fetchedLeadIds[0], "lead_exact_subject_probe", "the persisted focus probe must run first");
+  assert.equal(fetchedLeadIds.length, leads.length, "ordinary candidate fanout must resume after the focus probe");
   assert.ok(ordinaryPlannerCalls > 0, "ordinary work must return to the planner after the mechanical probes");
   const qualityEvents = completed.trace.events.filter((event) => event.name === "frontier.quality_probe_selected");
   assert.deepEqual(
     qualityEvents.map((event) => [event.payload.leadId, event.payload.probeOrdinal]),
-    [
-      ["lead_exact_subject_probe", 1],
-      ["lead_exact_personal_profile", 2],
-    ],
+    [["lead_exact_subject_probe", 1]],
   );
   assert.deepEqual(
     qualityEvents.map((event) => event.payload.interleavedBeforeCanonicalBreadth),
-    [true, false],
-    "only the first persisted-priority probe may interleave with canonical breadth",
+    [true],
+    "the single persisted-priority probe may interleave with canonical breadth",
   );
   const canonicalSearchEnds = completed.trace.events.filter(
     (event) => event.kind === "span_end" && event.name === "tool.search_web",
@@ -2073,24 +2188,20 @@ test("deep runner tries one deterministic backup after a bare-name quality probe
     leadFetchStarts[0].seq < Math.max(...canonicalSearchEnds.map((event) => event.seq)),
     "the persisted-priority probe must run before the remaining canonical searches",
   );
-  assert.ok(
-    leadFetchStarts[1].seq > Math.max(...canonicalSearchEnds.map((event) => event.seq)),
-    "no second lead fetch may run until every canonical search settles exactly once",
-  );
   assert.equal(
     completed.trace.events.filter((event) => event.name === "scheduler.quality_probe_routed").length,
-    2,
-    "the backup path must never route more than two quality probes",
+    1,
+    "the focus path must never route more than one grounding probe",
   );
   assert.deepEqual(
     qualityRoleLeadIds,
-    ["lead_exact_subject_probe", "lead_exact_personal_profile"],
-    "only mechanically selected probes may receive the server-owned execution role",
+    ["lead_exact_subject_probe"],
+    "only the mechanically selected focus probe may receive the server-owned execution role",
   );
   assert.equal(
     fetchedCountAtFirstSynthesis,
-    2,
-    "a bare-name direct quote must not stop the backup probe or trigger immediate synthesis",
+    leads.length,
+    "a bare-name direct quote must not truncate the remaining focused source traversal",
   );
   assert.equal(synthesisCalls, 1);
   const bareEvidence = completed.report.evidence.find((evidence) => evidence.claim === targetRaw);
@@ -2667,10 +2778,17 @@ test("a Deep synthesis outage is deferred until canonical frontier work is exhau
     queryPlan.queries.map((query) => query.query).sort(),
   );
   const t6CompilerEntries = compilerEntries.filter((entry) => entry.sourceTier === 6);
-  assert.equal(t6CompilerEntries.length, 3);
+  assert.equal(
+    t6CompilerEntries.length,
+    queryPlan.queries.filter(
+      (query) =>
+        query.kind === "exact_refinement" ||
+        ["professional_content", "public_thread", "public_forum"].includes(query.kind),
+    ).length,
+  );
   assert.ok(
     t6CompilerEntries.every((entry) => executedFrontierIds.has(entry.id)),
-    "all three broad/name/social T6 queries must execute exactly once",
+    "every focused professional-content, public-thread, forum, and exact-refinement T6 query must execute exactly once",
   );
 
   const synthesisEnds = completed.trace.events.filter(
@@ -2875,7 +2993,7 @@ test("runner opens and executes Keybase only after a GitHub handle is grounded, 
   assert.deepEqual(search.validateSearchGraph(completed.report.searchGraph), []);
 });
 
-test("frontier schedules deterministic orthographic and initial name variants in T6", () => {
+test("frontier schedules exact LinkedIn, X/Twitter, and Reddit content queries in T6 without aliases", () => {
   const target = domain.parseTarget("Renée D'Angelo Smith");
   const ids = domain.createDeterministicIdFactory("compiler-name-variants");
   const seeded = search.seedFrontier(
@@ -2888,16 +3006,29 @@ test("frontier schedules deterministic orthographic and initial name variants in
   const t6Entries = seeded.value.filter((entry) => entry.sourceLaneId === "t6.general_discovery");
   assert.ok(
     t6Entries.some(
-      (entry) =>
-        entry.intent.includes(": orthographic_name;") &&
-        entry.queryHint.startsWith('"Renee D angelo Smith" professional'),
+      (entry) => entry.intent.includes(": professional_content;") && entry.queryHint.includes("site:linkedin.com"),
     ),
   );
   assert.ok(
     t6Entries.some(
       (entry) =>
-        entry.intent.includes(": initial_name;") && entry.queryHint.startsWith('"Renée D. Smith" professional'),
+        entry.intent.includes(": public_thread;") &&
+        entry.queryHint.includes("site:x.com") &&
+        entry.queryHint.includes("site:twitter.com"),
     ),
+  );
+  assert.ok(
+    t6Entries.some((entry) => entry.intent.includes(": public_forum;") && entry.queryHint.includes("site:reddit.com")),
+  );
+  assert.equal(
+    t6Entries.some(
+      (entry) => entry.intent.includes(": orthographic_name;") || entry.intent.includes(": initial_name;"),
+    ),
+    false,
+  );
+  assert.equal(
+    t6Entries.every((entry) => entry.queryHint.includes('"Renée D\'angelo Smith"')),
+    true,
   );
   assert.deepEqual(search.validateSearchGraph(seeded.graph), []);
 });
