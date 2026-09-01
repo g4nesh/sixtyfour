@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM node:22.13-alpine AS dependencies
+FROM node:26.8-alpine AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -8,7 +8,7 @@ FROM dependencies AS verifier
 COPY . .
 RUN npm run verify
 
-FROM node:22.13-alpine AS runner
+FROM node:26.8-alpine AS runner
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
