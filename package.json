@@ -42,13 +42,13 @@
   },
   "dependencies": {
     "@langchain/core": "1.2.9",
-    "@langchain/langgraph": "1.4.12",
-    "@react-pdf/renderer": "4.6.1",
-    "@xyflow/react": "12.11.3",
+    "@langchain/langgraph": "1.4.13",
+    "@react-pdf/renderer": "4.9.0",
+    "@xyflow/react": "12.11.5",
     "elkjs": "0.12.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.53.0",
