@@ -41,14 +41,14 @@
     "atlas": "node bin/run.mjs"
   },
   "dependencies": {
-    "@langchain/core": "1.2.9",
-    "@langchain/langgraph": "1.4.12",
-    "@react-pdf/renderer": "4.6.1",
-    "@xyflow/react": "12.11.3",
+    "@langchain/core": "1.2.17",
+    "@langchain/langgraph": "1.4.21",
+    "@react-pdf/renderer": "4.9.0",
+    "@xyflow/react": "12.12.0",
     "elkjs": "0.12.0",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
-    "zod": "4.4.3"
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.53.0",
@@ -57,8 +57,8 @@
     "@openai/sites-vite-plugin": "0.2.0",
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "22.20.1",
-    "@types/react": "19.2.18",
-    "@types/react-dom": "19.2.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.0",
     "@vitejs/plugin-rsc": "0.5.34",
     "eslint": "9.39.5",
